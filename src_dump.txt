@@ -14962,6 +14962,20 @@ export function TaskActionShell(props: Props) {
 }
 
 
+
+/* Keep nurse dashboard section navigation visually consistent with patient archive workspace. */
+.patient-detail-side-nav.nurse-workspace-side-nav {
+  border-radius: 22px;
+  overflow: hidden;
+}
+
+.patient-detail-side-nav.nurse-workspace-side-nav .patient-detail-side-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+
 ### FILE: apps/web/src/index.css
 :root {
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
@@ -19223,6 +19237,14 @@ export function NurseDashboardPage() {
     if (item.filter) setWorkItemFilter(item.filter);
   }
 
+  function getWorkbenchCount(sectionKey: WorkbenchSectionKey) {
+    if (sectionKey === 'workItems') return summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount;
+    if (sectionKey === 'vitals') return data.summary.recentAbnormalVitalCount;
+    if (sectionKey === 'patients') return data.summary.patientCount;
+    if (sectionKey === 'completed') return data.summary.completedTaskCount;
+    return 0;
+  }
+
   return (
     <div className="business-page nurse-workbench-clean unified-workbench-page">
       <div className="page-header clean-page-header">
@@ -19234,8 +19256,6 @@ export function NurseDashboardPage() {
         <button className="secondary-btn" onClick={loadDashboard} disabled={loading}>{loading ? '刷新中...' : '刷新数据'}</button>
       </div>
 
-      {message && <div className="notice-success operation-inline-success">{message}</div>}
-      {error && <div className="notice-error">{error}</div>}
 
       <section className="workbench-overview-strip" aria-label="护士工作台指标入口">
         {summaryItems.map((item) => (
@@ -19252,15 +19272,29 @@ export function NurseDashboardPage() {
         ))}
       </section>
 
-      <section className="workbench-layout-card">
-        <aside className="workbench-side-nav" aria-label="护士工作台区域导航">
-          <div className="workbench-side-title">工作区导航</div>
-          {workbenchSections.map((section) => (
-            <button key={section.key} type="button" className={activeSection === section.key ? 'workbench-nav-item active' : 'workbench-nav-item'} onClick={() => setActiveSection(section.key)}>
-              <strong>{section.title}</strong>
-              <span>{section.description}</span>
-            </button>
-          ))}
+      <section className="workbench-layout-card nurse-workspace-layout-card">
+        <aside className="patient-detail-side-nav nurse-workspace-side-nav" aria-label="护士工作台区域导航">
+          <div className="patient-detail-side-nav-title">护士工作台工作区</div>
+          <div className="patient-detail-side-nav-list">
+            {workbenchSections.map((section) => (
+              <button
+                key={section.key}
+                type="button"
+                className={
+                  activeSection === section.key
+                    ? 'patient-detail-side-nav-item active'
+                    : 'patient-detail-side-nav-item'
+                }
+                onClick={() => setActiveSection(section.key)}
+              >
+                <span>
+                  <strong>{section.title}</strong>
+                  <small>{section.description}</small>
+                </span>
+                <em>{getWorkbenchCount(section.key)}</em>
+              </button>
+            ))}
+          </div>
         </aside>
 
         <main className="workbench-main-panel">
@@ -19308,9 +19342,46 @@ export function NurseDashboardPage() {
           )}
         </main>
       </section>
+
+      {error && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-error">
+            <div className="task-feedback-modal-icon">!</div>
+            <div>
+              <span>操作失败</span>
+              <h2>护士工作台操作未完成</h2>
+              <p>{error}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>
+                  我知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-success">
+            <div className="task-feedback-modal-icon">✓</div>
+            <div>
+              <span>操作成功</span>
+              <h2>处理入口已准备好</h2>
+              <p>{message}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setMessage('')}>
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 
 
@@ -22670,7 +22741,7 @@ type PatientTimelineResponse = {
   timeline: TimelineEvent[];
 };
 
-type HandlingMode = 'PHONE' | 'RECHECK' | 'VISIT' | 'PLAN' | 'UNREACHABLE' | 'CLOSE';
+type HandlingMode = 'PHONE' | 'RECHECK' | 'VISIT' | 'PLAN' | 'CLOSE';
 
 type VitalMonitoringPlanDraft = {
   vitalType: string;
@@ -22775,13 +22846,6 @@ const modeMeta: Record<
     defaultStatus: '可选',
     collapsedAction: '展开调整',
   },
-  UNREACHABLE: {
-    kicker: '联系记录',
-    title: '标记无法联系',
-    hint: '电话未接通、微信未回复时留痕，不结案。',
-    defaultStatus: '未记录',
-    collapsedAction: '展开记录',
-  },
   CLOSE: {
     kicker: '任务结案',
     title: '任务结案 / 风险处置记录',
@@ -22791,7 +22855,7 @@ const modeMeta: Record<
   },
 };
 
-const allModes: HandlingMode[] = ['PHONE', 'RECHECK', 'VISIT', 'PLAN', 'UNREACHABLE', 'CLOSE'];
+const allModes: HandlingMode[] = ['PHONE', 'RECHECK', 'VISIT', 'PLAN', 'CLOSE'];
 
 /* --------------------------------- 工具函数 -------------------------------- */
 
@@ -22941,8 +23005,6 @@ export function PatientTaskProcessingPage() {
   const [recheckNote, setRecheckNote] = useState('');
   const [visitReason, setVisitReason] = useState('');
   const [visitNote, setVisitNote] = useState('');
-  const [unableContactChannel, setUnableContactChannel] = useState('PHONE');
-  const [unableContactNote, setUnableContactNote] = useState('');
   const [closeStatus, setCloseStatus] = useState<'DONE' | 'CANCELED'>('DONE');
   const [closeNote, setCloseNote] = useState('');
   const [closeSyncAlert, setCloseSyncAlert] = useState(true);
@@ -23053,7 +23115,6 @@ export function PatientTaskProcessingPage() {
         ? `风险依据：${localizeBackendText(relatedAlert.description)}`
         : '请患者携带近期居家监测记录到院复核。',
     );
-    setUnableContactNote(`围绕"${selectedTask.title}"联系患者未成功，需后续再次联系。`);
     setCloseNote(
       selectedTask.relatedAlertId
         ? '已完成沟通/复测/复诊提醒等处理动作，确认结案并同步处置关联风险预警。'
@@ -23089,11 +23150,15 @@ export function PatientTaskProcessingPage() {
   function openModule(mode: HandlingMode) {
     if (isClosedTask(selectedTask) && mode === 'CLOSE') return;
     setError('');
-    setModuleView((current) => ({
-      ...current,
-      // 已提交过的进入 review，未提交的直接进入 edit
-      [mode]: actionResults[mode] ? 'review' : 'edit',
-    }));
+    setModuleView((current) => {
+      if (current[mode]) {
+        return {};
+      }
+
+      return {
+        [mode]: actionResults[mode] ? 'review' : 'edit',
+      };
+    });
   }
 
   function collapseModule(mode: HandlingMode) {
@@ -23415,50 +23480,6 @@ export function PatientTaskProcessingPage() {
     }
   }
 
-  async function saveUnableContact(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!patientId || !selectedTask || submittingMode) return;
-    if (!unableContactNote.trim()) {
-      setError('请填写无法联系记录。');
-      return;
-    }
-
-    setSubmittingMode('UNREACHABLE');
-    setError('');
-
-    try {
-      const channelLabel =
-        unableContactChannel === 'PHONE'
-          ? '电话'
-          : unableContactChannel === 'WECHAT'
-            ? '微信'
-            : '电话+微信';
-      await api.post(`/patients/${patientId}/follow-ups`, {
-        followUpType: unableContactChannel === 'WECHAT' ? 'WECHAT' : 'PHONE',
-        followUpTime: new Date().toISOString(),
-        content: `统一任务处理：${selectedTask.title}；联系渠道：${channelLabel}；无法联系记录：${unableContactNote.trim()}`,
-        result: '暂未联系成功。',
-        suggestion: '保留任务为处理中，后续继续联系患者或家属。',
-        operatorId: nurseId,
-      });
-
-      await markTaskInProgressIfNeeded(selectedTask);
-      const savedAt = new Date().toISOString();
-      recordAction('UNREACHABLE', {
-        label: '无法联系记录已保存',
-        savedAt,
-        statusText: `已记录 ${formatShortTime(savedAt)}`,
-        details: [`联系渠道：${channelLabel}`, '任务未结案，状态刷新为处理中。'],
-      });
-      await loadPage();
-    } catch (err) {
-      console.error(err);
-      setError(getApiErrorMessage(err, '无法联系记录保存失败，请稍后重试。'));
-    } finally {
-      setSubmittingMode(null);
-    }
-  }
-
   async function closeTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedTask || submittingMode || isClosedTask(selectedTask)) return;
@@ -23569,134 +23590,79 @@ export function PatientTaskProcessingPage() {
         </div>
       </div>
 
-      {/* 任务 + 关联预警信息带 */}
-      {selectedTask && (
-        <section className="task-workbench-summary-strip">
-          <div className="summary-strip-block task-strip-main">
-            <span>当前任务</span>
-            <strong>{selectedTask.title}</strong>
-            <p>
-              {taskTypeLabelMap[selectedTask.type] ?? selectedTask.type}｜截止{' '}
-              {formatTime(selectedTask.dueAt)}｜状态{' '}
-              {statusLabelMap[selectedTask.status] ?? selectedTask.status}
-            </p>
-          </div>
-          <div className="summary-strip-status">
-            <span className={getStatusClass(selectedTask.status)}>
-              {statusLabelMap[selectedTask.status] ?? selectedTask.status}
-            </span>
-          </div>
-          {relatedAlert ? (
-            <div className="summary-strip-block alert-strip-main">
-              <span>关联风险预警</span>
-              <strong>
-                {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}｜
-                {localizeBackendText(relatedAlert.title)}
-              </strong>
-              <p>
-                {localizeBackendText(relatedAlert.description)}{' '}
-                {relatedAlert.data?.triggerRule
-                  ? `｜触发规则：${relatedAlert.data.triggerRule}`
-                  : ''}
-              </p>
-            </div>
-          ) : (
-            <div className="summary-strip-block alert-strip-main muted">
-              <span>关联风险预警</span>
-              <strong>无关联预警</strong>
-              <p>该任务按普通随访/提醒流程处理。</p>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* 错误提示 */}
-      {error && (
-        <div className="notice-error operation-inline-error" role="alert">
-          {error}
-        </div>
-      )}
-
-      {/* 顶部成功提示 - 可关闭 + 下一条任务 */}
-      {pageResult && (
-        <section className="task-result-summary-card pro-result-card" role="status">
-          <div className="result-check-wrap">
-            <span className="result-check">✓</span>
-          </div>
-          <div className="result-body">
-            <h2>{pageResult.label}</h2>
-            <p>
-              {pageResult.moduleTitle}｜提交时间：{formatTime(pageResult.savedAt)}｜处理人：当前护士
-            </p>
-            <ul>
-              {pageResult.details.map((item, idx) => (
-                <li key={`${idx}-${item}`}>{item}</li>
-              ))}
-            </ul>
-            <div className="result-actions">
-              {nextOpenTask ? (
-                <button className="primary-btn compact-link-btn" type="button" onClick={goToNextTask}>
-                  继续处理下一条任务（剩余 {openTasks.length} 条）
-                </button>
-              ) : (
-                <Link className="primary-btn compact-link-btn" to="/nurse-dashboard">
-                  全部完成，返回工作台
-                </Link>
-              )}
-              <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
-                查看患者档案
-              </Link>
-              <button
-                className="ghost-button compact-link-btn"
-                type="button"
-                onClick={() => setPageResult(null)}
-              >
-                关闭提示，继续处理当前任务
-              </button>
-            </div>
-          </div>
-        </section>
-      )}
-
       <div className="task-processing-layout task-workbench-layout">
         {/* 左侧任务队列 */}
-        <aside className="task-processing-sidebar panel compact-panel">
-          <div className="hospital-section-header compact-header">
-            <div>
-              <span>患者任务队列</span>
-              <h2>选择任务</h2>
+        <aside className="task-processing-sidebar compact-sidebar-stack">
+          <section className="panel compact-panel task-processing-sidebar-section">
+            <div className="hospital-section-header compact-header">
+              <div>
+                <span>患者任务队列</span>
+                <h2>选择任务</h2>
+              </div>
             </div>
-          </div>
 
-          {sortedTasks.length === 0 ? (
-            <div className="empty-state compact-empty">当前患者暂无任务。</div>
-          ) : (
-            <div className="task-processing-task-list compact-task-list">
-              {sortedTasks.map((task) => {
-                const isSelected = selectedTask?.id === task.id;
-                return (
-                  <button
-                    key={task.id}
-                    type="button"
-                    className={
-                      isSelected ? 'task-processing-task-card active' : 'task-processing-task-card'
-                    }
-                    onClick={() => selectTask(task.id)}
-                  >
-                    <span className="badge">{taskTypeLabelMap[task.type] ?? task.type}</span>
-                    <strong>{task.title}</strong>
-                    <small>截止：{formatTime(task.dueAt)}</small>
-                    <em className={getStatusClass(task.status)}>
-                      {statusLabelMap[task.status] ?? task.status}
-                    </em>
-                    {task.relatedAlertId && (
-                      <small className="task-related-alert-hint">已合并风险预警</small>
-                    )}
-                  </button>
-                );
-              })}
+            {sortedTasks.length === 0 ? (
+              <div className="empty-state compact-empty">当前患者暂无任务。</div>
+            ) : (
+              <div className="task-processing-task-list compact-task-list">
+                {sortedTasks.map((task) => {
+                  const isSelected = selectedTask?.id === task.id;
+                  return (
+                    <button
+                      key={task.id}
+                      type="button"
+                      className={
+                        isSelected ? 'task-processing-task-card active' : 'task-processing-task-card'
+                      }
+                      onClick={() => selectTask(task.id)}
+                    >
+                      <span className="badge">{taskTypeLabelMap[task.type] ?? task.type}</span>
+                      <strong>{task.title}</strong>
+                      <small>截止：{formatTime(task.dueAt)}</small>
+                      <em className={getStatusClass(task.status)}>
+                        {statusLabelMap[task.status] ?? task.status}
+                      </em>
+                      {task.relatedAlertId && (
+                        <small className="task-related-alert-hint">已合并风险预警</small>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <section className="panel compact-panel task-processing-sidebar-section related-alert-sidebar-section">
+            <div className="hospital-section-header compact-header">
+              <div>
+                <span>风险依据</span>
+                <h2>关联风险预警</h2>
+              </div>
             </div>
-          )}
+            {relatedAlert ? (
+              <div className="sidebar-related-alert-card">
+                <span className={getRiskClass(relatedAlert.data?.riskLevel)}>
+                  {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}
+                </span>
+                <h3>关联风险预警：{localizeBackendText(relatedAlert.title)}</h3>
+                <p>
+                  当前状态：
+                  {statusLabelMap[relatedAlert.data?.status] ??
+                    relatedAlert.data?.status ??
+                    '未处理'}
+                </p>
+                <p>{localizeBackendText(relatedAlert.description)}</p>
+                {relatedAlert.data?.triggerRule && (
+                  <p className="alert-trigger-line">触发规则：{relatedAlert.data.triggerRule}</p>
+                )}
+                {relatedAlert.data?.handlingNote && (
+                  <p className="alert-trigger-line">既往处置：{relatedAlert.data.handlingNote}</p>
+                )}
+              </div>
+            ) : (
+              <div className="empty-state compact-empty">当前任务无关联风险预警。</div>
+            )}
+          </section>
         </aside>
 
         {/* 右侧主区 */}
@@ -23737,33 +23703,6 @@ export function PatientTaskProcessingPage() {
                   </div>
                 </div>
               </section>
-
-              {/* 关联风险预警（高优先级展示） */}
-              {relatedAlert && (
-                <section className="panel related-alert-strong-card">
-                  <div className="related-alert-title-row">
-                    <span className={getRiskClass(relatedAlert.data?.riskLevel)}>
-                      {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}
-                    </span>
-                    <div>
-                      <h2>关联风险预警：{localizeBackendText(relatedAlert.title)}</h2>
-                      <p>
-                        当前状态：
-                        {statusLabelMap[relatedAlert.data?.status] ??
-                          relatedAlert.data?.status ??
-                          '未处理'}
-                      </p>
-                    </div>
-                  </div>
-                  <p>{localizeBackendText(relatedAlert.description)}</p>
-                  {relatedAlert.data?.triggerRule && (
-                    <p className="alert-trigger-line">触发规则：{relatedAlert.data.triggerRule}</p>
-                  )}
-                  {relatedAlert.data?.handlingNote && (
-                    <p className="alert-trigger-line">既往处置：{relatedAlert.data.handlingNote}</p>
-                  )}
-                </section>
-              )}
 
               {/* 处理方式卡片选择区 */}
               <section className="panel task-processing-mode-card compact-action-card-panel">
@@ -24337,68 +24276,6 @@ export function PatientTaskProcessingPage() {
                 </TaskActionShell>
               )}
 
-              {moduleView.UNREACHABLE && (
-                <TaskActionShell
-                  moduleKey="UNREACHABLE"
-                  kicker={modeMeta.UNREACHABLE.kicker}
-                  title={modeMeta.UNREACHABLE.title}
-                  hint="保存后任务进入处理中，便于后续继续联系；不会自动完成任务。"
-                  view={moduleView.UNREACHABLE}
-                  statusLabel={getModuleStatusLabel('UNREACHABLE')}
-                  statusTone={getModuleStatusTone('UNREACHABLE')}
-                  result={actionResults.UNREACHABLE ?? null}
-                  isSubmitting={submittingMode === 'UNREACHABLE'}
-                  collapsedActionText={modeMeta.UNREACHABLE.collapsedAction}
-                  onExpand={() => openModule('UNREACHABLE')}
-                  onCollapse={() => collapseModule('UNREACHABLE')}
-                  onContinueEdit={() => continueEdit('UNREACHABLE')}
-                >
-                  <form className="hospital-form compact-two-column-form" onSubmit={saveUnableContact}>
-                    <div className="form-grid form-grid-two">
-                      <div className="form-row">
-                        <label>联系渠道</label>
-                        <select
-                          value={unableContactChannel}
-                          onChange={(event) => setUnableContactChannel(event.target.value)}
-                          disabled={submittingMode === 'UNREACHABLE'}
-                        >
-                          <option value="PHONE">电话</option>
-                          <option value="WECHAT">微信</option>
-                          <option value="PHONE_WECHAT">电话 + 微信</option>
-                        </select>
-                      </div>
-                      <div className="form-row">
-                        <label>记录说明</label>
-                        <textarea
-                          value={unableContactNote}
-                          onChange={(event) => setUnableContactNote(event.target.value)}
-                          rows={4}
-                          required
-                          disabled={submittingMode === 'UNREACHABLE'}
-                        />
-                      </div>
-                    </div>
-                    <div className="form-actions sticky-form-actions pro-form-actions">
-                      <button
-                        className="button"
-                        type="submit"
-                        disabled={submittingMode === 'UNREACHABLE'}
-                      >
-                        {submittingMode === 'UNREACHABLE' ? '正在保存...' : '保存无法联系记录'}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => collapseModule('UNREACHABLE')}
-                        disabled={submittingMode === 'UNREACHABLE'}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  </form>
-                </TaskActionShell>
-              )}
-
               {moduleView.CLOSE && (
                 <TaskActionShell
                   moduleKey="CLOSE"
@@ -24508,11 +24385,72 @@ export function PatientTaskProcessingPage() {
               />
             </>
           )}
+
         </main>
       </div>
+
+      {error && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-error">
+            <div className="task-feedback-modal-icon">!</div>
+            <div>
+              <span>操作失败</span>
+              <h2>请检查后重试</h2>
+              <p>{error}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>
+                  我知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pageResult && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-success">
+            <div className="task-feedback-modal-icon">✓</div>
+            <div>
+              <span>操作成功</span>
+              <h2>{pageResult.label}</h2>
+              <p>
+                {pageResult.moduleTitle}｜提交时间：{formatTime(pageResult.savedAt)}｜处理人：当前护士
+              </p>
+              <ul>
+                {pageResult.details.map((item, idx) => (
+                  <li key={`${idx}-${item}`}>{item}</li>
+                ))}
+              </ul>
+              <div className="task-feedback-modal-actions">
+                {nextOpenTask ? (
+                  <button className="primary-btn compact-link-btn" type="button" onClick={goToNextTask}>
+                    继续处理下一条任务（剩余 {openTasks.length} 条）
+                  </button>
+                ) : (
+                  <Link className="primary-btn compact-link-btn" to="/nurse-dashboard">
+                    全部完成，返回工作台
+                  </Link>
+                )}
+                <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
+                  查看患者档案
+                </Link>
+                <button
+                  className="ghost-button compact-link-btn"
+                  type="button"
+                  onClick={() => setPageResult(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 
 ### FILE: apps/web/src/pages/PatientsPage.tsx
@@ -30308,6 +30246,161 @@ button:disabled,
 
   .action-shell-header {
     flex-direction: column;
+  }
+}
+
+
+
+/* Task processing refinement: split alert into its own left-side section and use modal feedback */
+.compact-sidebar-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.task-processing-sidebar-section {
+  width: 100%;
+}
+
+.related-alert-sidebar-section {
+  border-color: #f2d2b2 !important;
+  background: linear-gradient(180deg, #fff, #fff8eb) !important;
+}
+
+.sidebar-related-alert-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #29415f;
+}
+
+.sidebar-related-alert-card h3 {
+  margin: 0;
+  color: #17324f;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.sidebar-related-alert-card p {
+  margin: 0;
+  color: #51657c;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.task-feedback-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 26, 46, 0.32);
+  backdrop-filter: blur(2px);
+}
+
+.task-feedback-modal {
+  width: min(560px, 100%);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  border-radius: 18px;
+  border: 1px solid #d8e4f0;
+  background: #fff;
+  box-shadow: 0 22px 58px rgba(8, 26, 46, 0.22);
+  padding: 22px;
+}
+
+.task-feedback-modal-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font-weight: 900;
+  font-size: 22px;
+}
+
+.task-feedback-modal-success .task-feedback-modal-icon {
+  background: #e8f8ef;
+  color: #14955f;
+}
+
+.task-feedback-modal-error .task-feedback-modal-icon {
+  background: #fff1f1;
+  color: #c2413a;
+}
+
+.task-feedback-modal span {
+  color: #6b7d91;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.task-feedback-modal h2 {
+  margin: 4px 0 8px;
+  color: #0b3159;
+  font-size: 20px;
+}
+
+.task-feedback-modal p {
+  margin: 0 0 12px;
+  color: #43566f;
+  line-height: 1.6;
+}
+
+.task-feedback-modal ul {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  color: #43566f;
+  line-height: 1.7;
+}
+
+.task-feedback-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Nurse dashboard workspace nav: match patient detail workspace UI */
+.nurse-workspace-layout-card {
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.nurse-workspace-side-nav {
+  align-self: start;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-title {
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item {
+  min-height: 88px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item strong {
+  font-size: 18px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item small {
+  font-size: 14px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item em {
+  min-width: 42px;
+  height: 42px;
+  font-size: 18px;
+}
+
+@media (max-width: 980px) {
+  .nurse-workspace-layout-card {
+    grid-template-columns: 1fr;
+  }
+
+  .task-feedback-modal {
+    grid-template-columns: 1fr;
   }
 }
 

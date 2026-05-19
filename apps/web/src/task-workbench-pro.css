@@ -598,156 +598,156 @@
 }
 
 
-/* ============================================================
-   Task processing sidebar + modal feedback polish
-   ============================================================ */
-.task-processing-sidebar-stack {
+
+/* Task processing refinement: split alert into its own left-side section and use modal feedback */
+.compact-sidebar-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-  padding: 0 !important;
+  gap: 14px;
 }
 
-.task-sidebar-section {
+.task-processing-sidebar-section {
   width: 100%;
 }
 
-.related-alert-side-section {
-  border-left: 4px solid #dc2626;
+.related-alert-sidebar-section {
+  border-color: #f2d2b2 !important;
+  background: linear-gradient(180deg, #fff, #fff8eb) !important;
 }
 
-.related-alert-sidebar-card {
-  display: grid;
-  gap: 12px;
+.sidebar-related-alert-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: #29415f;
 }
 
-.related-alert-sidebar-head {
-  display: grid;
-  gap: 8px;
-}
-
-.related-alert-sidebar-head strong {
-  color: #102f4f;
-  font-size: 14px;
+.sidebar-related-alert-card h3 {
+  margin: 0;
+  color: #17324f;
+  font-size: 15px;
   line-height: 1.45;
 }
 
-.related-alert-sidebar-dl {
-  display: grid;
-  gap: 10px;
+.sidebar-related-alert-card p {
   margin: 0;
-}
-
-.related-alert-sidebar-dl div {
-  border-top: 1px solid #e2e8f0;
-  padding-top: 10px;
-}
-
-.related-alert-sidebar-dl dt {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 800;
-  margin-bottom: 4px;
-}
-
-.related-alert-sidebar-dl dd {
-  color: #1e293b;
+  color: #51657c;
   font-size: 13px;
   line-height: 1.55;
-  margin: 0;
-  word-break: break-word;
 }
 
-.task-feedback-dialog-backdrop {
+.task-feedback-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 2000;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.36);
+  background: rgba(8, 26, 46, 0.32);
   backdrop-filter: blur(2px);
 }
 
-.task-feedback-dialog {
+.task-feedback-modal {
   width: min(560px, 100%);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 16px;
   border-radius: 18px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
-  padding: 20px;
+  border: 1px solid #d8e4f0;
+  background: #fff;
+  box-shadow: 0 22px 58px rgba(8, 26, 46, 0.22);
+  padding: 22px;
 }
 
-.task-feedback-dialog.is-success {
-  border-color: #bbf7d0;
-}
-
-.task-feedback-dialog.is-error {
-  border-color: #fecaca;
-}
-
-.task-feedback-dialog-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
+.task-feedback-modal-icon {
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
-  font-size: 22px;
-  font-weight: 900;
-  background: #dcfce7;
-  color: #15803d;
-}
-
-.task-feedback-dialog.is-error .task-feedback-dialog-icon {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.task-feedback-dialog-kicker {
-  display: inline-flex;
-  width: fit-content;
   border-radius: 999px;
-  background: #f1f5f9;
-  color: #475569;
-  font-size: 12px;
   font-weight: 900;
-  padding: 4px 9px;
+  font-size: 22px;
 }
 
-.task-feedback-dialog-body h2 {
-  margin: 8px 0 6px;
-  color: #102f4f;
+.task-feedback-modal-success .task-feedback-modal-icon {
+  background: #e8f8ef;
+  color: #14955f;
+}
+
+.task-feedback-modal-error .task-feedback-modal-icon {
+  background: #fff1f1;
+  color: #c2413a;
+}
+
+.task-feedback-modal span {
+  color: #6b7d91;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.task-feedback-modal h2 {
+  margin: 4px 0 8px;
+  color: #0b3159;
   font-size: 20px;
 }
 
-.task-feedback-dialog-body p {
-  margin: 0;
-  color: #475569;
+.task-feedback-modal p {
+  margin: 0 0 12px;
+  color: #43566f;
   line-height: 1.6;
 }
 
-.task-feedback-dialog-body ul {
-  margin: 12px 0 0;
+.task-feedback-modal ul {
+  margin: 0 0 14px;
   padding-left: 18px;
-  color: #334155;
-  line-height: 1.65;
+  color: #43566f;
+  line-height: 1.7;
 }
 
-.task-feedback-dialog-actions {
+.task-feedback-modal-actions {
   display: flex;
-  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 16px;
+  gap: 10px;
 }
 
-@media (max-width: 720px) {
-  .task-feedback-dialog {
+/* Nurse dashboard workspace nav: match patient detail workspace UI */
+.nurse-workspace-layout-card {
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.nurse-workspace-side-nav {
+  align-self: start;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-title {
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item {
+  min-height: 88px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item strong {
+  font-size: 18px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item small {
+  font-size: 14px;
+}
+
+.nurse-workspace-side-nav .patient-detail-side-nav-item em {
+  min-width: 42px;
+  height: 42px;
+  font-size: 18px;
+}
+
+@media (max-width: 980px) {
+  .nurse-workspace-layout-card {
+    grid-template-columns: 1fr;
+  }
+
+  .task-feedback-modal {
     grid-template-columns: 1fr;
   }
 }

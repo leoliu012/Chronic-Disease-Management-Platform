@@ -68,14 +68,6 @@ type VitalMonitoringPlanDraft = {
   evidenceBasis: string;
 };
 
-type FeedbackDialogState = {
-  type: 'success' | 'error';
-  title: string;
-  message: string;
-  details?: string[];
-  mode?: HandlingMode;
-} | null;
-
 /* ---------------------------------- 常量 ---------------------------------- */
 
 const nurseId = 'nurse-001';
@@ -293,7 +285,7 @@ export function PatientTaskProcessingPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [, setError] = useState('');
+  const [error, setError] = useState('');
 
   /* ---------- 处理状态 state ---------- */
 
@@ -305,8 +297,10 @@ export function PatientTaskProcessingPage() {
   const [actionHistory, setActionHistory] = useState<TaskActionHistoryEntry[]>([]);
   // 提交中的模块
   const [submittingMode, setSubmittingMode] = useState<HandlingMode | null>(null);
-  // 弹窗反馈：提交成功/失败均在当前位置弹出，避免只在页面顶部提示。
-  const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState>(null);
+  // 顶部成功提示（最近一次提交的结果），可关闭
+  const [pageResult, setPageResult] = useState<
+    (ActionShellResult & { mode: HandlingMode; moduleTitle: string }) | null
+  >(null);
 
   /* ---------- 表单 state ---------- */
 
@@ -350,7 +344,7 @@ export function PatientTaskProcessingPage() {
       setTasks(taskData ?? []);
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '任务处理页加载失败，请确认后端服务和患者数据。'));
+      setError(getApiErrorMessage(err, '任务处理页加载失败，请确认后端服务和患者数据。'));
     } finally {
       setLoading(false);
     }
@@ -446,7 +440,7 @@ export function PatientTaskProcessingPage() {
     setModuleView({});
     setActionResults({});
     setActionHistory([]);
-    setFeedbackDialog(null);
+    setPageResult(null);
     setError('');
   }, [selectedTask?.id]);
 
@@ -462,7 +456,7 @@ export function PatientTaskProcessingPage() {
 
   useEffect(() => {
     if (!requestedMode || !selectedTask) return;
-    setModuleView({ [requestedMode]: 'edit' });
+    setModuleView((current) => ({ ...current, [requestedMode]: current[requestedMode] ?? 'edit' }));
   }, [requestedMode, selectedTask?.id]);
 
   /* ---------- 模块视图状态切换 ---------- */
@@ -474,8 +468,10 @@ export function PatientTaskProcessingPage() {
       if (current[mode]) {
         return {};
       }
-      // 已提交过的进入 review，未提交的直接进入 edit；同一时间只展开一个处理动作。
-      return { [mode]: actionResults[mode] ? 'review' : 'edit' };
+
+      return {
+        [mode]: actionResults[mode] ? 'review' : 'edit',
+      };
     });
   }
 
@@ -489,7 +485,7 @@ export function PatientTaskProcessingPage() {
 
   function continueEdit(mode: HandlingMode) {
     setError('');
-    setModuleView({ [mode]: 'edit' });
+    setModuleView((current) => ({ ...current, [mode]: 'edit' }));
   }
 
   function recordAction(mode: HandlingMode, result: ActionShellResult) {
@@ -504,13 +500,7 @@ export function PatientTaskProcessingPage() {
       delete next[mode];
       return next;
     });
-    setFeedbackDialog({
-      type: 'success',
-      title: result.label,
-      message: `${modeMeta[mode].title}已提交成功。`,
-      details: result.details,
-      mode,
-    });
+    setPageResult({ ...result, mode, moduleTitle: modeMeta[mode].title });
   }
 
   function choosePlan(planId: string) {
@@ -543,14 +533,9 @@ export function PatientTaskProcessingPage() {
     });
   }
 
-  function showErrorFeedback(message: string) {
-    setError(message);
-    setFeedbackDialog({ type: 'error', title: '操作失败', message });
-  }
-
   function requireSignature(value: string, message: string) {
     if (!value.trim()) {
-      showErrorFeedback(message);
+      setError(message);
       return false;
     }
     return true;
@@ -568,7 +553,7 @@ export function PatientTaskProcessingPage() {
       return;
     }
     selectTask(nextOpenTask.id);
-    setFeedbackDialog(null);
+    setPageResult(null);
   }
 
   /* ------------------------------- 提交动作 -------------------------------- */
@@ -638,7 +623,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '电话随访提交失败，请稍后重试。'));
+      setError(getApiErrorMessage(err, '电话随访提交失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -648,7 +633,7 @@ export function PatientTaskProcessingPage() {
     event.preventDefault();
     if (!patientId || !selectedTask || submittingMode) return;
     if (!recheckTitle.trim()) {
-      showErrorFeedback('请填写复测任务标题。');
+      setError('请填写复测任务标题。');
       return;
     }
 
@@ -690,7 +675,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '新增复测任务失败，请稍后重试。'));
+      setError(getApiErrorMessage(err, '新增复测任务失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -700,7 +685,7 @@ export function PatientTaskProcessingPage() {
     event.preventDefault();
     if (!patientId || !selectedTask || submittingMode) return;
     if (!visitReason.trim()) {
-      showErrorFeedback('请填写复诊提醒原因。');
+      setError('请填写复诊提醒原因。');
       return;
     }
 
@@ -729,7 +714,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(
+      setError(
         getApiErrorMessage(err, '创建门诊复诊提醒失败，请确认到院提醒模块已挂载。'),
       );
     } finally {
@@ -775,7 +760,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '监测计划更新失败，请稍后重试。'));
+      setError(getApiErrorMessage(err, '监测计划更新失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -803,7 +788,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '停用监测计划失败，请稍后重试。'));
+      setError(getApiErrorMessage(err, '停用监测计划失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -813,7 +798,7 @@ export function PatientTaskProcessingPage() {
     event.preventDefault();
     if (!selectedTask || submittingMode || isClosedTask(selectedTask)) return;
     if (!closeNote.trim()) {
-      showErrorFeedback('请填写任务处理记录。');
+      setError('请填写任务处理记录。');
       return;
     }
     if (!requireSignature(closeSignature.trim(), '请填写电子签名后再提交结案。')) return;
@@ -851,7 +836,7 @@ export function PatientTaskProcessingPage() {
       await loadPage();
     } catch (err) {
       console.error(err);
-      showErrorFeedback(getApiErrorMessage(err, '任务状态更新失败，请稍后重试。'));
+      setError(getApiErrorMessage(err, '任务状态更新失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -919,64 +904,10 @@ export function PatientTaskProcessingPage() {
         </div>
       </div>
 
-      {feedbackDialog && (
-        <div className="task-feedback-dialog-backdrop" role="presentation">
-          <section
-            className={`task-feedback-dialog ${feedbackDialog.type === 'error' ? 'is-error' : 'is-success'}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="task-feedback-dialog-title"
-          >
-            <div className="task-feedback-dialog-icon" aria-hidden="true">
-              {feedbackDialog.type === 'error' ? '!' : '✓'}
-            </div>
-            <div className="task-feedback-dialog-body">
-              <span className="task-feedback-dialog-kicker">
-                {feedbackDialog.type === 'error' ? '提交失败' : '提交成功'}
-              </span>
-              <h2 id="task-feedback-dialog-title">{feedbackDialog.title}</h2>
-              <p>{feedbackDialog.message}</p>
-              {feedbackDialog.details && feedbackDialog.details.length > 0 && (
-                <ul>
-                  {feedbackDialog.details.map((detail) => (
-                    <li key={detail}>{detail}</li>
-                  ))}
-                </ul>
-              )}
-              <div className="task-feedback-dialog-actions">
-                {feedbackDialog.type === 'success' && nextOpenTask && (
-                  <button className="primary-btn compact-link-btn" type="button" onClick={goToNextTask}>
-                    继续处理下一条任务（剩余 {openTasks.length} 条）
-                  </button>
-                )}
-                {feedbackDialog.type === 'success' && !nextOpenTask && (
-                  <Link className="primary-btn compact-link-btn" to="/nurse-dashboard">
-                    返回护士工作台
-                  </Link>
-                )}
-                <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
-                  查看患者档案
-                </Link>
-                <button
-                  className="ghost-button compact-link-btn"
-                  type="button"
-                  onClick={() => {
-                    setFeedbackDialog(null);
-                    if (feedbackDialog.type === 'error') setError('');
-                  }}
-                >
-                  关闭
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
-
       <div className="task-processing-layout task-workbench-layout">
-        {/* 左侧任务队列与风险预警分区 */}
-        <aside className="task-processing-sidebar task-processing-sidebar-stack">
-          <section className="panel compact-panel task-sidebar-section task-selection-section">
+        {/* 左侧任务队列 */}
+        <aside className="task-processing-sidebar compact-sidebar-stack">
+          <section className="panel compact-panel task-processing-sidebar-section">
             <div className="hospital-section-header compact-header">
               <div>
                 <span>患者任务队列</span>
@@ -1015,7 +946,7 @@ export function PatientTaskProcessingPage() {
             )}
           </section>
 
-          <section className="panel compact-panel task-sidebar-section related-alert-side-section">
+          <section className="panel compact-panel task-processing-sidebar-section related-alert-sidebar-section">
             <div className="hospital-section-header compact-header">
               <div>
                 <span>风险依据</span>
@@ -1023,38 +954,27 @@ export function PatientTaskProcessingPage() {
               </div>
             </div>
             {relatedAlert ? (
-              <div className="related-alert-sidebar-card">
-                <div className="related-alert-sidebar-head">
-                  <span className={getRiskClass(relatedAlert.data?.riskLevel)}>
-                    {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}
-                  </span>
-                  <strong>关联风险预警：{localizeBackendText(relatedAlert.title)}</strong>
-                </div>
-                <dl className="related-alert-sidebar-dl">
-                  <div>
-                    <dt>当前状态</dt>
-                    <dd>{statusLabelMap[relatedAlert.data?.status] ?? relatedAlert.data?.status ?? '未处理'}</dd>
-                  </div>
-                  <div>
-                    <dt>预警说明</dt>
-                    <dd>{localizeBackendText(relatedAlert.description) || '-'}</dd>
-                  </div>
-                  {relatedAlert.data?.triggerRule && (
-                    <div>
-                      <dt>触发规则</dt>
-                      <dd>{relatedAlert.data.triggerRule}</dd>
-                    </div>
-                  )}
-                  {relatedAlert.data?.handlingNote && (
-                    <div>
-                      <dt>既往处置</dt>
-                      <dd>{relatedAlert.data.handlingNote}</dd>
-                    </div>
-                  )}
-                </dl>
+              <div className="sidebar-related-alert-card">
+                <span className={getRiskClass(relatedAlert.data?.riskLevel)}>
+                  {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}
+                </span>
+                <h3>关联风险预警：{localizeBackendText(relatedAlert.title)}</h3>
+                <p>
+                  当前状态：
+                  {statusLabelMap[relatedAlert.data?.status] ??
+                    relatedAlert.data?.status ??
+                    '未处理'}
+                </p>
+                <p>{localizeBackendText(relatedAlert.description)}</p>
+                {relatedAlert.data?.triggerRule && (
+                  <p className="alert-trigger-line">触发规则：{relatedAlert.data.triggerRule}</p>
+                )}
+                {relatedAlert.data?.handlingNote && (
+                  <p className="alert-trigger-line">既往处置：{relatedAlert.data.handlingNote}</p>
+                )}
               </div>
             ) : (
-              <div className="empty-state compact-empty">当前选中任务无关联风险预警。</div>
+              <div className="empty-state compact-empty">当前任务无关联风险预警。</div>
             )}
           </section>
         </aside>
@@ -1691,7 +1611,7 @@ export function PatientTaskProcessingPage() {
                       <strong>当前任务已经结案</strong>
                       <p>
                         任务状态：{statusLabelMap[selectedTask.status] ?? selectedTask.status}
-                        。不能重复提交"完成任务"。如需补充说明，请使用电话随访沟通模块保存补充记录。
+                        。不能重复提交"完成任务"。如需补充说明，请使用电话随访或无法联系记录模块保存补充记录。
                       </p>
                     </>
                   }
@@ -1779,8 +1699,68 @@ export function PatientTaskProcessingPage() {
               />
             </>
           )}
+
         </main>
       </div>
+
+      {error && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-error">
+            <div className="task-feedback-modal-icon">!</div>
+            <div>
+              <span>操作失败</span>
+              <h2>请检查后重试</h2>
+              <p>{error}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>
+                  我知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pageResult && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-success">
+            <div className="task-feedback-modal-icon">✓</div>
+            <div>
+              <span>操作成功</span>
+              <h2>{pageResult.label}</h2>
+              <p>
+                {pageResult.moduleTitle}｜提交时间：{formatTime(pageResult.savedAt)}｜处理人：当前护士
+              </p>
+              <ul>
+                {pageResult.details.map((item, idx) => (
+                  <li key={`${idx}-${item}`}>{item}</li>
+                ))}
+              </ul>
+              <div className="task-feedback-modal-actions">
+                {nextOpenTask ? (
+                  <button className="primary-btn compact-link-btn" type="button" onClick={goToNextTask}>
+                    继续处理下一条任务（剩余 {openTasks.length} 条）
+                  </button>
+                ) : (
+                  <Link className="primary-btn compact-link-btn" to="/nurse-dashboard">
+                    全部完成，返回工作台
+                  </Link>
+                )}
+                <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
+                  查看患者档案
+                </Link>
+                <button
+                  className="ghost-button compact-link-btn"
+                  type="button"
+                  onClick={() => setPageResult(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

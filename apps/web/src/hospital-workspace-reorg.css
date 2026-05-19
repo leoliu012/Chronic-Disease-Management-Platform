@@ -678,29 +678,15 @@
 }
 
 
-/* Nurse workbench nav: align with patient detail workspace tab cards. */
-.nurse-workbench-clean .nurse-dashboard-workspace-layout {
+
+/* Keep nurse dashboard section navigation visually consistent with patient archive workspace. */
+.patient-detail-side-nav.nurse-workspace-side-nav {
+  border-radius: 22px;
+  overflow: hidden;
+}
+
+.patient-detail-side-nav.nurse-workspace-side-nav .patient-detail-side-nav-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-}
-
-.nurse-workbench-clean .nurse-workspace-tabs-card {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.nurse-workbench-clean .nurse-workspace-tabs-card .workspace-tab {
-  min-height: 92px;
-}
-
-@media (max-width: 1180px) {
-  .nurse-workbench-clean .nurse-workspace-tabs-card {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 720px) {
-  .nurse-workbench-clean .nurse-workspace-tabs-card {
-    grid-template-columns: 1fr;
-  }
+  gap: 12px;
 }

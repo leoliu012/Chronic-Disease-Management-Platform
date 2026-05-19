@@ -91,12 +91,6 @@ type SummaryItem = {
   tone: 'primary' | 'warning' | 'danger' | 'success' | 'neutral';
 };
 
-type NurseFeedbackDialog = {
-  type: 'success' | 'error';
-  title: string;
-  message: string;
-} | null;
-
 const nurseId = 'nurse-001';
 
 const itemTypeLabelMap: Record<string, string> = {
@@ -321,11 +315,12 @@ export function NurseDashboardPage() {
   const [activeSection, setActiveSection] = useState<WorkbenchSectionKey>('workItems');
   const [workItemFilter, setWorkItemFilter] = useState<WorkItemFilter>('ALL');
   const [busyItemId, setBusyItemId] = useState('');
-  const [feedbackDialog, setFeedbackDialog] = useState<NurseFeedbackDialog>(null);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
   async function loadDashboard() {
     setLoading(true);
-    setFeedbackDialog(null);
+    setError('');
 
     try {
       const [dashboardRes, workItemsRes] = await Promise.all([
@@ -336,7 +331,7 @@ export function NurseDashboardPage() {
       setWorkItemsData(workItemsRes.data);
     } catch (err) {
       console.error(err);
-      setFeedbackDialog({ type: 'error', title: '加载失败', message: getApiErrorMessage(err, '护士工作台加载失败，请确认后端服务已启动。') });
+      setError(getApiErrorMessage(err, '护士工作台加载失败，请确认后端服务已启动。'));
     } finally {
       setLoading(false);
     }
@@ -346,7 +341,8 @@ export function NurseDashboardPage() {
     if (!item.patient?.id || !item.alertId || busyItemId) return;
 
     setBusyItemId(item.id);
-    setFeedbackDialog(null);
+    setMessage('');
+    setError('');
 
     try {
       const dueAt = new Date();
@@ -368,11 +364,12 @@ export function NurseDashboardPage() {
       });
 
       const createdTask = taskRes.data as CreatedTask;
-      setFeedbackDialog({ type: 'success', title: '已生成风险随访任务', message: '系统即将进入患者任务处理页。' });
+      setMessage('已生成风险随访任务，即将进入电话随访详情。');
       navigate(`/patients/${item.patient.id}/task-processing?taskId=${createdTask.id}&mode=phone`);
     } catch (err) {
       console.error(err);
-      setFeedbackDialog({ type: 'error', title: '生成随访任务失败', message: getApiErrorMessage(err, '风险预警转随访任务失败，请稍后重试。') });
+      setError(getApiErrorMessage(err, '风险预警转随访任务失败，请稍后重试。'));
+      await loadDashboard();
     } finally {
       setBusyItemId('');
     }
@@ -417,6 +414,14 @@ export function NurseDashboardPage() {
     if (item.filter) setWorkItemFilter(item.filter);
   }
 
+  function getWorkbenchCount(sectionKey: WorkbenchSectionKey) {
+    if (sectionKey === 'workItems') return summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount;
+    if (sectionKey === 'vitals') return data.summary.recentAbnormalVitalCount;
+    if (sectionKey === 'patients') return data.summary.patientCount;
+    if (sectionKey === 'completed') return data.summary.completedTaskCount;
+    return 0;
+  }
+
   return (
     <div className="business-page nurse-workbench-clean unified-workbench-page">
       <div className="page-header clean-page-header">
@@ -428,32 +433,6 @@ export function NurseDashboardPage() {
         <button className="secondary-btn" onClick={loadDashboard} disabled={loading}>{loading ? '刷新中...' : '刷新数据'}</button>
       </div>
 
-      {feedbackDialog && (
-        <div className="task-feedback-dialog-backdrop nurse-feedback-dialog-backdrop" role="presentation">
-          <section
-            className={`task-feedback-dialog ${feedbackDialog.type === 'error' ? 'is-error' : 'is-success'}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="nurse-feedback-dialog-title"
-          >
-            <div className="task-feedback-dialog-icon" aria-hidden="true">
-              {feedbackDialog.type === 'error' ? '!' : '✓'}
-            </div>
-            <div className="task-feedback-dialog-body">
-              <span className="task-feedback-dialog-kicker">
-                {feedbackDialog.type === 'error' ? '操作失败' : '操作成功'}
-              </span>
-              <h2 id="nurse-feedback-dialog-title">{feedbackDialog.title}</h2>
-              <p>{feedbackDialog.message}</p>
-              <div className="task-feedback-dialog-actions">
-                <button className="primary-btn compact-link-btn" type="button" onClick={() => setFeedbackDialog(null)}>
-                  我知道了
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
 
       <section className="workbench-overview-strip" aria-label="护士工作台指标入口">
         {summaryItems.map((item) => (
@@ -470,20 +449,30 @@ export function NurseDashboardPage() {
         ))}
       </section>
 
-      <section className="workbench-layout-card nurse-dashboard-workspace-layout">
-        <nav className="workspace-tabs-card nurse-workspace-tabs-card" aria-label="护士工作台区域导航">
-          {workbenchSections.map((section) => (
-            <button
-              key={section.key}
-              type="button"
-              className={activeSection === section.key ? 'workspace-tab active' : 'workspace-tab'}
-              onClick={() => setActiveSection(section.key)}
-            >
-              <strong>{section.title}</strong>
-              <span>{section.description}</span>
-            </button>
-          ))}
-        </nav>
+      <section className="workbench-layout-card nurse-workspace-layout-card">
+        <aside className="patient-detail-side-nav nurse-workspace-side-nav" aria-label="护士工作台区域导航">
+          <div className="patient-detail-side-nav-title">护士工作台工作区</div>
+          <div className="patient-detail-side-nav-list">
+            {workbenchSections.map((section) => (
+              <button
+                key={section.key}
+                type="button"
+                className={
+                  activeSection === section.key
+                    ? 'patient-detail-side-nav-item active'
+                    : 'patient-detail-side-nav-item'
+                }
+                onClick={() => setActiveSection(section.key)}
+              >
+                <span>
+                  <strong>{section.title}</strong>
+                  <small>{section.description}</small>
+                </span>
+                <em>{getWorkbenchCount(section.key)}</em>
+              </button>
+            ))}
+          </div>
+        </aside>
 
         <main className="workbench-main-panel">
           {activeSection === 'workItems' && (
@@ -530,6 +519,42 @@ export function NurseDashboardPage() {
           )}
         </main>
       </section>
+
+      {error && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-error">
+            <div className="task-feedback-modal-icon">!</div>
+            <div>
+              <span>操作失败</span>
+              <h2>护士工作台操作未完成</h2>
+              <p>{error}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>
+                  我知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {message && (
+        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="task-feedback-modal task-feedback-modal-success">
+            <div className="task-feedback-modal-icon">✓</div>
+            <div>
+              <span>操作成功</span>
+              <h2>处理入口已准备好</h2>
+              <p>{message}</p>
+              <div className="task-feedback-modal-actions">
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setMessage('')}>
+                  知道了
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
