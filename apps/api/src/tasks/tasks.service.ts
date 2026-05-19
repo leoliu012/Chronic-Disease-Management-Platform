@@ -18,6 +18,20 @@ export class TasksService {
       throw new NotFoundException('Patient not found');
     }
 
+    if (dto.relatedAlertId) {
+      const existingOpenTask = await this.prisma.task.findFirst({
+        where: {
+          relatedAlertId: dto.relatedAlertId,
+          status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
+        },
+        include: { patient: true },
+      });
+
+      if (existingOpenTask) {
+        return existingOpenTask;
+      }
+    }
+
     return this.prisma.task.create({
       data: {
         patientId,
@@ -104,14 +118,7 @@ export class TasksService {
         },
       });
 
-      if (existingTask.relatedAlertId) {
-        if (dto.status === TaskStatus.IN_PROGRESS) {
-          await tx.riskAlert.update({
-            where: { id: existingTask.relatedAlertId },
-            data: { status: AlertStatus.IN_PROGRESS },
-          });
-        }
-
+      if (existingTask.relatedAlertId && dto.syncRelatedAlert === true) {
         if (dto.status === TaskStatus.DONE) {
           await tx.riskAlert.update({
             where: { id: existingTask.relatedAlertId },
@@ -119,7 +126,9 @@ export class TasksService {
               status: AlertStatus.RESOLVED,
               handledAt: new Date(),
               handledBy: existingTask.assigneeId,
-              handlingNote: '关联待办任务已完成，系统自动同步为已处理。',
+              handlingNote:
+                dto.relatedAlertHandlingNote ||
+                '关联待办任务已完成，经护士确认同步标记该风险预警为已处理。',
             },
           });
         }
@@ -131,7 +140,9 @@ export class TasksService {
               status: AlertStatus.DISMISSED,
               handledAt: new Date(),
               handledBy: existingTask.assigneeId,
-              handlingNote: '关联待办任务已取消，系统自动同步为已忽略。',
+              handlingNote:
+                dto.relatedAlertHandlingNote ||
+                '关联待办任务已取消，经护士确认同步标记该风险预警为忽略/误报。',
             },
           });
         }
@@ -149,5 +160,7 @@ export class TasksService {
     });
   }
 }
+
+
 
 

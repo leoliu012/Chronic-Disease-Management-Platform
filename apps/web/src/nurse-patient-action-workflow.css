@@ -1,0 +1,554 @@
+/* Nurse workflow refinement: workbench links to patient action page; final resolution happens in patient detail. */
+.nurse-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nurse-primary-detail-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.nurse-subtle-action {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+  opacity: 0.72;
+  border-color: rgba(100, 116, 139, 0.28);
+  background: #f8fafc;
+  color: #475569;
+}
+
+.nurse-subtle-action:hover,
+.nurse-subtle-action:focus-visible {
+  opacity: 1;
+}
+
+.patient-action-workspace .hospital-section-header {
+  align-items: flex-start;
+}
+
+.action-workspace-header-metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.action-workspace-header-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  background: #f8fbff;
+  padding: 7px 11px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.action-workspace-header-metrics strong {
+  color: #1d4ed8;
+  font-size: 18px;
+}
+
+.action-focus-notice {
+  margin: 14px 0;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+.action-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.action-quick-card {
+  appearance: none;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  min-height: 150px;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.action-quick-card:hover,
+.action-quick-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 18px 32px rgba(15, 23, 42, 0.12);
+  outline: none;
+}
+
+.action-quick-card span {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.action-quick-card strong {
+  display: block;
+  color: #0f172a;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.action-quick-card p {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.action-quick-card.urgent {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: linear-gradient(180deg, #fff7ed 0%, #ffffff 72%);
+}
+
+.action-quick-card.urgent strong {
+  color: #b91c1c;
+}
+
+.action-resolution-panel {
+  margin-top: 18px;
+}
+
+.action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.action-list-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 18px;
+  background: #fff;
+  padding: 16px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.action-list-card.focused {
+  border-color: rgba(37, 99, 235, 0.48);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 12px 24px rgba(15, 23, 42, 0.06);
+}
+
+.action-list-title-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.action-list-title-row h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #0f172a;
+}
+
+.action-list-main p {
+  margin: 0 0 6px;
+  color: #475569;
+  line-height: 1.55;
+}
+
+.action-list-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.action-primary-resolve {
+  min-width: 116px;
+}
+
+.subtle-danger {
+  opacity: 0.78;
+}
+
+@media (max-width: 1100px) {
+  .action-quick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .action-list-card {
+    grid-template-columns: 1fr;
+  }
+
+  .action-list-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .action-quick-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .action-workspace-header-metrics {
+    justify-content: flex-start;
+  }
+}
+
+/* Patient overview clickable cards + unified risk disposal workflow */
+.patient-overview-click-grid {
+  align-items: stretch;
+}
+
+.patient-summary-nav-card {
+  appearance: none;
+  width: 100%;
+  min-height: 136px;
+  border: 1px solid #dbe7f1;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, #f8fbfe);
+  padding: 18px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+  font: inherit;
+}
+
+.patient-summary-nav-card:hover,
+.patient-summary-nav-card:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 16px 30px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.patient-summary-nav-card span,
+.patient-summary-nav-card em {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  font-style: normal;
+}
+
+.patient-summary-nav-card strong {
+  display: block;
+  margin: 8px 0 4px;
+  color: #0f3a66;
+  font-size: 30px;
+  font-weight: 900;
+}
+
+.patient-summary-nav-card p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.patient-summary-nav-card em {
+  margin-top: 12px;
+  color: #1d4ed8;
+}
+
+.unified-risk-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.risk-alert-selector {
+  border: 1px solid #dbe7f1;
+  border-radius: 18px;
+  background: #f8fbfe;
+  padding: 12px;
+  position: sticky;
+  top: 16px;
+}
+
+.risk-alert-selector-title {
+  color: #0f3a66;
+  font-size: 13px;
+  font-weight: 900;
+  margin: 2px 4px 10px;
+}
+
+.risk-alert-select-card {
+  appearance: none;
+  display: block;
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+  font: inherit;
+}
+
+.risk-alert-select-card:hover,
+.risk-alert-select-card:focus-visible,
+.risk-alert-select-card.active {
+  border-color: rgba(37, 99, 235, 0.48);
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  outline: none;
+}
+
+.risk-alert-select-card strong,
+.risk-alert-select-card small {
+  display: block;
+  margin-top: 7px;
+}
+
+.risk-alert-select-card strong {
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.risk-alert-select-card small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.unified-risk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.selected-risk-card,
+.risk-expanded-section,
+.unified-submit-card {
+  border: 1px solid #dbe7f1;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.selected-risk-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.selected-risk-card span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.selected-risk-card h3,
+.risk-expanded-section h3 {
+  margin: 6px 0 8px;
+  color: #0f3a66;
+  font-size: 18px;
+}
+
+.selected-risk-card p,
+.risk-expanded-section p {
+  color: #475569;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+.risk-action-checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.risk-action-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid #dbe7f1;
+  border-radius: 16px;
+  background: #fbfdff;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.risk-action-check.selected {
+  border-color: rgba(37, 99, 235, 0.48);
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.risk-action-check input {
+  margin-top: 4px;
+}
+
+.risk-action-check strong,
+.risk-action-check small {
+  display: block;
+}
+
+.risk-action-check strong {
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.risk-action-check small {
+  color: #64748b;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.risk-expanded-section.urgent-section {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.risk-expanded-section label,
+.unified-submit-card label {
+  display: block;
+  color: #0f3a66;
+  font-size: 13px;
+  font-weight: 800;
+  margin-top: 12px;
+}
+
+.risk-expanded-section input,
+.risk-expanded-section select,
+.risk-expanded-section textarea,
+.unified-submit-card input,
+.unified-submit-card textarea {
+  width: 100%;
+  margin-top: 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+
+.risk-submit-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 14px;
+}
+
+@media (max-width: 1100px) {
+  .unified-risk-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .risk-alert-selector {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .risk-action-checklist {
+    grid-template-columns: 1fr;
+  }
+
+  .selected-risk-card {
+    display: block;
+  }
+}
+
+/* Patient detail workflow consolidation: default-display records, expand forms only when needed. */
+.collapsible-workspace-panel {
+  border-left: 4px solid #2563eb;
+}
+
+.collapsible-form-card {
+  border: 1px solid #bfdbfe;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.disease-profile-grid .disease-profile-card,
+.metric-inline-card,
+.risk-inline-card {
+  min-height: 150px;
+}
+
+.relation-sync-check,
+.related-alert-sync-box .task-complete-check {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #0f3a66;
+  font-weight: 800;
+  margin-top: 12px;
+}
+
+.related-alert-sync-box {
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.related-alert-sync-box label {
+  display: block;
+  margin-top: 10px;
+  color: #0f3a66;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.related-alert-sync-box textarea {
+  width: 100%;
+  margin-top: 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #ffffff;
+  box-sizing: border-box;
+}
+
+/* Inline create-form UX: the form must appear directly under the clicked action button. */
+.collapsible-workspace-panel > .collapsible-form-card {
+  margin: 14px 0 18px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.collapsible-workspace-panel > .collapsible-form-card + .task-inline-list,
+.collapsible-workspace-panel > .collapsible-form-card + .empty-state,
+.collapsible-workspace-panel > .collapsible-form-card + .task-inline-grid {
+  margin-top: 14px;
+}
+
+.collapsible-workspace-panel .collapsible-form-card .hospital-section-header h2 {
+  color: #0f3a66;
+}

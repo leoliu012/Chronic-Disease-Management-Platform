@@ -1,6 +1,96 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+const diseaseLabelMap: Record<string, string> = {
+  HYPERTENSION: '高血压',
+  TYPE_2_DIABETES: '2型糖尿病',
+  COPD: '慢阻肺',
+  CORONARY_HEART_DISEASE: '冠心病',
+  HYPERLIPIDEMIA: '高脂血症',
+  OBESITY: '肥胖',
+  OTHER: '其他',
+};
+
+const riskLabelMap: Record<string, string> = {
+  LOW: '低危',
+  MEDIUM: '中危',
+  HIGH: '高危',
+  VERY_HIGH: '极高危',
+};
+
+const dataSourceLabelMap: Record<string, string> = {
+  HIS: '院内信息系统',
+  EMR: '电子病历',
+  LIS: '检验系统',
+  MINI_PROGRAM: '患者小程序',
+  NURSE_INPUT: '护士录入',
+  MANUAL_IMPORT: '人工导入',
+};
+
+const vitalTypeLabelMap: Record<string, string> = {
+  BLOOD_PRESSURE: '血压',
+  SYSTOLIC_BP: '收缩压',
+  DIASTOLIC_BP: '舒张压',
+  BLOOD_GLUCOSE: '血糖',
+  WEIGHT: '体重',
+  HEART_RATE: '心率',
+  SPO2: '血氧',
+  LDL_C: '低密度脂蛋白胆固醇',
+};
+
+const taskTypeLabelMap: Record<string, string> = {
+  FOLLOW_UP: '随访任务',
+  RISK_ALERT_FOLLOW_UP: '风险预警处理',
+  RECHECK_REMINDER: '复查提醒',
+  MEDICATION_REMINDER: '用药提醒',
+  MEDICATION_ADHERENCE_FOLLOW_UP: '用药依从性随访',
+  VITAL_RECHECK_FOLLOW_UP: '指标复测随访',
+  VITAL_MEASUREMENT_MISSED: '指标漏测复核',
+  QUESTIONNAIRE_REVIEW: '问卷复核',
+  LAB_TEST_REMINDER: '检查提醒',
+};
+
+const followUpTypeLabelMap: Record<string, string> = {
+  PHONE: '电话随访',
+  WECHAT: '微信随访',
+  OUTPATIENT: '门诊随访',
+  HOME_VISIT: '上门随访',
+};
+
+const statusLabelMap: Record<string, string> = {
+  PENDING: '待处理',
+  IN_PROGRESS: '处理中',
+  DONE: '已完成',
+  CANCELED: '已取消',
+  OPEN: '未处理',
+  RESOLVED: '已处理',
+  DISMISSED: '已忽略',
+};
+
+const questionnaireTypeLabelMap: Record<string, string> = {
+  HYPERTENSION_MONTHLY: '高血压月度随访问卷',
+  DIABETES_MONTHLY: '糖尿病月度随访问卷',
+  COPD_CAT: '慢阻肺症状评估',
+  CHD_MONTHLY: '冠心病月度随访问卷',
+  LIPID_LIFESTYLE: '血脂生活方式问卷',
+  OBESITY_LIFESTYLE: '体重管理生活方式问卷',
+};
+
+function label(map: Record<string, string>, value?: string | null) {
+  if (!value) return '-';
+  return map[value] ?? value;
+}
+
+function formatDate(value?: Date | null) {
+  if (!value) return '-';
+  return value.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
+}
+
+function formatTime(value?: Date | null) {
+  if (!value) return '-';
+  return value.toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+}
+
 @Injectable()
 export class PatientTimelineService {
   constructor(private readonly prisma: PrismaService) {}
@@ -75,20 +165,18 @@ export class PatientTimelineService {
     const diseaseEvents = diseaseProfiles.map((item) => ({
       type: 'DISEASE_PROFILE',
       time: item.createdAt,
-      title: `慢病档案：${item.diseaseType}`,
-      description: `风险等级：${item.riskLevel}${
-        item.diagnosisDate
-          ? `；确诊日期：${item.diagnosisDate.toISOString().slice(0, 10)}`
-          : ''
-      }；数据来源：${item.dataSource}`,
+      title: `慢病档案：${label(diseaseLabelMap, item.diseaseType)}`,
+      description: `风险等级：${label(riskLabelMap, item.riskLevel)}${
+        item.diagnosisDate ? `；确诊日期：${formatDate(item.diagnosisDate)}` : ''
+      }；数据来源：${label(dataSourceLabelMap, item.dataSource)}`,
       data: item,
     }));
 
     const vitalEvents = vitalRecords.map((item) => ({
       type: 'VITAL_RECORD',
       time: item.measuredAt,
-      title: `健康指标：${item.type}`,
-      description: `${item.value} ${item.unit}${item.isAbnormal ? '，异常' : ''}`,
+      title: `健康指标：${label(vitalTypeLabelMap, item.type)}`,
+      description: `${item.value} ${item.unit}${item.isAbnormal ? '，异常' : '，正常'}`,
       data: item,
     }));
 
@@ -96,14 +184,14 @@ export class PatientTimelineService {
       type: 'RISK_ALERT',
       time: item.createdAt,
       title: item.title,
-      description: `${item.description ?? '暂无说明'}；状态：${item.status}`,
+      description: `${item.description ?? '暂无说明'}；状态：${label(statusLabelMap, item.status)}`,
       data: item,
     }));
 
     const followUpEvents = followUps.map((item) => ({
       type: 'FOLLOW_UP',
       time: item.followUpTime,
-      title: `随访记录：${item.followUpType}`,
+      title: `随访记录：${label(followUpTypeLabelMap, item.followUpType)}`,
       description: item.result ?? item.content ?? '',
       data: item,
     }));
@@ -112,8 +200,8 @@ export class PatientTimelineService {
       type: 'TASK',
       time: item.createdAt,
       title: item.title,
-      description: `任务状态：${item.status}${
-        item.dueAt ? `；截止时间：${item.dueAt.toISOString()}` : ''
+      description: `任务状态：${label(statusLabelMap, item.status)}${
+        item.dueAt ? `；截止时间：${formatTime(item.dueAt)}` : ''
       }${item.relatedAlertId ? '；已关联风险预警' : ''}`,
       data: item,
     }));
@@ -142,17 +230,15 @@ export class PatientTimelineService {
       type: 'MEDICATION_CHECK_IN',
       time: item.checkedAt,
       title: `用药打卡：${item.medication.medicationName}`,
-      description: `${item.taken ? '已按时服药' : '漏服/未服药'}${
-        item.note ? `；备注：${item.note}` : ''
-      }`,
+      description: `${item.taken ? '已按时服药' : '漏服/未服药'}${item.note ? `；备注：${item.note}` : ''}`,
       data: item,
     }));
 
     const questionnaireEvents = questionnaireResults.map((item) => ({
       type: 'QUESTIONNAIRE_RESULT',
       time: item.createdAt,
-      title: `问卷结果：${item.questionnaireType}`,
-      description: `评分：${item.score}/10；风险等级：${item.riskLevel}；${item.riskConclusion}`,
+      title: `问卷结果：${label(questionnaireTypeLabelMap, item.questionnaireType)}`,
+      description: `评分：${item.score}/10；风险等级：${label(riskLabelMap, item.riskLevel)}；${item.riskConclusion}`,
       data: item,
     }));
 
@@ -176,4 +262,3 @@ export class PatientTimelineService {
     };
   }
 }
-

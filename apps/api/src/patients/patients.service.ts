@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePatientDto } from './dto/create-patient.dto';
+import { maskPatientForList } from '../security/data-masking';
 
 @Injectable()
 export class PatientsService {
@@ -16,7 +17,7 @@ export class PatientsService {
   }
 
   async findAll() {
-    return this.prisma.patient.findMany({
+    const patients = await this.prisma.patient.findMany({
       orderBy: {
         createdAt: 'desc',
       },
@@ -38,6 +39,8 @@ export class PatientsService {
         },
       },
     });
+
+    return patients.map((patient) => maskPatientForList(patient));
   }
 
   async findOne(id: string) {

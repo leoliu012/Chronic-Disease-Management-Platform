@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const {
   riskLabels,
   taskStatusLabels,
@@ -27,6 +27,7 @@ Page({
     recentAlerts: [],
     recentTasks: [],
     todayTodos: [],
+    hospitalVisitReminders: [],
     loading: false
   },
 
@@ -54,15 +55,18 @@ Page({
     this.setData({ loading: true });
 
     try {
-      const [patient, vitals, alerts, tasks, medications, questionnaires, vitalPlans] = await Promise.all([
-        request({ url: `/patients/${this.data.patientId}` }),
-        request({ url: `/patients/${this.data.patientId}/vital-records` }),
-        request({ url: `/patients/${this.data.patientId}/risk-alerts` }),
-        request({ url: `/patients/${this.data.patientId}/tasks` }),
-        request({ url: `/patients/${this.data.patientId}/medications` }),
-        request({ url: `/patients/${this.data.patientId}/questionnaire-results` }),
-        request({ url: `/patients/${this.data.patientId}/vital-monitoring-plans` })
+      const [me, vitals, alerts, tasks, medications, questionnaires, vitalPlans, hospitalVisitReminders] = await Promise.all([
+        patientRequest({ url: '/me' }),
+        patientRequest({ url: '/vitals' }),
+        patientRequest({ url: '/risk-alerts' }),
+        patientRequest({ url: '/tasks' }),
+        patientRequest({ url: '/medications' }),
+        patientRequest({ url: '/questionnaire-results' }),
+        patientRequest({ url: '/vital-monitoring-plans' }),
+        patientRequest({ url: '/hospital-visit-reminders' })
       ]);
+
+      const patient = me.patient || {};
 
       const recentAlerts = (alerts || []).slice(0, 3).map((item) => ({
         ...item,
@@ -95,6 +99,10 @@ Page({
       this.setData({
         patient,
         patientDesc: this.getPatientDesc(patient),
+        hospitalVisitReminders: (hospitalVisitReminders || []).map((item) => ({
+          ...item,
+          remindedAtText: formatDateTime(item.remindedAt)
+        })),
         vitalCount: (vitals || []).length,
         abnormalVitalCount: (vitals || []).filter((item) => item.isAbnormal).length,
         openAlertCount: (alerts || []).filter((item) => item.status === 'OPEN' || item.status === 'IN_PROGRESS').length,
@@ -235,5 +243,9 @@ Page({
     if (target === 'records') this.goRecords();
   }
 });
+
+
+
+
 
 

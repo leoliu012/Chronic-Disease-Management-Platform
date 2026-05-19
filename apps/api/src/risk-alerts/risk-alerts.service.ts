@@ -125,15 +125,17 @@ export class RiskAlertsService {
         },
       });
 
-      await tx.task.updateMany({
-        where: {
-          relatedAlertId: id,
-          status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
-        },
-        data: {
-          status: TaskStatus.DONE,
-        },
-      });
+      if (dto.syncRelatedTasks === true) {
+        await tx.task.updateMany({
+          where: {
+            relatedAlertId: id,
+            status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
+          },
+          data: {
+            status: TaskStatus.DONE,
+          },
+        });
+      }
 
       return alert;
     });
@@ -153,19 +155,23 @@ export class RiskAlertsService {
         },
       });
 
-      await tx.task.updateMany({
-        where: {
-          relatedAlertId: id,
-          status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
-        },
-        data: {
-          status: TaskStatus.CANCELED,
-        },
-      });
+      if (dto.syncRelatedTasks === true) {
+        await tx.task.updateMany({
+          where: {
+            relatedAlertId: id,
+            status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
+          },
+          data: {
+            status: TaskStatus.CANCELED,
+          },
+        });
+      }
 
       return alert;
     });
   }
 }
+
+
 
 

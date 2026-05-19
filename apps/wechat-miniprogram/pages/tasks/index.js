@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const { taskStatusLabels, labelOf, formatDateTime, statusClass } = require('../../utils/format');
 
 Page({
@@ -30,7 +30,7 @@ Page({
     this.setData({ loading: true });
 
     try {
-      const tasks = await request({ url: `/patients/${this.data.patientId}/tasks` });
+      const tasks = await patientRequest({ url: '/tasks' });
       this.setData({
         tasks: (tasks || []).map((item) => ({
           ...item,
@@ -57,3 +57,5 @@ Page({
     wx.navigateTo({ url: '/pages/bind/index' });
   }
 });
+
+

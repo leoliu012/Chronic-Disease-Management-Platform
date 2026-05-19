@@ -1,8 +1,28 @@
 <view class="container">
   <view class="card hero-card">
-    <view class="card-title">绑定慢病档案</view>
+    <view class="card-title">患者身份绑定</view>
     <view class="card-subtitle">
-      请输入医院患者 ID，或输入院内号/手机号/身份证号走 HIS 模拟查询。绑定后可在患者端录入血压、血糖等院外健康数据。
+      当前为医院可信患者入口 v1。患者需提交手机号 + 院内号或身份证后四位，由护士审核后才能访问本人慢病档案。
+    </view>
+  </view>
+
+  <view class="card status-card">
+    <view class="item-title">当前绑定状态</view>
+    <view class="status-row">
+      <text class="status-pill status-open" wx:if="{{bindingStatus === 'PENDING'}}">待护士审核</text>
+      <text class="status-pill status-done" wx:elif="{{bindingStatus === 'APPROVED'}}">已通过</text>
+      <text class="status-pill status-muted" wx:elif="{{bindingStatus === 'REJECTED'}}">已拒绝</text>
+      <text class="status-pill status-muted" wx:else>未绑定</text>
+    </view>
+    <view class="item-desc" wx:if="{{message}}">{{message}}</view>
+    <view class="item-desc">小程序身份：{{demoOpenId}}</view>
+    <view wx:if="{{patient}}" class="patient-mini-card">
+      <view class="item-title">{{patient.name || '已匹配患者'}}</view>
+      <view class="item-desc">院内号：{{patient.hospitalPatientId || '-'}}</view>
+    </view>
+    <view class="btn-row">
+      <button class="secondary-btn" loading="{{loading}}" bindtap="checkBindingStatus">刷新状态</button>
+      <button class="danger-btn" bindtap="resetBinding">清除本机会话</button>
     </view>
   </view>
 
@@ -10,33 +30,32 @@
     <view class="form-item">
       <text class="form-label">后端 API 地址</text>
       <input class="input" value="{{apiBaseUrl}}" placeholder="例如 http://127.0.0.1:3000" bindinput="onApiBaseUrlInput" />
-      <view class="muted">开发工具可用 127.0.0.1；真机调试请改为电脑局域网 IP，并在开发工具中关闭合法域名校验。</view>
+      <view class="muted">开发工具可用 127.0.0.1；真机调试请改为电脑局域网 IP。</view>
     </view>
 
     <view class="form-item">
-      <text class="form-label">患者 ID</text>
-      <input class="input" value="{{patientId}}" placeholder="直接填写数据库里的 patientId" bindinput="onPatientIdInput" />
+      <text class="form-label">手机号</text>
+      <input class="input" value="{{phone}}" type="number" maxlength="11" placeholder="患者在医院档案中的手机号" bindinput="onPhoneInput" />
     </view>
-
-    <button class="primary-btn" loading="{{loading}}" bindtap="bindByPatientId">用患者 ID 绑定</button>
-
-    <view class="divider">或</view>
 
     <view class="form-item">
-      <text class="form-label">院内号 / 就诊卡号 / 手机号 / 身份证号</text>
-      <input class="input" value="{{barcode}}" placeholder="用于 HIS 模拟查询" bindinput="onBarcodeInput" />
+      <text class="form-label">院内号 / 门诊号</text>
+      <input class="input" value="{{hospitalPatientId}}" placeholder="例如 MZ20260519001" bindinput="onHospitalPatientIdInput" />
     </view>
 
-    <button class="secondary-btn" loading="{{loading}}" bindtap="lookupHis">HIS 模拟查询</button>
+    <view class="divider">或填写</view>
+
+    <view class="form-item">
+      <text class="form-label">身份证后四位</text>
+      <input class="input" value="{{idCardLast4}}" type="number" maxlength="4" placeholder="用于辅助核验患者身份" bindinput="onIdCardLast4Input" />
+    </view>
+
+    <button class="primary-btn" loading="{{submitting}}" bindtap="submitBindingRequest">提交绑定申请</button>
   </view>
 
-  <view wx:if="{{lookupResult}}" class="card result-card">
-    <view class="card-title">查询结果</view>
-    <view class="item-desc">{{lookupResult.message}}</view>
-    <view wx:if="{{lookupResult.patient && lookupResult.patient.id}}" class="btn-row">
-      <button class="primary-btn" bindtap="confirmLookupPatient">绑定该患者</button>
-    </view>
-    <view wx:else class="empty-state">未匹配到本地患者。当前后端为 HIS 预留接口，需要先在 Web 后台创建患者档案。</view>
+  <view class="card audit-card">
+    <view class="item-title">医院侧审核说明</view>
+    <view class="item-desc">护士在 Web 端“绑定审核”菜单中通过申请后，患者端刷新状态即可获得 patient token。后续血压、血糖、用药和问卷提交都会写入审计日志。</view>
   </view>
 
   <view class="safe-bottom" />

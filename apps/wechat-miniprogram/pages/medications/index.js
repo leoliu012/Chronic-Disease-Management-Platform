@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const { formatDateTime } = require('../../utils/format');
 
 const timingRelationLabels = {
@@ -44,8 +44,8 @@ Page({
 
     try {
       const [medications, checkIns] = await Promise.all([
-        request({ url: `/patients/${this.data.patientId}/medications` }),
-        request({ url: `/patients/${this.data.patientId}/medication-check-ins` })
+        patientRequest({ url: '/medications' }),
+        patientRequest({ url: '/medication-check-ins' })
       ]);
 
       this.setData({
@@ -118,7 +118,7 @@ Page({
     this.setData({ submitting: true, lastResult: null });
 
     try {
-      const result = await request({
+      const result = await patientRequest({
         url: `/medications/${medicationId}/check-ins`,
         method: 'POST',
         data: {
@@ -147,3 +147,5 @@ Page({
     wx.navigateTo({ url: '/pages/questionnaire/index' });
   }
 });
+
+

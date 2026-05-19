@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { RiskLevel, RiskAlert, Task } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClinicalRulesService } from '../clinical-rules/clinical-rules.service';
 import { CreateVitalRecordDto } from './dto/create-vital-record.dto';
 import { QueryVitalRecordsDto } from './dto/query-vital-records.dto';
 
@@ -10,6 +11,11 @@ type VitalRuleEvaluation = {
   title: string;
   description: string;
   triggerRule: string;
+  matchedRuleId?: string;
+  matchedTemplateId?: string;
+  matchedTemplateName?: string;
+  followUpDueWithinHours?: number;
+  followUpTaskTitle?: string;
 };
 
 const vitalTypeLabelMap: Record<string, string> = {
@@ -24,9 +30,19 @@ const vitalTypeLabelMap: Record<string, string> = {
 
 @Injectable()
 export class VitalRecordsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly clinicalRulesService: ClinicalRulesService,
+  ) {}
 
-  private getAlertReviewDueAt(riskLevel: RiskLevel) {
+  private getAlertReviewDueAt(ruleEvaluation: VitalRuleEvaluation) {
+    if (ruleEvaluation.followUpDueWithinHours) {
+      const dueAt = new Date();
+      dueAt.setHours(dueAt.getHours() + ruleEvaluation.followUpDueWithinHours);
+      return dueAt;
+    }
+
+    const riskLevel = ruleEvaluation.riskLevel;
     const dueAt = new Date();
 
     if (riskLevel === RiskLevel.VERY_HIGH) {
@@ -44,6 +60,10 @@ export class VitalRecordsService {
   }
 
   private getAlertReviewTaskTitle(ruleEvaluation: VitalRuleEvaluation) {
+    if (ruleEvaluation.followUpTaskTitle) {
+      return ruleEvaluation.followUpTaskTitle;
+    }
+
     if (ruleEvaluation.riskLevel === RiskLevel.VERY_HIGH) {
       return `立即复核：${ruleEvaluation.title}`;
     }
@@ -55,7 +75,7 @@ export class VitalRecordsService {
     return `异常复测随访：${ruleEvaluation.title}`;
   }
 
-  private evaluateVitalRule(dto: CreateVitalRecordDto): VitalRuleEvaluation {
+  private evaluateVitalRuleFallback(dto: CreateVitalRecordDto): VitalRuleEvaluation {
     const type = dto.type;
     const value = Number(dto.value);
     const unit = dto.unit;
@@ -164,9 +184,20 @@ export class VitalRecordsService {
     };
   }
 
+  private async evaluateVitalRule(patient: any, dto: CreateVitalRecordDto): Promise<VitalRuleEvaluation> {
+    const configuredRuleEvaluation = await this.clinicalRulesService.evaluateVital(patient, dto);
+
+    if (configuredRuleEvaluation) {
+      return configuredRuleEvaluation;
+    }
+
+    return this.evaluateVitalRuleFallback(dto);
+  }
+
   async create(patientId: string, dto: CreateVitalRecordDto) {
     const patient = await this.prisma.patient.findUnique({
       where: { id: patientId },
+      include: { diseaseProfiles: true },
     });
 
     if (!patient) {
@@ -184,7 +215,7 @@ export class VitalRecordsService {
       }
     }
 
-    const ruleEvaluation = this.evaluateVitalRule(dto);
+    const ruleEvaluation = await this.evaluateVitalRule(patient, dto);
     const measuredAt = new Date(dto.measuredAt);
 
     return this.prisma.$transaction(async (tx) => {
@@ -231,7 +262,7 @@ export class VitalRecordsService {
             patientId,
             title: this.getAlertReviewTaskTitle(ruleEvaluation),
             type: 'RISK_ALERT_FOLLOW_UP',
-            dueAt: this.getAlertReviewDueAt(ruleEvaluation.riskLevel),
+            dueAt: this.getAlertReviewDueAt(ruleEvaluation),
             assigneeId: patient.responsibleNurseId ?? 'nurse-001',
             relatedAlertId: generatedRiskAlert.id,
           },
@@ -294,6 +325,8 @@ export class VitalRecordsService {
     });
   }
 }
+
+
 
 
 

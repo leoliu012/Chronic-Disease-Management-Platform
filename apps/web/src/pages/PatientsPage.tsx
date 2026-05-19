@@ -1,7 +1,8 @@
 import type { FormEvent, KeyboardEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, AUTH_USER_STORAGE_KEY, getApiErrorMessage } from '../api/client';
+import type { CurrentUser } from './LoginPage';
 
 type DiseaseProfile = {
   diseaseType: string;
@@ -47,6 +48,8 @@ type HisLookupResponse = {
   };
 };
 
+type PatientWorkspace = 'index' | 'intake';
+
 const emptyForm: PatientForm = {
   hospitalPatientId: '',
   name: '',
@@ -81,6 +84,9 @@ const riskLabelMap: Record<string, string> = {
   HIGH: '高危',
   VERY_HIGH: '极高危',
 };
+
+const diseaseOptions = Object.entries(diseaseLabelMap);
+const riskOptions = Object.entries(riskLabelMap);
 
 function getRiskClass(riskLevel: string) {
   return `risk-badge risk-${riskLevel.toLowerCase().replace('_', '-')}`;
@@ -130,10 +136,32 @@ function downloadCsv(filename: string, rows: Array<Record<string, unknown>>) {
   URL.revokeObjectURL(url);
 }
 
+function normalizeText(value?: string | null) {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function patientHasDisease(patient: Patient, diseaseType: string) {
+  if (diseaseType === 'ALL') return true;
+  return patient.diseaseProfiles?.some((item) => item.diseaseType === diseaseType) ?? false;
+}
+
+function patientMatchesIdLast4(patient: Patient, idCardLast4: string) {
+  const keyword = idCardLast4.trim();
+  if (!keyword) return true;
+  return (patient.idCardNo ?? '').endsWith(keyword) || (patient.idCardNo ?? '').includes(keyword);
+}
+
 export function PatientsPage() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
+  const [activeWorkspace, setActiveWorkspace] = useState<PatientWorkspace>('index');
+
+  const [nameFilter, setNameFilter] = useState('');
+  const [hospitalIdFilter, setHospitalIdFilter] = useState('');
+  const [phoneFilter, setPhoneFilter] = useState('');
+  const [idCardLast4Filter, setIdCardLast4Filter] = useState('');
+  const [genderFilter, setGenderFilter] = useState('ALL');
+  const [diseaseFilter, setDiseaseFilter] = useState('ALL');
   const [riskFilter, setRiskFilter] = useState('ALL');
 
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -145,11 +173,30 @@ export function PatientsPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  const currentUser = useMemo(() => {
+    const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as CurrentUser;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const canEditPatients =
+    currentUser?.role === 'ADMIN' ||
+    currentUser?.role === 'DOCTOR' ||
+    currentUser?.role === 'NURSE';
+
+  const canExportPatients = currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER';
+
   async function loadPatients() {
     setLoading(true);
     try {
       const res = await api.get('/patients');
       setPatients(res.data);
+    } catch (err) {
+      setError(getApiErrorMessage(err, '患者主索引加载失败，请确认后端服务是否正常。'));
     } finally {
       setLoading(false);
     }
@@ -160,22 +207,52 @@ export function PatientsPage() {
   }, []);
 
   const filteredPatients = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
+    const nameKeyword = normalizeText(nameFilter);
+    const hospitalIdKeyword = normalizeText(hospitalIdFilter);
+    const phoneKeyword = normalizeText(phoneFilter);
 
     return patients.filter((patient) => {
       const highestRisk = getHighestRisk(patient);
-      const keywordMatched =
-        !keyword ||
-        patient.name.toLowerCase().includes(keyword) ||
-        patient.hospitalPatientId?.toLowerCase().includes(keyword) ||
-        patient.phone?.toLowerCase().includes(keyword) ||
-        patient.idCardNo?.toLowerCase().includes(keyword);
-
+      const nameMatched = !nameKeyword || normalizeText(patient.name).includes(nameKeyword);
+      const hospitalIdMatched =
+        !hospitalIdKeyword || normalizeText(patient.hospitalPatientId).includes(hospitalIdKeyword);
+      const phoneMatched = !phoneKeyword || normalizeText(patient.phone).includes(phoneKeyword);
+      const idCardMatched = patientMatchesIdLast4(patient, idCardLast4Filter);
+      const genderMatched = genderFilter === 'ALL' || patient.gender === genderFilter;
+      const diseaseMatched = patientHasDisease(patient, diseaseFilter);
       const riskMatched = riskFilter === 'ALL' || highestRisk === riskFilter;
 
-      return keywordMatched && riskMatched;
+      return (
+        nameMatched &&
+        hospitalIdMatched &&
+        phoneMatched &&
+        idCardMatched &&
+        genderMatched &&
+        diseaseMatched &&
+        riskMatched
+      );
     });
-  }, [patients, riskFilter, search]);
+  }, [diseaseFilter, genderFilter, hospitalIdFilter, idCardLast4Filter, nameFilter, patients, phoneFilter, riskFilter]);
+
+  const activeFilterCount = [
+    nameFilter,
+    hospitalIdFilter,
+    phoneFilter,
+    idCardLast4Filter,
+    genderFilter !== 'ALL' ? genderFilter : '',
+    diseaseFilter !== 'ALL' ? diseaseFilter : '',
+    riskFilter !== 'ALL' ? riskFilter : '',
+  ].filter(Boolean).length;
+
+  function clearFilters() {
+    setNameFilter('');
+    setHospitalIdFilter('');
+    setPhoneFilter('');
+    setIdCardLast4Filter('');
+    setGenderFilter('ALL');
+    setDiseaseFilter('ALL');
+    setRiskFilter('ALL');
+  }
 
   function updateForm<K extends keyof PatientForm>(key: K, value: PatientForm[K]) {
     setForm((current) => ({
@@ -199,6 +276,16 @@ export function PatientsPage() {
   }
 
   async function lookupBarcode() {
+    if (hisLoading) {
+      setMessage('HIS 查询正在进行中，请勿重复点击。');
+      return;
+    }
+
+    if (!canEditPatients) {
+      setError('当前角色为只读权限，不能执行 HIS 建档查询。');
+      return;
+    }
+
     const trimmedBarcode = barcode.trim();
     if (!trimmedBarcode) {
       setError('请先扫描或输入就诊卡号、腕带条形码、院内 ID。');
@@ -215,20 +302,30 @@ export function PatientsPage() {
       );
 
       if (res.data.interfaceStatus === 'MATCHED_LOCAL_PATIENT' && res.data.patient.id) {
-        setMessage('已匹配本平台患者，可直接在列表中进入档案。');
+        setMessage('已匹配本平台患者，可回到患者主索引进入档案。');
       } else {
         fillFormFromHisPatient(res.data.patient);
         setShowCreateForm(true);
         setMessage(res.data.message);
       }
-    } catch {
-      setError('HIS 条码查询失败。请确认后端已更新并重启，或先手工录入患者。');
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'HIS 条码查询失败。请确认后端已启动，或先手工录入患者。'));
     } finally {
       setHisLoading(false);
     }
   }
 
   async function importHisDraft() {
+    if (hisLoading) {
+      setMessage('HIS 草稿正在拉取中，请勿重复点击。');
+      return;
+    }
+
+    if (!canEditPatients) {
+      setError('当前角色为只读权限，不能从 HIS 拉取建档草稿。');
+      return;
+    }
+
     const trimmedBarcode = barcode.trim();
     if (!trimmedBarcode) {
       setError('请先扫描或输入条形码/院内 ID，再从 HIS 拉取患者草稿。');
@@ -247,8 +344,8 @@ export function PatientsPage() {
       fillFormFromHisPatient(res.data.patient);
       setShowCreateForm(true);
       setMessage(res.data.message);
-    } catch {
-      setError('HIS 患者草稿拉取失败。当前接口为预留模式，请检查后端是否已应用补丁。');
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'HIS 患者草稿拉取失败。当前接口为预留模式，请检查后端是否已启动。'));
     } finally {
       setHisLoading(false);
     }
@@ -263,6 +360,16 @@ export function PatientsPage() {
 
   async function createPatient(event: FormEvent) {
     event.preventDefault();
+
+    if (creating) {
+      setMessage('患者建档正在保存中，请勿重复提交。');
+      return;
+    }
+
+    if (!canEditPatients) {
+      setError('当前角色没有新增患者权限。');
+      return;
+    }
 
     if (!form.name.trim()) {
       setError('患者姓名为必填项。HIS 未返回姓名时，请手工补充。');
@@ -289,16 +396,26 @@ export function PatientsPage() {
       setForm(emptyForm);
       setBarcode('');
       setShowCreateForm(false);
-      setMessage('患者已建档。后续可进入档案补充慢病、指标、随访和任务。');
+      setMessage('患者已建档。可回到患者主索引进入档案，继续补充慢病、指标、随访和任务。');
       await loadPatients();
-    } catch {
-      setError('患者建档失败。请检查院内 ID 是否重复，或确认后端服务是否正常。');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '患者建档失败。请检查院内 ID 是否重复，或确认后端服务是否正常。'));
     } finally {
       setCreating(false);
     }
   }
 
   async function exportPatientsForHis() {
+    if (exporting) {
+      setMessage('HIS 导出正在生成中，请勿重复点击。');
+      return;
+    }
+
+    if (!canExportPatients) {
+      setError('当前角色没有 HIS 导出权限。');
+      return;
+    }
+
     setExporting(true);
     setError('');
     setMessage('');
@@ -329,8 +446,8 @@ export function PatientsPage() {
 
       downloadCsv(`his_patient_export_${new Date().toISOString().slice(0, 10)}.csv`, rows);
       setMessage('已生成 HIS 预留格式患者导出文件。真实上线时可替换为 HL7/FHIR/WebService/中间库推送。');
-    } catch {
-      setError('导出失败。请确认后端 HIS 预留接口已启动。');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '导出失败。请确认后端 HIS 预留接口已启动。'));
     } finally {
       setExporting(false);
     }
@@ -341,256 +458,340 @@ export function PatientsPage() {
   }
 
   return (
-    <div>
-      <div className="page-heading">
+    <div className="patient-index-clean">
+      <div className="page-header clean-page-header">
         <div>
-          <span>Patient Master Index</span>
+          <div className="page-kicker">患者主索引</div>
           <h1>患者档案</h1>
-          <p>支持手工建档、扫码录入，并预留 HIS 患者主索引同步与导出接口。</p>
+          <p className="page-subtitle">主索引、建档入口和 HIS 预留导入分区管理，避免筛选、录入和导出挤在同一屏。</p>
+        </div>
+        <div className="header-action-row">
+          {canExportPatients && activeWorkspace === 'index' && (
+            <button className="secondary-btn" onClick={exportPatientsForHis} disabled={exporting}>
+              {exporting ? '导出中...' : '导出给 HIS'}
+            </button>
+          )}
+          {canEditPatients && (
+            <button
+              className={activeWorkspace === 'intake' ? 'primary-btn' : 'secondary-btn'}
+              onClick={() => {
+                setActiveWorkspace('intake');
+                setError('');
+                setMessage('');
+              }}
+            >
+              建档 / HIS 导入
+            </button>
+          )}
         </div>
       </div>
 
-      <section className="panel patient-his-panel">
-        <div className="section-title-row">
-          <div>
-            <h2>建档入口 / HIS 接口预留</h2>
-            <p className="muted">
-              扫描枪通常会把条形码当作键盘输入并自动回车；此处按 Enter 会自动查询 HIS 预留接口。
-            </p>
+      {message && <div className="status-message operation-inline-success" role="status">{message}</div>}
+      {error && <div className="status-error operation-inline-error" role="alert">{error}</div>}
+
+      <section className="workspace-tabs-card">
+        <button
+          type="button"
+          className={activeWorkspace === 'index' ? 'workspace-tab active' : 'workspace-tab'}
+          onClick={() => setActiveWorkspace('index')}
+        >
+          <strong>患者主索引</strong>
+          <span>检索、筛选、进入档案</span>
+        </button>
+        <button
+          type="button"
+          className={activeWorkspace === 'intake' ? 'workspace-tab active' : 'workspace-tab'}
+          onClick={() => setActiveWorkspace('intake')}
+          disabled={!canEditPatients}
+        >
+          <strong>建档入口</strong>
+          <span>扫码、HIS 草稿、手工建档</span>
+        </button>
+      </section>
+
+      {activeWorkspace === 'index' && (
+        <section className="panel patient-master-index-panel">
+          <div className="section-title-row">
+            <div>
+              <h2>患者主索引</h2>
+              <p className="muted">共 {patients.length} 名患者，当前显示 {filteredPatients.length} 名。列表默认脱敏，查看详情会写入审计日志。</p>
+            </div>
+            <span className="type-badge">MASTER INDEX</span>
           </div>
-          <span className="type-badge">HIS RESERVED</span>
-        </div>
 
-        <div className="his-action-row">
-          <input
-            className="his-barcode-input"
-            value={barcode}
-            onChange={(event) => setBarcode(event.target.value)}
-            onKeyDown={handleBarcodeKeyDown}
-            placeholder="扫描就诊卡 / 腕带条形码 / 输入院内 ID 后回车"
-          />
-          <button className="secondary-btn" onClick={lookupBarcode} disabled={hisLoading}>
-            {hisLoading ? '查询中...' : '扫码查询'}
-          </button>
-          <button className="secondary-btn" onClick={importHisDraft} disabled={hisLoading}>
-            从 HIS 拉取草稿
-          </button>
-          <button
-            className="primary-btn"
-            onClick={() => {
-              setForm(emptyForm);
-              setShowCreateForm((current) => !current);
-            }}
-          >
-            新增患者
-          </button>
-          <button className="ghost-btn" onClick={exportPatientsForHis} disabled={exporting}>
-            {exporting ? '导出中...' : '导出给 HIS'}
-          </button>
-        </div>
-
-        <div className="interface-note">
-          <strong>接口预留：</strong>
-          <code>GET /his/patients/barcode/:barcode</code>
-          <code>POST /his/patients/import</code>
-          <code>GET /his/patients/export</code>
-        </div>
-
-        {message && <div className="status-message">{message}</div>}
-        {error && <div className="status-error">{error}</div>}
-
-        {showCreateForm && (
-          <form className="form form-card" onSubmit={createPatient}>
-            <div className="section-title-row compact">
+          <div className="index-filter-card">
+            <div className="filter-card-header">
               <div>
-                <h3>新增患者建档</h3>
-                <p className="muted">HIS 未返回的字段可先手工补充，后续可用真实接口自动填充。</p>
+                <h3>索引条件</h3>
+                <p>不同索引方式分开录入，避免院内 ID、电话、身份证等全部塞进一个搜索框。</p>
               </div>
-              <button
-                className="ghost-btn"
-                type="button"
-                onClick={() => setShowCreateForm(false)}
-              >
-                收起
+              <button className="ghost-btn" type="button" onClick={clearFilters} disabled={activeFilterCount === 0}>
+                清空条件{activeFilterCount > 0 ? `（${activeFilterCount}）` : ''}
               </button>
             </div>
 
-            <div className="form-grid three-columns">
-              <label>
-                院内 ID / HIS 主索引号
-                <input
-                  value={form.hospitalPatientId}
-                  onChange={(event) => updateForm('hospitalPatientId', event.target.value)}
-                  placeholder="例如 HIS-000001"
-                />
-              </label>
-
+            <div className="patient-index-filter-grid">
               <label>
                 患者姓名
-                <input
-                  value={form.name}
-                  onChange={(event) => updateForm('name', event.target.value)}
-                  placeholder="请输入患者姓名"
-                  required
-                />
+                <input value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} placeholder="按姓名检索" />
               </label>
-
+              <label>
+                院内 ID
+                <input value={hospitalIdFilter} onChange={(event) => setHospitalIdFilter(event.target.value)} placeholder="如 MZ20260519001" />
+              </label>
+              <label>
+                手机号
+                <input value={phoneFilter} onChange={(event) => setPhoneFilter(event.target.value)} placeholder="支持脱敏号段检索" />
+              </label>
+              <label>
+                身份证后四位
+                <input value={idCardLast4Filter} onChange={(event) => setIdCardLast4Filter(event.target.value)} placeholder="如 0011" maxLength={8} />
+              </label>
               <label>
                 性别
-                <select
-                  value={form.gender}
-                  onChange={(event) => updateForm('gender', event.target.value as PatientForm['gender'])}
-                >
-                  <option value="UNKNOWN">未知</option>
+                <select value={genderFilter} onChange={(event) => setGenderFilter(event.target.value)}>
+                  <option value="ALL">全部性别</option>
                   <option value="MALE">男</option>
                   <option value="FEMALE">女</option>
+                  <option value="UNKNOWN">未知</option>
                 </select>
               </label>
-
               <label>
-                出生日期
-                <input
-                  type="date"
-                  value={form.birthDate}
-                  onChange={(event) => updateForm('birthDate', event.target.value)}
-                />
+                慢病标签
+                <select value={diseaseFilter} onChange={(event) => setDiseaseFilter(event.target.value)}>
+                  <option value="ALL">全部慢病标签</option>
+                  {diseaseOptions.map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
               </label>
-
               <label>
-                联系电话
-                <input
-                  value={form.phone}
-                  onChange={(event) => updateForm('phone', event.target.value)}
-                  placeholder="手机号"
-                />
-              </label>
-
-              <label>
-                身份证号
-                <input
-                  value={form.idCardNo}
-                  onChange={(event) => updateForm('idCardNo', event.target.value)}
-                  placeholder="可选"
-                />
-              </label>
-
-              <label className="wide-field">
-                地址
-                <input
-                  value={form.address}
-                  onChange={(event) => updateForm('address', event.target.value)}
-                  placeholder="患者常住地址"
-                />
-              </label>
-
-              <label>
-                责任医生
-                <input
-                  value={form.responsibleDoctorId}
-                  onChange={(event) => updateForm('responsibleDoctorId', event.target.value)}
-                />
-              </label>
-
-              <label>
-                责任护士
-                <input
-                  value={form.responsibleNurseId}
-                  onChange={(event) => updateForm('responsibleNurseId', event.target.value)}
-                />
+                综合风险
+                <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>
+                  <option value="ALL">全部风险等级</option>
+                  {riskOptions.map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
               </label>
             </div>
+          </div>
 
-            <div className="form-actions">
-              <button className="primary-btn" type="submit" disabled={creating}>
-                {creating ? '保存中...' : '保存患者档案'}
-              </button>
-              <button className="ghost-btn" type="button" onClick={() => setForm(emptyForm)}>
-                清空表单
-              </button>
+          <div className="patient-index-summary-row">
+            <span>当前筛选：{activeFilterCount === 0 ? '无筛选条件' : `${activeFilterCount} 项条件`}</span>
+            <span>显示 {filteredPatients.length} / {patients.length}</span>
+          </div>
+
+          <div className="table-wrap clean-table-wrap">
+            <table className="table clean-hospital-table">
+              <thead>
+                <tr>
+                  <th>患者姓名</th>
+                  <th>院内 ID</th>
+                  <th>性别</th>
+                  <th>联系电话</th>
+                  <th>慢病标签</th>
+                  <th>综合风险</th>
+                  <th>责任护士</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredPatients.map((patient) => {
+                  const highestRisk = getHighestRisk(patient);
+                  return (
+                    <tr key={patient.id}>
+                      <td><strong>{patient.name}</strong></td>
+                      <td>{patient.hospitalPatientId ?? '-'}</td>
+                      <td>{genderLabelMap[patient.gender] ?? patient.gender}</td>
+                      <td>{patient.phone ?? '-'}</td>
+                      <td>
+                        {patient.diseaseProfiles?.length ? (
+                          <div className="tag-list">
+                            {patient.diseaseProfiles.map((item) => (
+                              <span className="type-badge" key={`${item.diseaseType}-${item.riskLevel}`}>
+                                {diseaseLabelMap[item.diseaseType] ?? item.diseaseType}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="muted">未建慢病档案</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={getRiskClass(highestRisk)}>
+                          {riskLabelMap[highestRisk] ?? highestRisk}
+                        </span>
+                      </td>
+                      <td>{patient.responsibleNurseId ?? '-'}</td>
+                      <td><Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>进入档案</Link></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredPatients.length === 0 && (
+            <div className="empty-state" style={{ marginTop: 14 }}>
+              没有符合条件的患者。请调整索引条件，或进入“建档入口”新增患者。
             </div>
-          </form>
-        )}
-      </section>
+          )}
+        </section>
+      )}
 
-      <section className="panel">
-        <div className="section-title-row">
-          <div>
-            <h2>患者主索引</h2>
-            <p className="muted">共 {patients.length} 名患者，当前显示 {filteredPatients.length} 名。</p>
+      {activeWorkspace === 'intake' && (
+        <section className="panel patient-intake-panel">
+          <div className="section-title-row">
+            <div>
+              <h2>建档入口 / HIS 接口预留</h2>
+              <p className="muted">建档和导入独立放在这里，不与患者主索引混在一起。</p>
+            </div>
+            <button className="ghost-btn" type="button" onClick={() => setActiveWorkspace('index')}>
+              返回主索引
+            </button>
           </div>
-        </div>
 
-        <div className="filter-bar">
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="按姓名、院内 ID、电话、身份证搜索"
-          />
-          <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>
-            <option value="ALL">全部风险等级</option>
-            <option value="LOW">低危</option>
-            <option value="MEDIUM">中危</option>
-            <option value="HIGH">高危</option>
-            <option value="VERY_HIGH">极高危</option>
-          </select>
-        </div>
+          <div className="security-chip">患者列表已默认脱敏；查看单个患者详情会写入审计日志。</div>
 
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>患者姓名</th>
-                <th>院内 ID</th>
-                <th>性别</th>
-                <th>联系电话</th>
-                <th>慢病标签</th>
-                <th>综合风险</th>
-                <th>责任护士</th>
-                <th>操作</th>
-              </tr>
-            </thead>
+          <div className="intake-layout-grid">
+            <section className="intake-card">
+              <div className="intake-card-header">
+                <h3>扫码 / HIS 草稿</h3>
+                <p>扫描枪通常会把条形码当作键盘输入并自动回车；此处按 Enter 自动查询 HIS 预留接口。</p>
+              </div>
 
-            <tbody>
-              {filteredPatients.map((patient) => {
-                const highestRisk = getHighestRisk(patient);
-                return (
-                  <tr key={patient.id}>
-                    <td><strong>{patient.name}</strong></td>
-                    <td>{patient.hospitalPatientId ?? '-'}</td>
-                    <td>{genderLabelMap[patient.gender] ?? patient.gender}</td>
-                    <td>{patient.phone ?? '-'}</td>
-                    <td>
-                      {patient.diseaseProfiles?.length ? (
-                        patient.diseaseProfiles.map((item) => (
-                          <span className="type-badge" key={`${item.diseaseType}-${item.riskLevel}`}>
-                            {diseaseLabelMap[item.diseaseType] ?? item.diseaseType}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="muted">未建慢病档案</span>
-                      )}
-                    </td>
-                    <td>
-                      <span className={getRiskClass(highestRisk)}>
-                        {riskLabelMap[highestRisk] ?? highestRisk}
-                      </span>
-                    </td>
-                    <td>{patient.responsibleNurseId ?? '-'}</td>
-                    <td><Link to={`/patients/${patient.id}`}>进入档案</Link></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+              <div className="his-action-column">
+                <label>
+                  就诊卡 / 腕带条形码 / 院内 ID
+                  <input
+                    className="his-barcode-input"
+                    value={barcode}
+                    disabled={hisLoading}
+                    onChange={(event) => setBarcode(event.target.value)}
+                    onKeyDown={handleBarcodeKeyDown}
+                    placeholder="扫描或输入后按 Enter"
+                  />
+                </label>
 
-        {filteredPatients.length === 0 && (
-          <div className="empty-state" style={{ marginTop: 14 }}>
-            没有符合条件的患者。可扫描条形码从 HIS 预留接口拉取草稿，或手工新增患者。
+                <div className="intake-button-row">
+                  <button className="secondary-btn" onClick={lookupBarcode} disabled={hisLoading} type="button">
+                    {hisLoading ? '查询中...' : '扫码查询'}
+                  </button>
+                  <button className="secondary-btn" onClick={importHisDraft} disabled={hisLoading} type="button">
+                    {hisLoading ? '处理中...' : '从 HIS 拉取草稿'}
+                  </button>
+                  <button
+                    className="primary-btn"
+                    type="button"
+                    onClick={() => {
+                      setForm(emptyForm);
+                      setShowCreateForm(true);
+                    }}
+                    disabled={hisLoading || creating}
+                  >
+                    手工新增患者
+                  </button>
+                </div>
+              </div>
+
+              <div className="interface-note compact-interface-note">
+                <strong>接口预留：</strong>
+                <code>GET /his/patients/barcode/:barcode</code>
+                <code>POST /his/patients/import</code>
+              </div>
+            </section>
+
+            <section className="intake-card intake-guide-card">
+              <h3>建档流程</h3>
+              <ol>
+                <li>先通过院内 ID / 条形码查询 HIS 草稿。</li>
+                <li>HIS 未返回的字段由护士或医生补充。</li>
+                <li>保存后回到主索引进入患者详情页。</li>
+                <li>慢病档案、监测计划、随访任务在患者详情页继续维护。</li>
+              </ol>
+            </section>
           </div>
-        )}
-      </section>
+
+          {showCreateForm && canEditPatients && (
+            <form className="form form-card clean-create-form" onSubmit={createPatient} aria-busy={creating}>
+              <div className="section-title-row compact">
+                <div>
+                  <h3>新增患者建档</h3>
+                  <p className="muted">表单仅在建档工作区展开，避免影响患者主索引使用。</p>
+                </div>
+                <button className="ghost-btn" type="button" onClick={() => setShowCreateForm(false)}>
+                  收起表单
+                </button>
+              </div>
+
+              <div className="form-grid three-columns">
+                <label>
+                  院内 ID / HIS 主索引号
+                  <input value={form.hospitalPatientId} onChange={(event) => updateForm('hospitalPatientId', event.target.value)} placeholder="例如 MZ20260519001" />
+                </label>
+
+                <label>
+                  患者姓名
+                  <input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="请输入患者姓名" required />
+                </label>
+
+                <label>
+                  性别
+                  <select value={form.gender} onChange={(event) => updateForm('gender', event.target.value as PatientForm['gender'])}>
+                    <option value="UNKNOWN">未知</option>
+                    <option value="MALE">男</option>
+                    <option value="FEMALE">女</option>
+                  </select>
+                </label>
+
+                <label>
+                  出生日期
+                  <input type="date" value={form.birthDate} onChange={(event) => updateForm('birthDate', event.target.value)} />
+                </label>
+
+                <label>
+                  联系电话
+                  <input value={form.phone} onChange={(event) => updateForm('phone', event.target.value)} placeholder="手机号" />
+                </label>
+
+                <label>
+                  身份证号
+                  <input value={form.idCardNo} onChange={(event) => updateForm('idCardNo', event.target.value)} placeholder="可选" />
+                </label>
+
+                <label className="wide-field">
+                  地址
+                  <input value={form.address} onChange={(event) => updateForm('address', event.target.value)} placeholder="患者常住地址" />
+                </label>
+
+                <label>
+                  责任医生
+                  <input value={form.responsibleDoctorId} onChange={(event) => updateForm('responsibleDoctorId', event.target.value)} />
+                </label>
+
+                <label>
+                  责任护士
+                  <input value={form.responsibleNurseId} onChange={(event) => updateForm('responsibleNurseId', event.target.value)} />
+                </label>
+              </div>
+
+              <div className="form-actions operation-safe-actions">
+                <button className="primary-btn" type="submit" disabled={creating}>
+                  {creating ? '保存中，请勿重复提交...' : '保存患者档案'}
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => setForm(emptyForm)} disabled={creating}>
+                  清空表单
+                </button>
+                <span className="operation-form-hint">保存成功后会显示绿色提示，并自动刷新患者主索引。</span>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
     </div>
   );
 }
+
 

@@ -16,6 +16,15 @@
       </view>
     </view>
 
+    <view wx:if="{{hospitalVisitReminders.length}}" class="card urgent-visit-card">
+      <view class="urgent-title">请立即前往医院/门急诊评估</view>
+      <view wx:for="{{hospitalVisitReminders}}" wx:key="id" class="urgent-item">
+        <view class="urgent-reason">{{item.reason}}</view>
+        <view class="item-desc">{{item.note || '请尽快到院检查，并保持电话畅通。'}}</view>
+        <view class="item-desc">提醒时间：{{item.remindedAtText}}</view>
+      </view>
+    </view>
+
     <view class="metric-grid">
       <view class="metric-card">
         <view class="metric-label">今日待办</view>
@@ -89,3 +98,5 @@
 
   <view class="safe-bottom" />
 </view>
+
+

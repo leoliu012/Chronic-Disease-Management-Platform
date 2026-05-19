@@ -3,6 +3,56 @@ function getBaseUrl() {
   return app.globalData.apiBaseUrl || wx.getStorageSync('apiBaseUrl') || 'http://127.0.0.1:3000';
 }
 
+function getPatientToken() {
+  const app = getApp();
+  return app.globalData.patientToken || wx.getStorageSync('patientToken') || '';
+}
+
+function getDemoOpenId() {
+  const app = getApp();
+  let demoOpenId = app.globalData.demoOpenId || wx.getStorageSync('demoOpenId') || '';
+  if (!demoOpenId) {
+    demoOpenId = `demo-openid-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    app.globalData.demoOpenId = demoOpenId;
+    wx.setStorageSync('demoOpenId', demoOpenId);
+  }
+  return demoOpenId;
+}
+
+function clearPatientSession() {
+  const app = getApp();
+  app.globalData.patientToken = '';
+  app.globalData.patientId = '';
+  app.globalData.patient = null;
+  app.globalData.bindingStatus = 'UNBOUND';
+  wx.removeStorageSync('patientToken');
+  wx.removeStorageSync('patientId');
+  wx.removeStorageSync('patient');
+  wx.setStorageSync('bindingStatus', 'UNBOUND');
+}
+
+function persistPatientSession(payload) {
+  const app = getApp();
+  const patient = payload && payload.patient;
+  const token = payload && payload.patientToken;
+  const demoOpenId = (payload && payload.demoOpenId) || getDemoOpenId();
+  const bindingStatus = (payload && payload.bindingStatus) || 'UNBOUND';
+
+  app.globalData.demoOpenId = demoOpenId;
+  app.globalData.bindingStatus = bindingStatus;
+  wx.setStorageSync('demoOpenId', demoOpenId);
+  wx.setStorageSync('bindingStatus', bindingStatus);
+
+  if (token && patient && patient.id) {
+    app.globalData.patientToken = token;
+    app.globalData.patientId = patient.id;
+    app.globalData.patient = patient;
+    wx.setStorageSync('patientToken', token);
+    wx.setStorageSync('patientId', patient.id);
+    wx.setStorageSync('patient', patient);
+  }
+}
+
 function buildQuery(query) {
   if (!query) return '';
   const pairs = Object.keys(query)
@@ -41,7 +91,33 @@ function request(options) {
   });
 }
 
+function patientRequest(options) {
+  const token = getPatientToken();
+  if (!token) {
+    return Promise.reject(new Error('请先完成患者身份绑定并等待护士审核'));
+  }
+
+  return request({
+    ...options,
+    url: `/patient-app${options.url}`,
+    header: {
+      ...(options.header || {}),
+      'X-Patient-Token': token
+    }
+  }).catch((error) => {
+    if (/token|session|401|Unauthorized|expired/i.test(error.message || '')) {
+      clearPatientSession();
+    }
+    throw error;
+  });
+}
+
 module.exports = {
   request,
-  getBaseUrl
+  patientRequest,
+  getBaseUrl,
+  getPatientToken,
+  getDemoOpenId,
+  clearPatientSession,
+  persistPatientSession
 };

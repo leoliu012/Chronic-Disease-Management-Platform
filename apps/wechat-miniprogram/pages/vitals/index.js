@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const { formatDateTime } = require('../../utils/format');
 
 const vitalTypes = [
@@ -43,7 +43,7 @@ Page({
     if (!this.data.patientId) return;
     this.setData({ loadingPlans: true });
     try {
-      const plans = await request({ url: `/patients/${this.data.patientId}/vital-monitoring-plans` });
+      const plans = await patientRequest({ url: '/vital-monitoring-plans' });
       const activePlans = (plans || [])
         .filter((item) => item.isActive !== false)
         .map((item) => ({
@@ -137,13 +137,13 @@ Page({
           wx.showToast({ title: '请输入有效的收缩压和舒张压', icon: 'none' });
           return;
         }
-        const systolicResult = await request({
-          url: `/patients/${this.data.patientId}/vital-records`,
+        const systolicResult = await patientRequest({
+          url: '/vitals',
           method: 'POST',
           data: this.buildPayload('SYSTOLIC_BP', systolic)
         });
-        const diastolicResult = await request({
-          url: `/patients/${this.data.patientId}/vital-records`,
+        const diastolicResult = await patientRequest({
+          url: '/vitals',
           method: 'POST',
           data: this.buildPayload('DIASTOLIC_BP', diastolic)
         });
@@ -159,8 +159,8 @@ Page({
           wx.showToast({ title: '请输入有效数值', icon: 'none' });
           return;
         }
-        result = await request({
-          url: `/patients/${this.data.patientId}/vital-records`,
+        result = await patientRequest({
+          url: '/vitals',
           method: 'POST',
           data: this.buildPayload(selectedType.type, numericValue)
         });
@@ -182,7 +182,7 @@ Page({
     if (!plan) return;
 
     try {
-      await request({
+      await patientRequest({
         url: `/vital-monitoring-plans/${planId}/miss`,
         method: 'POST',
         data: {
@@ -199,3 +199,5 @@ Page({
 
   goBind() { wx.navigateTo({ url: '/pages/bind/index' }); }
 });
+
+

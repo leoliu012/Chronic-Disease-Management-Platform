@@ -1,0 +1,776 @@
+
+/*
+ * Hospital render rescue patch.
+ * Purpose: restore approved China-hospital business UI on pages that rely on
+ * shared class names added by later patches but whose CSS was not imported.
+ * Scope: NurseDashboardPage, PatientsPage, TaskFollowUpPage and shared cards/tables.
+ */
+
+:root {
+  --render-blue-900: #0b3159;
+  --render-blue-700: #0f5ea8;
+  --render-blue-600: #1d6fd1;
+  --render-blue-50: #eef7ff;
+  --render-line: #d8e4f0;
+  --render-muted: #5f7288;
+  --render-bg: #eef3f8;
+  --render-panel: #ffffff;
+  --render-green: #14955f;
+  --render-red: #c2413a;
+  --render-amber: #d97706;
+}
+
+.business-page,
+.patient-index-clean,
+.nurse-workbench-clean,
+.task-follow-up-page {
+  width: min(100%, 1480px);
+  max-width: 1480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  color: #172033;
+}
+
+.patient-index-clean,
+.nurse-workbench-clean {
+  padding-bottom: 32px;
+}
+
+.page-header.clean-page-header,
+.clean-page-header,
+.task-follow-up-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 24px;
+  border: 1px solid rgba(15, 94, 168, 0.14);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(239, 247, 255, 0.94) 100%);
+  box-shadow: 0 12px 30px rgba(15, 54, 96, 0.08);
+}
+
+.page-kicker {
+  color: var(--render-blue-700);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+}
+
+.clean-page-header h1,
+.page-header h1 {
+  margin: 8px 0;
+  font-size: 32px;
+  line-height: 1.2;
+  color: var(--render-blue-900);
+}
+
+.page-subtitle {
+  margin: 0;
+  color: var(--render-muted);
+  line-height: 1.7;
+  max-width: 920px;
+}
+
+.header-action-row,
+.task-follow-up-header-actions,
+.form-actions,
+.task-call-submit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.primary-btn,
+.secondary-btn,
+.ghost-btn,
+.button,
+.secondary-button,
+.compact-link-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  border: 1px solid #bfd5ef;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+.primary-btn,
+.button {
+  background: #1d62d1;
+  color: #fff;
+  border-color: #1d62d1;
+  box-shadow: 0 8px 18px rgba(29, 98, 209, 0.18);
+}
+
+.secondary-btn,
+.secondary-button,
+.compact-link-btn {
+  background: #f8fbff;
+  color: #0f4f8f;
+  border-color: #c7d8ef;
+}
+
+.ghost-btn {
+  background: transparent;
+  color: #36556e;
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.ghost-btn:hover,
+.button:hover,
+.secondary-button:hover,
+.compact-link-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 54, 96, 0.12);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.button:disabled,
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Shared panels and tables */
+.panel,
+.form-card,
+.patient-master-index-panel,
+.patient-intake-panel,
+.index-filter-card,
+.clean-subpanel,
+.workbench-layout-card,
+.workspace-tabs-card,
+.task-call-contact-card,
+.task-call-form-card {
+  border: 1px solid var(--render-line);
+  border-radius: 18px;
+  background: var(--render-panel);
+  box-shadow: 0 12px 30px rgba(15, 54, 96, 0.07);
+}
+
+.panel,
+.form-card,
+.patient-master-index-panel,
+.patient-intake-panel,
+.index-filter-card,
+.clean-subpanel,
+.task-call-contact-card,
+.task-call-form-card {
+  padding: 20px 22px;
+}
+
+.section-title-row,
+.filter-card-header,
+.intake-card-header,
+.clean-section-heading,
+.hospital-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.section-title-row h2,
+.filter-card-header h2,
+.clean-section-heading h2,
+.hospital-section-header h2 {
+  margin: 0;
+  color: #123d68;
+  font-size: 21px;
+}
+
+.section-title-row p,
+.filter-card-header p,
+.clean-section-heading p,
+.hospital-section-header p,
+.section-hint {
+  margin: 6px 0 0;
+  color: var(--render-muted);
+  line-height: 1.6;
+}
+
+.clean-table-wrap,
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dbe6f2;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.table,
+.clean-hospital-table,
+.data-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 14px;
+}
+
+.table th,
+.table td,
+.clean-hospital-table th,
+.clean-hospital-table td,
+.data-table th,
+.data-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #e6edf5;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th,
+.clean-hospital-table th,
+.data-table th {
+  background: #f4f8fc;
+  color: #274968;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.table tr:hover td,
+.clean-hospital-table tr:hover td,
+.data-table tr:hover td {
+  background: #f8fbff;
+}
+
+.empty-state,
+.loading-state {
+  padding: 22px;
+  border: 1px dashed #c9d7e6;
+  border-radius: 14px;
+  background: #f8fbff;
+  color: #5f7288;
+  text-align: center;
+}
+
+.compact-empty {
+  padding: 14px;
+}
+
+.muted {
+  color: #6b7c90;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.notice-error,
+.status-error,
+.operation-inline-error {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #9f1239;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+.notice-success,
+.status-message,
+.operation-inline-success {
+  border: 1px solid #bbf7d0;
+  background: #ecfdf5;
+  color: #047857;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+/* Patient master index */
+.workspace-tabs-card {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #f6f9fd;
+  box-shadow: none;
+}
+
+.workspace-tab {
+  appearance: none;
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  padding: 12px 16px;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-tab strong {
+  color: #173d63;
+}
+
+.workspace-tab span {
+  color: #6b7c90;
+  font-size: 12px;
+}
+
+.workspace-tab.active {
+  border-color: #a9c8f0;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(15, 54, 96, 0.08);
+}
+
+.patient-master-index-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.patient-index-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.patient-index-filter-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px 16px;
+  align-items: end;
+}
+
+.patient-index-filter-grid label,
+.form-grid label,
+.hospital-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #1f3550;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.patient-index-filter-grid input,
+.patient-index-filter-grid select,
+.form-grid input,
+.form-grid select,
+.form-grid textarea,
+.hospital-form input,
+.hospital-form select,
+.hospital-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd9e8;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 12px;
+  color: #172033;
+  font-size: 14px;
+  outline: none;
+}
+
+.patient-index-filter-grid input:focus,
+.patient-index-filter-grid select:focus,
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus,
+.hospital-form input:focus,
+.hospital-form select:focus,
+.hospital-form textarea:focus {
+  border-color: #70a8e8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10);
+}
+
+.wide-field {
+  grid-column: span 2;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.type-badge,
+.security-chip,
+.badge,
+.status-badge,
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid #c9d7e6;
+  background: #f4f8fc;
+  color: #315574;
+}
+
+.risk-high,
+.risk-very-high {
+  background: #fff1f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+.risk-medium {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #b45309;
+}
+
+.risk-low {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #047857;
+}
+
+.status-pending,
+.status-open {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.status-done,
+.status-resolved {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #047857;
+}
+
+.status-canceled,
+.status-dismissed {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+/* Nurse workbench */
+.workbench-overview-strip {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.workbench-metric-card {
+  appearance: none;
+  min-height: 112px;
+  border: 1px solid #d4e0ee;
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(15, 54, 96, 0.06);
+}
+
+.workbench-metric-card strong {
+  display: block;
+  margin: 8px 0;
+  color: #0f3764;
+  font-size: 28px;
+}
+
+.workbench-metric-card small,
+.metric-card-label {
+  color: #61758c;
+  font-weight: 700;
+}
+
+.workbench-metric-card.is-active {
+  border-color: #70a8e8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10), 0 12px 30px rgba(15, 54, 96, 0.08);
+}
+
+.workbench-layout-card {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+
+.workbench-side-nav {
+  border-right: 1px solid #e2ebf5;
+  background: #f7fbff;
+  padding: 16px;
+}
+
+.workbench-side-title {
+  margin-bottom: 10px;
+  color: #52677d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.workbench-nav-item {
+  width: 100%;
+  appearance: none;
+  display: grid;
+  gap: 3px;
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-nav-item strong {
+  color: #123d68;
+}
+
+.workbench-nav-item span {
+  color: #6b7c90;
+  font-size: 12px;
+}
+
+.workbench-nav-item.active {
+  border-color: #b7d2f1;
+  background: #fff;
+  box-shadow: 0 8px 18px rgba(15, 54, 96, 0.08);
+}
+
+.workbench-main-panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.workbench-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.segmented-tabs,
+.unified-work-item-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segmented-tabs button,
+.unified-work-item-tabs button {
+  border: 1px solid #cbd9e8;
+  border-radius: 999px;
+  background: #fff;
+  color: #315574;
+  padding: 8px 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.segmented-tabs button.active,
+.unified-work-item-tabs button.active {
+  background: #eaf4ff;
+  border-color: #7db2ed;
+  color: #0f5ea8;
+}
+
+.unified-work-item-list {
+  display: grid;
+  gap: 12px;
+}
+
+.unified-work-item-card {
+  border: 1px solid #d7e3f1;
+  border-radius: 14px;
+  background: #fff;
+  padding: 16px;
+  box-shadow: 0 6px 18px rgba(15, 54, 96, 0.06);
+}
+
+.unified-work-item-card.risk-task,
+.unified-work-item-card.alert-only {
+  border-left: 5px solid #d97706;
+}
+
+.unified-work-item-topline,
+.unified-work-item-actions,
+.nurse-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.unified-work-item-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 18px;
+  margin: 12px 0;
+}
+
+.unified-work-item-body h3 {
+  margin: 0 0 8px;
+  color: #0f3764;
+}
+
+.unified-work-item-body p {
+  color: #4f6478;
+  line-height: 1.6;
+}
+
+.work-item-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.work-item-meta-grid div {
+  border: 1px solid #e3edf7;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.work-item-meta-grid dt {
+  color: #6b7c90;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.work-item-meta-grid dd {
+  margin: 4px 0 0;
+  color: #172033;
+  font-weight: 700;
+}
+
+.work-item-action-hint {
+  color: #6b7c90;
+  font-size: 12px;
+}
+
+/* Phone follow-up detail page */
+.task-call-layout {
+  display: grid !important;
+  grid-template-columns: minmax(300px, 0.82fr) minmax(520px, 1.45fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.task-follow-up-hero {
+  border-left: 5px solid #0f5ea8;
+}
+
+.contact-info-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.contact-info-list div,
+.task-info-box {
+  border: 1px solid #e3edf7;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.contact-info-list dt,
+.task-info-box span {
+  color: #657a90;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.contact-info-list dd {
+  margin: 4px 0 0;
+  color: #172033;
+  font-weight: 700;
+}
+
+.task-info-box {
+  margin-top: 14px;
+}
+
+.task-info-box strong {
+  display: block;
+  margin: 6px 0;
+  color: #123d68;
+}
+
+.hospital-form,
+.task-call-form {
+  display: grid;
+  gap: 14px;
+}
+
+.related-alert-sync-box,
+.task-complete-check {
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px 14px;
+}
+
+.task-complete-check {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-complete-check input[type="checkbox"] {
+  width: auto;
+}
+
+.required-mark {
+  color: #dc2626;
+}
+
+@media (max-width: 1100px) {
+  .workbench-layout-card,
+  .task-call-layout,
+  .unified-work-item-body {
+    grid-template-columns: 1fr !important;
+  }
+
+  .workbench-side-nav {
+    border-right: 0;
+    border-bottom: 1px solid #e2ebf5;
+  }
+
+  .page-header.clean-page-header,
+  .clean-page-header,
+  .task-follow-up-hero {
+    flex-direction: column;
+  }
+
+  .wide-field {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace-tabs-card,
+  .workbench-overview-strip,
+  .patient-index-filter-grid {
+    grid-template-columns: 1fr !important;
+    display: grid !important;
+  }
+
+  .workspace-tab {
+    min-width: 0;
+  }
+}

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { PatientsModule } from './patients/patients.module';
 import { DiseaseProfilesModule } from './disease-profiles/disease-profiles.module';
@@ -14,10 +15,29 @@ import { DevToolsModule } from './dev-tools/dev-tools.module';
 import { MedicationsModule } from './medications/medications.module';
 import { QuestionnairesModule } from './questionnaires/questionnaires.module';
 import { VitalMonitoringPlansModule } from './vital-monitoring-plans/vital-monitoring-plans.module';
+import { AuthModule } from './auth/auth.module';
+import { SecurityModule } from './security/security.module';
+import { JwtAuthGuard } from './security/jwt-auth.guard';
+import { RolesGuard } from './security/roles.guard';
+import { AuditInterceptor } from './security/audit.interceptor';
+import { PatientAppModule } from './patient-app/patient-app.module';
+import { ClinicalRulesModule } from './clinical-rules/clinical-rules.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { WorkItemsModule } from './work-items/work-items.module';
+import { HospitalVisitRemindersModule } from './hospital-visit-reminders/hospital-visit-reminders.module';
+
+const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
 @Module({
   imports: [
     PrismaModule,
+    AuthModule,
+    SecurityModule,
+    PatientAppModule,
+    ClinicalRulesModule,
+    IntegrationsModule,
+    WorkItemsModule,
+    HospitalVisitRemindersModule,
     PatientsModule,
     DiseaseProfilesModule,
     VitalRecordsModule,
@@ -28,11 +48,26 @@ import { VitalMonitoringPlansModule } from './vital-monitoring-plans/vital-monit
     PatientTimelineModule,
     ReportsModule,
     HisIntegrationModule,
-    DevToolsModule,
+    ...developmentOnlyModules,
     MedicationsModule,
     QuestionnairesModule,
     VitalMonitoringPlansModule,
   ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AuditInterceptor,
+    },
+  ],
 })
 export class AppModule {}
+
 

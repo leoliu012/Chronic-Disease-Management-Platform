@@ -1,0 +1,189 @@
+/* Patient intake polish based on the last known stable PatientsPage.tsx structure. */
+.patient-intake-panel {
+  border: 1px solid #d7e3ef;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  box-shadow: 0 10px 24px rgba(18, 63, 112, 0.08);
+}
+
+.patient-intake-panel > .section-title-row:first-child {
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e2ecf5;
+}
+
+.patient-intake-panel > .section-title-row:first-child h2 {
+  margin-bottom: 6px;
+  color: #153f68;
+  letter-spacing: 0.01em;
+}
+
+.patient-intake-panel .security-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin: 16px 0;
+  border-color: #b8d5ef;
+  background: #eef7ff;
+  color: #1d5d8f;
+}
+
+.intake-layout-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
+  gap: 16px;
+  align-items: stretch;
+  margin-top: 6px;
+}
+
+.intake-card {
+  border: 1px solid #d8e5f0;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 18px;
+  box-shadow: 0 8px 20px rgba(26, 74, 120, 0.07);
+}
+
+.intake-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.intake-card-header h3,
+.intake-guide-card h3 {
+  margin: 0;
+  color: #173f65;
+  font-size: 18px;
+}
+
+.intake-card-header p,
+.intake-guide-card li {
+  color: #52677c;
+  line-height: 1.7;
+}
+
+.his-action-column {
+  display: grid;
+  gap: 14px;
+}
+
+.his-action-column label {
+  font-weight: 600;
+  color: #244966;
+}
+
+.his-barcode-input {
+  margin-top: 8px;
+  min-height: 44px;
+  font-size: 15px;
+  border: 1px solid #bfd2e3;
+  background: #fbfdff;
+}
+
+.his-barcode-input:focus {
+  border-color: #2f80c2;
+  box-shadow: 0 0 0 3px rgba(47, 128, 194, 0.14);
+}
+
+.intake-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.compact-interface-note {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px dashed #aac7df;
+  border-radius: 14px;
+  background: #f6fbff;
+}
+
+.compact-interface-note code {
+  display: block;
+  width: fit-content;
+  border-radius: 999px;
+  background: #e7f1fa;
+  color: #1c5f93;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.intake-guide-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
+}
+
+.intake-guide-card ol {
+  margin: 12px 0 0;
+  padding-left: 22px;
+}
+
+.clean-create-form {
+  margin-top: 18px;
+  border: 1px solid #d8e5f0;
+  box-shadow: 0 8px 20px rgba(26, 74, 120, 0.07);
+}
+
+.clean-create-form .section-title-row.compact {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e7eef5;
+}
+
+.clean-create-form .form-grid.three-columns {
+  margin-top: 16px;
+}
+
+.patient-detail-missing-state {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  max-width: 880px;
+  margin: 48px auto;
+  border: 1px solid #d8e5f0;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(18, 63, 112, 0.08);
+}
+
+.missing-state-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 52px;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: #e8f3ff;
+  color: #1b5f95;
+  font-weight: 800;
+  font-size: 22px;
+}
+
+.patient-detail-missing-state h1 {
+  margin: 4px 0 8px;
+  color: #173f65;
+  font-size: 24px;
+}
+
+.patient-detail-missing-state p {
+  margin: 0;
+  max-width: 680px;
+  color: #52677c;
+  line-height: 1.7;
+}
+
+.missing-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+@media (max-width: 960px) {
+  .intake-layout-grid {
+    grid-template-columns: 1fr;
+  }
+}

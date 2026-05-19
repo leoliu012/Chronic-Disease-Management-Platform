@@ -1,0 +1,82 @@
+/* Nurse dashboard click-through patch: make every metric card navigable. */
+.nurse-clickthrough-grid {
+  align-items: stretch;
+}
+
+.nurse-clickthrough-card {
+  appearance: none;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  background: #ffffff;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nurse-clickthrough-card:hover,
+.nurse-clickthrough-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.11);
+  outline: none;
+}
+
+.nurse-clickthrough-card:focus-visible {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18), 0 16px 32px rgba(15, 23, 42, 0.11);
+}
+
+.nurse-clickthrough-description {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 34px;
+}
+
+.nurse-clickthrough-action {
+  margin-top: auto;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nurse-clickthrough-card-danger {
+  border-color: rgba(220, 38, 38, 0.2);
+}
+
+.nurse-clickthrough-card-danger .nurse-clickthrough-action,
+.nurse-clickthrough-card-danger .value {
+  color: #b91c1c;
+}
+
+.nurse-clickthrough-card-warning {
+  border-color: rgba(217, 119, 6, 0.22);
+}
+
+.nurse-clickthrough-card-warning .nurse-clickthrough-action,
+.nurse-clickthrough-card-warning .value {
+  color: #b45309;
+}
+
+.nurse-clickthrough-card-success {
+  border-color: rgba(22, 163, 74, 0.2);
+}
+
+.nurse-clickthrough-card-success .nurse-clickthrough-action,
+.nurse-clickthrough-card-success .value {
+  color: #15803d;
+}
+
+.nurse-anchor-panel {
+  scroll-margin-top: 96px;
+}
+
+.section-kicker {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 2px;
+}

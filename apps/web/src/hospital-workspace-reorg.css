@@ -1,0 +1,678 @@
+/* Hospital workspace reorganization v1
+   Scope: nurse dashboard + patient master index. Keep business-system style, not AI/SaaS styling. */
+
+.clean-page-header {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.header-action-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.clean-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #dbe4ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.clean-hospital-table {
+  margin: 0;
+}
+
+.clean-hospital-table th {
+  background: #f3f7fb;
+  color: #29415f;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.clean-hospital-table td {
+  vertical-align: middle;
+}
+
+.compact-empty {
+  padding: 18px;
+  border: 1px dashed #cbd7e6;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.compact-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 6px 10px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* Nurse workbench */
+.nurse-workbench-clean {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.workbench-overview-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.workbench-metric-card {
+  text-align: left;
+  border: 1px solid #d8e2ef;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  cursor: pointer;
+  min-height: 112px;
+  box-shadow: 0 8px 20px rgba(20, 57, 91, 0.06);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.workbench-metric-card:hover,
+.workbench-metric-card:focus-visible,
+.workbench-metric-card.is-active {
+  border-color: #2f6fb3;
+  box-shadow: 0 12px 26px rgba(34, 99, 165, 0.14);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.workbench-metric-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 30px;
+  line-height: 1;
+  color: #12385f;
+}
+
+.metric-card-label {
+  display: block;
+  font-size: 13px;
+  color: #5f7188;
+  font-weight: 700;
+}
+
+.workbench-metric-card small {
+  display: block;
+  margin-top: 10px;
+  color: #6d7d90;
+  font-size: 12px;
+}
+
+.workbench-metric-danger {
+  border-left: 4px solid #d64545;
+}
+
+.workbench-metric-warning {
+  border-left: 4px solid #d68a10;
+}
+
+.workbench-metric-success {
+  border-left: 4px solid #2f8f5b;
+}
+
+.workbench-metric-primary,
+.workbench-metric-neutral {
+  border-left: 4px solid #2f6fb3;
+}
+
+.workbench-layout-card {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.workbench-side-nav {
+  position: sticky;
+  top: 18px;
+  border: 1px solid #d8e2ef;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(20, 57, 91, 0.06);
+  padding: 12px;
+}
+
+.workbench-side-title {
+  padding: 6px 8px 12px;
+  color: #29415f;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.workbench-nav-item {
+  width: 100%;
+  display: block;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  padding: 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.workbench-nav-item strong {
+  display: block;
+  color: #24364a;
+  font-size: 14px;
+}
+
+.workbench-nav-item span {
+  display: block;
+  margin-top: 4px;
+  color: #6f7f91;
+  font-size: 12px;
+}
+
+.workbench-nav-item:hover,
+.workbench-nav-item.active {
+  background: #eef6ff;
+  border-color: #b9d5f4;
+}
+
+.workbench-main-panel {
+  min-width: 0;
+}
+
+.workbench-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.clean-section-heading,
+.clean-subpanel {
+  border: 1px solid #d8e2ef;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(20, 57, 91, 0.05);
+}
+
+.clean-section-heading {
+  padding: 18px 20px;
+}
+
+.clean-section-heading h2,
+.clean-subpanel h3 {
+  margin: 0;
+  color: #1e3552;
+}
+
+.clean-section-heading p,
+.clean-subpanel p {
+  margin: 6px 0 0;
+  color: #65778d;
+}
+
+.clean-subpanel {
+  padding: 16px;
+}
+
+.priority-split-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.danger-subpanel {
+  border-left: 4px solid #d64545;
+}
+
+.warning-subpanel {
+  border-left: 4px solid #d68a10;
+}
+
+.count-pill {
+  min-width: 34px;
+  min-height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: #eef6ff;
+  color: #1b5f9e;
+  font-weight: 800;
+}
+
+.segmented-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border: 1px solid #d8e2ef;
+  border-radius: 14px;
+  background: #f6f9fd;
+  padding: 8px;
+}
+
+.segmented-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  color: #465a70;
+  font-weight: 700;
+}
+
+.segmented-tabs button span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: #e5edf6;
+  color: #33516f;
+  font-size: 12px;
+}
+
+.segmented-tabs button.active {
+  background: #fff;
+  border-color: #b9d5f4;
+  color: #174f86;
+  box-shadow: 0 4px 12px rgba(20, 57, 91, 0.08);
+}
+
+.nurse-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nurse-primary-detail-link {
+  text-decoration: none;
+  min-height: 32px;
+  padding: 7px 12px;
+}
+
+.nurse-subtle-action {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.nurse-subtle-action:hover,
+.nurse-subtle-action:focus-visible {
+  opacity: 1;
+}
+
+/* Patient master index */
+.patient-index-clean {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-tabs-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workspace-tab {
+  text-align: left;
+  border: 1px solid #d8e2ef;
+  border-radius: 14px;
+  background: #fff;
+  padding: 16px;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(20, 57, 91, 0.05);
+}
+
+.workspace-tab:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.workspace-tab strong {
+  display: block;
+  color: #1e3552;
+  font-size: 16px;
+}
+
+.workspace-tab span {
+  display: block;
+  margin-top: 6px;
+  color: #6b7d91;
+  font-size: 13px;
+}
+
+.workspace-tab.active {
+  border-color: #2f6fb3;
+  background: #f2f8ff;
+}
+
+.index-filter-card {
+  border: 1px solid #d8e2ef;
+  border-radius: 16px;
+  background: #f8fbff;
+  padding: 16px;
+  margin-top: 14px;
+}
+
+.filter-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.filter-card-header h3 {
+  margin: 0;
+  color: #1e3552;
+}
+
+.filter-card-header p {
+  margin: 6px 0 0;
+  color: #6b7d91;
+}
+
+.patient-index-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.patient-index-filter-grid label,
+.his-action-column label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #41556d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.patient-index-filter-grid input,
+.patient-index-filter-grid select,
+.his-action-column input {
+  min-height: 38px;
+  border: 1px solid #cbd7e6;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #24364a;
+}
+
+.patient-index-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin: 14px 0 10px;
+  color: #5f7188;
+  font-size: 13px;
+}
+
+.tag-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.patient-intake-panel .section-title-row {
+  align-items: flex-start;
+}
+
+.intake-layout-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.intake-card {
+  border: 1px solid #d8e2ef;
+  border-radius: 16px;
+  background: #fff;
+  padding: 16px;
+  box-shadow: 0 8px 20px rgba(20, 57, 91, 0.05);
+}
+
+.intake-card-header h3,
+.intake-guide-card h3 {
+  margin: 0;
+  color: #1e3552;
+}
+
+.intake-card-header p {
+  margin: 6px 0 14px;
+  color: #6b7d91;
+}
+
+.his-action-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.intake-button-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compact-interface-note {
+  margin-top: 14px;
+}
+
+.intake-guide-card ol {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: #51657b;
+  line-height: 1.8;
+}
+
+.clean-create-form {
+  margin-top: 16px;
+}
+
+@media (max-width: 1180px) {
+  .workbench-overview-strip {
+    grid-template-columns: repeat(4, minmax(130px, 1fr));
+  }
+
+  .patient-index-filter-grid {
+    grid-template-columns: repeat(2, minmax(170px, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .workbench-layout-card,
+  .intake-layout-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-side-nav {
+    position: static;
+  }
+
+  .workbench-overview-strip,
+  .workspace-tabs-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .workbench-overview-strip,
+  .workspace-tabs-card,
+  .patient-index-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-card-header,
+  .patient-index-summary-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Hospital visit reminder workflow */
+.hospital-visit-workbench-banner,
+.patient-hospital-visit-banner,
+.hospital-reminder-banner-page {
+  border: 1px solid #fecaca;
+  background: linear-gradient(135deg, #fff7ed 0%, #fff1f2 100%);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  box-shadow: 0 12px 26px rgba(185, 28, 28, 0.08);
+  margin-bottom: 16px;
+}
+
+.hospital-visit-workbench-banner strong,
+.patient-hospital-visit-banner strong,
+.hospital-reminder-banner-page strong {
+  color: #991b1b;
+  font-size: 16px;
+}
+
+.hospital-visit-workbench-banner p,
+.patient-hospital-visit-banner p,
+.hospital-reminder-banner-page p {
+  margin: 6px 0 0;
+  color: #7f1d1d;
+  font-size: 13px;
+}
+
+.patient-hospital-visit-banner-actions,
+.hospital-reminder-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.hospital-reminders-page .hospital-reminder-table-card {
+  overflow: hidden;
+}
+
+.hospital-contact-box {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 12px;
+  line-height: 1.8;
+  min-width: 220px;
+}
+
+.task-routing-small-note {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+
+/* Patient index render rescue patch
+   Some global form styles can override the patient index grid and make every filter
+   stretch into one column. Keep the previous UX: separate index fields in a compact
+   hospital-style filter grid, with the intake area separated from the master index. */
+.patient-index-clean .patient-master-index-panel {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.patient-index-clean .index-filter-card {
+  padding: 18px 18px 16px !important;
+  border-radius: 16px !important;
+  background: #f8fbff !important;
+}
+
+.patient-index-clean .filter-card-header {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  margin-bottom: 16px !important;
+}
+
+.patient-index-clean .patient-index-filter-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(190px, 1fr)) !important;
+  gap: 14px 16px !important;
+  align-items: end !important;
+}
+
+.patient-index-clean .patient-index-filter-grid > label {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 !important;
+  color: #344b66 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+.patient-index-clean .patient-index-filter-grid input,
+.patient-index-clean .patient-index-filter-grid select {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 40px !important;
+  box-sizing: border-box !important;
+  border: 1px solid #cbd7e6 !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+  padding: 8px 11px !important;
+  color: #24364a !important;
+  font-size: 14px !important;
+}
+
+.patient-index-clean .patient-index-summary-row {
+  padding: 0 2px;
+}
+
+.patient-index-clean .clean-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.patient-index-clean .type-badge {
+  white-space: nowrap;
+}
+
+@media (max-width: 1280px) {
+  .patient-index-clean .patient-index-filter-grid {
+    grid-template-columns: repeat(3, minmax(190px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .patient-index-clean .patient-index-filter-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr)) !important;
+  }
+
+  .patient-index-clean .filter-card-header {
+    flex-direction: column !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .patient-index-clean .patient-index-filter-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

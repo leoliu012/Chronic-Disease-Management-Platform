@@ -53,6 +53,61 @@ enum AlertStatus {
   DISMISSED
 }
 
+
+enum UserRole {
+  ADMIN
+  DOCTOR
+  NURSE
+  MANAGER
+}
+
+
+enum PatientBindingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+
+enum HospitalVisitReminderStatus {
+  ACTIVE
+  ARRIVED
+  NO_SHOW
+  REFUSED
+  REVOKED
+}
+
+
+enum IntegrationSystemType {
+  HIS
+  EMR
+  LIS
+  PHARMACY
+  CHECKUP
+  MESSAGE
+  OTHER
+}
+
+enum IntegrationSyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  PARTIAL_FAILED
+  FAILED
+}
+
+enum IntegrationRecordStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum ExternalRecordStatus {
+  STAGED
+  IMPORTED
+  FAILED
+}
+
 model Patient {
   id              String   @id @default(uuid())
   hospitalPatientId String? @unique
@@ -81,6 +136,11 @@ model Patient {
   medicationCheckIns MedicationCheckIn[]
   questionnaireResults QuestionnaireResult[]
   vitalMonitoringPlans VitalMonitoringPlan[]
+  hospitalVisitReminders HospitalVisitReminder[]
+
+  @@index([responsibleDoctorId])
+  @@index([responsibleNurseId])
+  @@index([createdAt])
 }
 
 model DiseaseProfile {
@@ -98,6 +158,11 @@ model DiseaseProfile {
   updatedAt      DateTime @updatedAt
 
   patient        Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@index([diseaseType])
+  @@index([riskLevel])
+  @@index([patientId, riskLevel])
 }
 
 model VitalRecord {
@@ -117,6 +182,11 @@ model VitalRecord {
 
   patient     Patient @relation(fields: [patientId], references: [id])
   monitoringPlan VitalMonitoringPlan? @relation(fields: [monitoringPlanId], references: [id])
+
+  @@index([patientId, measuredAt])
+  @@index([patientId, type, measuredAt])
+  @@index([monitoringPlanId, measuredAt])
+  @@index([isAbnormal, measuredAt])
 }
 
 model FollowUpRecord {
@@ -133,6 +203,9 @@ model FollowUpRecord {
   createdAt        DateTime @default(now())
 
   patient          Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, followUpTime])
+  @@index([operatorId, followUpTime])
 }
 
 model Task {
@@ -149,6 +222,10 @@ model Task {
   updatedAt   DateTime @updatedAt
 
   patient     Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, status, dueAt])
+  @@index([assigneeId, status, dueAt])
+  @@index([relatedAlertId])
 }
 
 model AuditLog {
@@ -161,6 +238,10 @@ model AuditLog {
   beforeData  Json?
   afterData   Json?
   createdAt   DateTime @default(now())
+
+  @@index([operatorId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId, createdAt])
 }
 
 model RiskAlert {
@@ -182,6 +263,10 @@ model RiskAlert {
   updatedAt          DateTime @updatedAt
 
   patient            Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, status, createdAt])
+  @@index([status, riskLevel, createdAt])
+  @@index([sourceVitalRecordId])
 }
 
 
@@ -210,6 +295,9 @@ model VitalMonitoringPlan {
 
   patient        Patient @relation(fields: [patientId], references: [id])
   vitalRecords   VitalRecord[]
+
+  @@index([patientId, isActive])
+  @@index([patientId, vitalType])
 }
 
 model MedicationRecord {
@@ -241,6 +329,9 @@ model MedicationRecord {
 
   patient        Patient @relation(fields: [patientId], references: [id])
   checkIns       MedicationCheckIn[]
+
+  @@index([patientId, isActive])
+  @@index([patientId, medicationName])
 }
 
 model MedicationCheckIn {
@@ -256,6 +347,9 @@ model MedicationCheckIn {
 
   medication   MedicationRecord @relation(fields: [medicationId], references: [id])
   patient      Patient @relation(fields: [patientId], references: [id])
+
+  @@index([medicationId, scheduledAt])
+  @@index([patientId, checkedAt])
 }
 
 model QuestionnaireResult {
@@ -273,6 +367,370 @@ model QuestionnaireResult {
   updatedAt          DateTime @updatedAt
 
   patient            Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, createdAt])
+  @@index([patientId, riskLevel, createdAt])
 }
+
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  displayName  String
+  role         UserRole
+  passwordHash String
+  isActive     Boolean  @default(true)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([role, isActive])
+}
+
+model PatientBindingRequest {
+  id                String               @id @default(uuid())
+  demoOpenId        String
+  patientId         String
+  hospitalPatientId String?
+  phone             String
+  idCardLast4       String?
+  status            PatientBindingStatus @default(PENDING)
+  rejectReason      String?
+  reviewedBy        String?
+  reviewedAt        DateTime?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([demoOpenId, status, createdAt])
+  @@index([patientId, status])
+  @@index([status, createdAt])
+}
+
+model PatientSession {
+  id          String   @id @default(uuid())
+  demoOpenId  String
+  patientId   String
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+
+  createdAt   DateTime @default(now())
+
+  @@index([demoOpenId, patientId])
+  @@index([patientId, expiresAt])
+  @@index([expiresAt])
+}
+
+
+model HospitalVisitReminder {
+  id                String                      @id @default(uuid())
+  patientId         String
+  sourceRiskAlertId String?
+  reason            String
+  note              String?
+  status            HospitalVisitReminderStatus @default(ACTIVE)
+
+  remindedBy        String?
+  remindedAt        DateTime                    @default(now())
+
+  revokedBy         String?
+  revokedAt         DateTime?
+  revokeReason      String?
+
+  arrivedAt         DateTime?
+  arrivalConfirmedBy String?
+
+  noShowAt          DateTime?
+  noShowConfirmedBy String?
+
+  refusedAt         DateTime?
+  refusalConfirmedBy String?
+
+  outcomeNote       String?
+
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  patient           Patient                     @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, status, remindedAt])
+  @@index([status, remindedAt])
+  @@index([sourceRiskAlertId])
+}
+
+model DiseaseRuleTemplate {
+  id              String      @id @default(uuid())
+  diseaseType     DiseaseType
+  templateName    String
+  description     String?
+  managementGoal  String?
+  riskBasis       String?
+  version         String      @default("v1")
+  isActive        Boolean     @default(true)
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  vitalThresholdRules VitalThresholdRule[]
+  followUpPolicies    FollowUpPolicy[]
+  questionnaireTemplates QuestionnaireTemplate[]
+
+  @@unique([diseaseType, version])
+  @@index([diseaseType, isActive])
+}
+
+model VitalThresholdRule {
+  id                String      @id @default(uuid())
+  templateId         String
+  vitalType          String
+  displayName        String
+  unit               String
+  operator           String
+  thresholdValue     Float
+  thresholdValueMax  Float?
+  riskLevel          RiskLevel
+  alertTitle         String
+  alertDescription   String?
+  followUpAction     String?
+  sortOrder          Int         @default(100)
+  isActive           Boolean     @default(true)
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  template            DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, isActive])
+  @@index([vitalType, isActive])
+  @@index([riskLevel, isActive])
+}
+
+model FollowUpPolicy {
+  id                    String      @id @default(uuid())
+  templateId             String
+  riskLevel              RiskLevel
+  followUpType           String
+  dueWithinHours         Int
+  frequencyDescription   String
+  taskTitle              String
+  instruction            String?
+  isActive               Boolean     @default(true)
+
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  template                DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, riskLevel, isActive])
+  @@index([riskLevel, isActive])
+}
+
+model QuestionnaireTemplate {
+  id                  String      @id @default(uuid())
+  templateId           String
+  questionnaireType    String
+  title                String
+  description          String?
+  scoringRule          Json?
+  riskBands            Json?
+  isActive             Boolean     @default(true)
+
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  template              DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, isActive])
+  @@index([questionnaireType, isActive])
+}
+
+model IntegrationSource {
+  id          String                @id @default(uuid())
+  code        String                @unique
+  name        String
+  systemType  IntegrationSystemType
+  baseUrl     String?
+  description String?
+  isEnabled   Boolean               @default(true)
+
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  syncBatches  IntegrationSyncBatch[]
+  syncRecords  IntegrationSyncRecord[]
+  fieldMappings IntegrationFieldMapping[]
+
+  @@index([systemType, isEnabled])
+}
+
+model IntegrationSyncBatch {
+  id           String                 @id @default(uuid())
+  sourceId     String
+  batchType    String
+  status       IntegrationSyncStatus  @default(PENDING)
+  startedAt    DateTime               @default(now())
+  finishedAt   DateTime?
+  totalCount   Int                    @default(0)
+  successCount Int                    @default(0)
+  failedCount  Int                    @default(0)
+  operatorId   String?
+  message      String?
+
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  source        IntegrationSource      @relation(fields: [sourceId], references: [id])
+  records       IntegrationSyncRecord[]
+
+  @@index([sourceId, status, startedAt])
+  @@index([batchType, status, startedAt])
+}
+
+model IntegrationSyncRecord {
+  id                 String                  @id @default(uuid())
+  sourceId           String
+  batchId            String
+  externalRecordType String
+  externalRecordId   String
+  localTargetType    String?
+  localTargetId      String?
+  status             IntegrationRecordStatus
+  errorMessage        String?
+  rawData             Json?
+  normalizedData      Json?
+
+  createdAt           DateTime                @default(now())
+
+  source              IntegrationSource       @relation(fields: [sourceId], references: [id])
+  batch               IntegrationSyncBatch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, externalRecordType, externalRecordId])
+  @@index([batchId, status])
+  @@index([localTargetType, localTargetId])
+}
+
+model IntegrationFieldMapping {
+  id            String             @id @default(uuid())
+  sourceId      String
+  targetModel   String
+  externalField String
+  localField    String
+  displayName   String?
+  transformRule String?
+  defaultValue  String?
+  isRequired    Boolean            @default(false)
+  isActive      Boolean            @default(true)
+
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  source        IntegrationSource  @relation(fields: [sourceId], references: [id])
+
+  @@unique([sourceId, targetModel, externalField])
+  @@index([sourceId, targetModel, isActive])
+}
+
+model ExternalPatientRecord {
+  id                String               @id @default(uuid())
+  sourceId          String
+  externalPatientId String
+  hospitalPatientId String
+  name              String
+  gender            Gender               @default(UNKNOWN)
+  birthDate         DateTime?
+  phone             String?
+  idCardNo          String?
+  address           String?
+  rawData           Json?
+  importStatus      ExternalRecordStatus @default(STAGED)
+  localPatientId     String?
+  errorMessage       String?
+
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@unique([sourceId, externalPatientId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localPatientId])
+}
+
+model ExternalDiagnosisRecord {
+  id                  String               @id @default(uuid())
+  sourceId            String
+  externalDiagnosisId String
+  hospitalPatientId   String
+  diseaseType         DiseaseType
+  diagnosisDate       DateTime?
+  diseaseStage        String?
+  complications       String?
+  comorbidities       String?
+  riskLevel           RiskLevel            @default(LOW)
+  rawData             Json?
+  importStatus        ExternalRecordStatus @default(STAGED)
+  localDiseaseProfileId String?
+  errorMessage        String?
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@unique([sourceId, externalDiagnosisId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localDiseaseProfileId])
+}
+
+model ExternalLabResultRecord {
+  id                  String               @id @default(uuid())
+  sourceId            String
+  externalLabResultId String
+  hospitalPatientId   String
+  labItemCode         String
+  labItemName         String
+  vitalType           String
+  value               Float
+  unit                String
+  measuredAt          DateTime
+  rawData             Json?
+  importStatus        ExternalRecordStatus @default(STAGED)
+  localVitalRecordId   String?
+  errorMessage        String?
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@unique([sourceId, externalLabResultId])
+  @@index([hospitalPatientId, measuredAt])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localVitalRecordId])
+}
+
+model ExternalPrescriptionRecord {
+  id                      String               @id @default(uuid())
+  sourceId                String
+  externalPrescriptionId  String
+  hospitalPatientId       String
+  medicationName          String
+  dosage                  String
+  frequency               String
+  instructions            String?
+  startDate               DateTime?
+  endDate                 DateTime?
+  rawData                 Json?
+  importStatus            ExternalRecordStatus @default(STAGED)
+  localMedicationRecordId  String?
+  errorMessage            String?
+
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  @@unique([sourceId, externalPrescriptionId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localMedicationRecordId])
+}
+
 
 

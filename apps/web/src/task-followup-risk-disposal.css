@@ -1,0 +1,264 @@
+/* Task call follow-up + risk-disposal workflow refinement. */
+.task-follow-up-page {
+  max-width: 1480px;
+}
+
+.task-follow-up-hero {
+  border-left: 5px solid #0f5ea8;
+}
+
+.task-follow-up-header-actions,
+.task-call-submit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.task-call-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.82fr) minmax(520px, 1.6fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.task-call-contact-card,
+.task-call-form-card {
+  border: 1px solid #d7e4f2;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 63, 105, 0.08);
+}
+
+.compact-header {
+  margin-bottom: 14px;
+}
+
+.contact-info-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.contact-info-list div {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  align-items: start;
+  border-bottom: 1px dashed #e2ebf5;
+  padding-bottom: 9px;
+}
+
+.contact-info-list dt {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.contact-info-list dd {
+  margin: 0;
+  color: #0f2742;
+  font-weight: 700;
+}
+
+.contact-info-list a {
+  color: #075da8;
+  text-decoration: none;
+}
+
+.task-info-box {
+  margin-top: 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.task-info-box span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.task-info-box strong {
+  display: block;
+  margin: 6px 0;
+  color: #0f2742;
+  font-size: 17px;
+}
+
+.task-info-box p {
+  margin: 6px 0 0;
+  color: #5f7184;
+}
+
+.task-call-shortcuts {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.task-call-shortcuts a {
+  border: 1px solid #cfe0f2;
+  border-radius: 12px;
+  background: #fbfdff;
+  color: #0f4c81;
+  font-weight: 800;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.task-call-shortcuts a:hover {
+  background: #eef7ff;
+  border-color: #7db5ec;
+}
+
+.task-call-form {
+  gap: 14px;
+}
+
+.task-call-form textarea,
+.task-call-form input,
+.task-call-form select,
+.risk-disposition-submit-card textarea,
+.risk-disposition-submit-card input,
+.risk-resolution-signature-card textarea,
+.risk-resolution-signature-card input {
+  border: 1px solid #cbd9e7;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.task-complete-check {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 11px 12px;
+  font-weight: 800;
+}
+
+.task-complete-check input {
+  width: auto;
+  min-height: auto;
+}
+
+.required-mark {
+  color: #dc2626;
+  font-weight: 900;
+}
+
+.risk-disposition-form {
+  display: grid;
+  gap: 14px;
+}
+
+.risk-disposition-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.risk-disposition-option {
+  position: relative;
+  display: grid;
+  align-content: start;
+  min-height: 138px;
+  border: 1px solid #d7e4f2;
+  border-radius: 16px;
+  background: #fbfdff;
+  cursor: pointer;
+  padding: 13px 14px;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.risk-disposition-option:hover,
+.risk-disposition-option.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+.risk-disposition-option input {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: auto;
+  min-height: auto;
+}
+
+.risk-disposition-option span {
+  width: fit-content;
+  border-radius: 999px;
+  background: #eaf4ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+}
+
+.risk-disposition-option strong {
+  margin-top: 10px;
+  color: #102f4f;
+  font-size: 17px;
+}
+
+.risk-disposition-option p {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.risk-disposition-submit-card,
+.risk-resolution-signature-card {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.6fr) auto;
+  gap: 12px;
+  align-items: end;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.risk-resolution-signature-card {
+  grid-template-columns: minmax(320px, 1fr) minmax(240px, 0.7fr);
+  margin-bottom: 14px;
+}
+
+.risk-disposition-submit-card label,
+.risk-resolution-signature-card label {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-weight: 800;
+}
+
+.risk-submit-button {
+  min-width: 150px;
+  white-space: nowrap;
+}
+
+.task-routing-hint-panel {
+  border-left: 4px solid #0f5ea8;
+}
+
+@media (max-width: 1180px) {
+  .task-call-layout,
+  .risk-disposition-options,
+  .risk-disposition-submit-card,
+  .risk-resolution-signature-card {
+    grid-template-columns: 1fr;
+  }
+
+  .task-follow-up-header-actions,
+  .task-call-submit-actions {
+    justify-content: flex-start;
+  }
+}

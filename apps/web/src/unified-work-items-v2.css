@@ -1,0 +1,48 @@
+/* Unified Work Items v2: turn alert/task duplication into one nurse-facing workflow. */
+.unified-workbench-page .notice-success {
+  margin-bottom: 14px;
+}
+
+.unified-work-item-card {
+  position: relative;
+}
+
+.unified-work-item-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  border-radius: 12px 0 0 12px;
+  background: #2563eb;
+}
+
+.unified-work-item-card.risk-task::before {
+  background: #d97706;
+}
+
+.unified-work-item-card.alert-only::before {
+  background: #dc2626;
+}
+
+.unified-work-item-card.alert-only {
+  box-shadow: 0 8px 22px rgba(185, 28, 28, 0.08);
+}
+
+.unified-work-item-actions .primary-btn[disabled] {
+  opacity: 0.68;
+  cursor: progress;
+}
+
+.work-item-action-hint {
+  max-width: 680px;
+}
+
+.nurse-primary-detail-link {
+  white-space: nowrap;
+}
+
+.unified-work-item-tabs button span {
+  margin-left: 4px;
+  font-size: 12px;
+  opacity: 0.75;
+}

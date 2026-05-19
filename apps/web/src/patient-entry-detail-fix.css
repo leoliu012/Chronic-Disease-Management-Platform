@@ -1,0 +1,325 @@
+/* Patient detail load fallback + upgraded patient intake/HIS reserved UI */
+.patient-detail-missing-state {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  max-width: 860px;
+  margin: 56px auto;
+}
+
+.missing-state-icon {
+  display: inline-grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #eaf4ff, #f0fdf4);
+  border: 1px solid #c8dcf2;
+  color: #1b5f9e;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.patient-detail-missing-state h1 {
+  margin: 6px 0 8px;
+  color: #123d68;
+  font-size: 24px;
+}
+
+.patient-detail-missing-state p {
+  max-width: 680px;
+  margin: 0;
+  color: #607286;
+  line-height: 1.7;
+}
+
+.missing-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.patient-intake-upgraded {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.patient-intake-heading {
+  margin-bottom: 0;
+}
+
+.intake-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.intake-hospital-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 16px 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #eff6ff, #f8fbff 55%, #ecfdf5);
+}
+
+.intake-hospital-banner strong {
+  display: block;
+  color: #123d68;
+  font-size: 16px;
+}
+
+.intake-hospital-banner p {
+  margin: 4px 0 0;
+  color: #61758c;
+  line-height: 1.6;
+}
+
+.intake-hospital-banner span {
+  flex: 0 0 auto;
+  border: 1px solid #93c5fd;
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 12px;
+  color: #1d4f86;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.intake-command-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.75fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.intake-scan-card,
+.intake-process-card,
+.intake-interface-card {
+  border: 1px solid #d7e3f2;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(15, 54, 96, 0.06);
+}
+
+.intake-scan-card {
+  padding: 20px;
+}
+
+.intake-scan-card-header,
+.intake-interface-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.intake-scan-card h3,
+.intake-process-card h3,
+.intake-interface-card h3 {
+  margin: 4px 0 0;
+  color: #143d66;
+  font-size: 20px;
+}
+
+.intake-scan-card p,
+.intake-interface-card p {
+  margin: 6px 0 0;
+  color: #62758b;
+  line-height: 1.6;
+}
+
+.intake-step-tag,
+.his-status-pill,
+.intake-interface-card-header span {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.intake-step-tag {
+  border: 1px solid #bbf7d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.his-status-pill,
+.intake-interface-card-header span {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4f86;
+}
+
+.intake-primary-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #36516d;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.patient-intake-upgraded .his-barcode-input {
+  min-height: 54px;
+  border: 1px solid #b8cbe0;
+  border-radius: 16px;
+  background: #f9fcff;
+  padding: 0 16px;
+  color: #172f4a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.patient-intake-upgraded .his-barcode-input:focus {
+  outline: none;
+  border-color: #2f75b8;
+  box-shadow: 0 0 0 4px rgba(47, 117, 184, 0.12);
+  background: #fff;
+}
+
+.intake-button-row-upgraded {
+  margin-top: 14px;
+}
+
+.intake-mini-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.intake-mini-status-grid div {
+  border: 1px solid #e1e9f3;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.intake-mini-status-grid span {
+  display: block;
+  color: #6c7e91;
+  font-size: 12px;
+}
+
+.intake-mini-status-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: #173d63;
+  font-size: 13px;
+}
+
+.intake-side-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.intake-process-card,
+.intake-interface-card {
+  padding: 16px;
+}
+
+.intake-process-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.intake-process-list div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.intake-process-list b {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4f86;
+  font-size: 13px;
+}
+
+.intake-process-list span {
+  color: #4f6379;
+  line-height: 1.5;
+}
+
+.interface-route-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.interface-route-list code {
+  display: block;
+  overflow-x: auto;
+  border: 1px solid #dce7f3;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 8px 10px;
+  color: #1f4f7d;
+  font-size: 12px;
+}
+
+.intake-create-form-upgraded {
+  margin-top: 0;
+  border-color: #cbdff5;
+  background: #fbfdff;
+}
+
+.intake-form-grid label {
+  color: #36516d;
+  font-weight: 800;
+}
+
+.intake-form-actions {
+  align-items: center;
+}
+
+.intake-form-actions span {
+  color: #6b7d91;
+  font-size: 13px;
+}
+
+@media (max-width: 1100px) {
+  .intake-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .intake-side-stack {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .patient-detail-missing-state {
+    grid-template-columns: 1fr;
+    margin: 24px auto;
+  }
+
+  .intake-hospital-banner,
+  .intake-scan-card-header,
+  .intake-interface-card-header,
+  .patient-intake-heading {
+    flex-direction: column;
+  }
+
+  .intake-side-stack,
+  .intake-mini-status-grid {
+    grid-template-columns: 1fr;
+  }
+}

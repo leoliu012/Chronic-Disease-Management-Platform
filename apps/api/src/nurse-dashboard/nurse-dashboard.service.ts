@@ -22,6 +22,7 @@ export class NurseDashboardService {
       overdueTasks,
       openRiskAlerts,
       recentAbnormalVitals,
+      completedTasks,
       completedTasksCount,
     ] = await Promise.all([
       this.prisma.patient.findMany({
@@ -142,6 +143,25 @@ export class NurseDashboardService {
         take: 10,
       }),
 
+      this.prisma.task.findMany({
+        where: {
+          assigneeId: nurseId,
+          status: TaskStatus.DONE,
+        },
+        include: {
+          patient: true,
+        },
+        orderBy: [
+          {
+            updatedAt: 'desc',
+          },
+          {
+            createdAt: 'desc',
+          },
+        ],
+        take: 10,
+      }),
+
       this.prisma.task.count({
         where: {
           assigneeId: nurseId,
@@ -167,6 +187,8 @@ export class NurseDashboardService {
       overdueTasks,
       openRiskAlerts,
       recentAbnormalVitals,
+      completedTasks,
     };
   }
 }
+

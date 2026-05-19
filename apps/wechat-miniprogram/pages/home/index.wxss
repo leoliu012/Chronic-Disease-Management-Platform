@@ -74,3 +74,31 @@
 .quick-grid button {
   min-height: 78rpx;
 }
+
+
+
+
+.urgent-visit-card {
+  border: 2rpx solid #dc2626;
+  background: #fff5f5;
+  box-shadow: 0 12rpx 28rpx rgba(185, 28, 28, 0.12);
+}
+
+.urgent-title {
+  font-size: 34rpx;
+  font-weight: 800;
+  color: #b91c1c;
+  margin-bottom: 16rpx;
+}
+
+.urgent-item {
+  padding: 16rpx 0;
+  border-top: 1rpx solid #fecaca;
+}
+
+.urgent-reason {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #7f1d1d;
+  margin-bottom: 8rpx;
+}

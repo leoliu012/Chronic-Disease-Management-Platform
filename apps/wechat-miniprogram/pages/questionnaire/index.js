@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const { riskLabels, labelOf, formatDateTime, statusClass } = require('../../utils/format');
 
 const questionnaireTypes = [
@@ -46,7 +46,7 @@ Page({
     this.setData({ loading: true });
 
     try {
-      const results = await request({ url: `/patients/${this.data.patientId}/questionnaire-results` });
+      const results = await patientRequest({ url: '/questionnaire-results' });
       this.setData({
         results: (results || []).map((item) => ({
           ...item,
@@ -114,8 +114,8 @@ Page({
     this.setData({ submitting: true, lastResult: null });
 
     try {
-      const result = await request({
-        url: `/patients/${this.data.patientId}/questionnaire-results`,
+      const result = await patientRequest({
+        url: '/questionnaire-results',
         method: 'POST',
         data: {
           questionnaireType: selectedType.label,
@@ -156,3 +156,5 @@ Page({
     wx.navigateTo({ url: '/pages/bind/index' });
   }
 });
+
+

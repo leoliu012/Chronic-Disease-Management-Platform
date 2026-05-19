@@ -1,0 +1,40 @@
+.api-connection-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #7c2d12;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+
+.api-connection-banner span {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.api-connection-banner p {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.api-connection-banner button {
+  border: 1px solid #fdba74;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #9a3412;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+}
+
+.api-connection-banner button:hover {
+  background: #ffedd5;
+}

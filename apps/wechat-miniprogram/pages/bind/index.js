@@ -1,33 +1,40 @@
-const { request } = require('../../utils/request');
+const {
+  request,
+  getDemoOpenId,
+  persistPatientSession,
+  clearPatientSession
+} = require('../../utils/request');
 
 Page({
   data: {
     apiBaseUrl: 'http://127.0.0.1:3000',
-    patientId: '',
-    barcode: '',
-    lookupResult: null,
-    loading: false
+    demoOpenId: '',
+    phone: '',
+    hospitalPatientId: '',
+    idCardLast4: '',
+    bindingStatus: 'UNBOUND',
+    bindingRequest: null,
+    patient: null,
+    message: '',
+    loading: false,
+    submitting: false
   },
 
   onLoad() {
     const app = getApp();
     this.setData({
       apiBaseUrl: app.globalData.apiBaseUrl || wx.getStorageSync('apiBaseUrl') || 'http://127.0.0.1:3000',
-      patientId: app.globalData.patientId || wx.getStorageSync('patientId') || ''
+      demoOpenId: getDemoOpenId(),
+      bindingStatus: app.globalData.bindingStatus || wx.getStorageSync('bindingStatus') || 'UNBOUND',
+      patient: app.globalData.patient || wx.getStorageSync('patient') || null
     });
+    this.checkBindingStatus();
   },
 
-  onApiBaseUrlInput(event) {
-    this.setData({ apiBaseUrl: event.detail.value.trim() });
-  },
-
-  onPatientIdInput(event) {
-    this.setData({ patientId: event.detail.value.trim() });
-  },
-
-  onBarcodeInput(event) {
-    this.setData({ barcode: event.detail.value.trim() });
-  },
+  onApiBaseUrlInput(event) { this.setData({ apiBaseUrl: event.detail.value.trim() }); },
+  onPhoneInput(event) { this.setData({ phone: event.detail.value.trim() }); },
+  onHospitalPatientIdInput(event) { this.setData({ hospitalPatientId: event.detail.value.trim() }); },
+  onIdCardLast4Input(event) { this.setData({ idCardLast4: event.detail.value.trim() }); },
 
   saveBaseUrl() {
     const app = getApp();
@@ -36,32 +43,29 @@ Page({
     wx.setStorageSync('apiBaseUrl', apiBaseUrl);
   },
 
-  persistPatient(patient) {
-    const app = getApp();
-    app.globalData.patientId = patient.id;
-    app.globalData.patient = patient;
-    wx.setStorageSync('patientId', patient.id);
-    wx.setStorageSync('patient', patient);
-    wx.showToast({ title: '绑定成功', icon: 'success' });
-    wx.switchTab({ url: '/pages/home/index' });
-  },
-
-  async bindByPatientId() {
-    if (!this.data.patientId) {
-      wx.showToast({ title: '请填写患者 ID', icon: 'none' });
-      return;
-    }
-
+  async checkBindingStatus() {
     this.saveBaseUrl();
-    this.setData({ loading: true });
+    this.setData({ loading: true, message: '' });
 
     try {
-      const patient = await request({ url: `/patients/${this.data.patientId}` });
-      if (!patient || !patient.id) {
-        wx.showToast({ title: '未找到患者', icon: 'none' });
-        return;
+      const result = await request({
+        url: '/patient-app/demo-login',
+        method: 'POST',
+        data: { demoOpenId: this.data.demoOpenId }
+      });
+
+      persistPatientSession(result);
+      this.setData({
+        bindingStatus: result.bindingStatus,
+        bindingRequest: result.bindingRequest || null,
+        patient: result.patient || null,
+        message: result.message || ''
+      });
+
+      if (result.patientToken && result.patient) {
+        wx.showToast({ title: '身份已确认', icon: 'success' });
+        wx.switchTab({ url: '/pages/home/index' });
       }
-      this.persistPatient(patient);
     } catch (error) {
       wx.showToast({ title: error.message, icon: 'none' });
     } finally {
@@ -69,31 +73,59 @@ Page({
     }
   },
 
-  async lookupHis() {
-    if (!this.data.barcode) {
-      wx.showToast({ title: '请填写查询号码', icon: 'none' });
+  async submitBindingRequest() {
+    const phone = this.data.phone.trim();
+    const hospitalPatientId = this.data.hospitalPatientId.trim();
+    const idCardLast4 = this.data.idCardLast4.trim();
+
+    if (!phone) {
+      wx.showToast({ title: '请填写手机号', icon: 'none' });
+      return;
+    }
+
+    if (!hospitalPatientId && !/^\d{4}$/.test(idCardLast4)) {
+      wx.showToast({ title: '请填写院内号或身份证后四位', icon: 'none' });
       return;
     }
 
     this.saveBaseUrl();
-    this.setData({ loading: true, lookupResult: null });
+    this.setData({ submitting: true, message: '' });
 
     try {
-      const result = await request({ url: `/his/patients/barcode/${encodeURIComponent(this.data.barcode)}` });
-      this.setData({ lookupResult: result });
+      const result = await request({
+        url: '/patient-app/binding-requests',
+        method: 'POST',
+        data: {
+          demoOpenId: this.data.demoOpenId,
+          phone,
+          hospitalPatientId: hospitalPatientId || undefined,
+          idCardLast4: idCardLast4 || undefined
+        }
+      });
+
+      wx.setStorageSync('bindingStatus', 'PENDING');
+      getApp().globalData.bindingStatus = 'PENDING';
+      this.setData({
+        bindingStatus: 'PENDING',
+        bindingRequest: result.bindingRequest,
+        patient: result.patient || null,
+        message: result.message || '绑定申请已提交，请等待护士审核。'
+      });
+      wx.showToast({ title: '已提交审核', icon: 'success' });
     } catch (error) {
       wx.showToast({ title: error.message, icon: 'none' });
     } finally {
-      this.setData({ loading: false });
+      this.setData({ submitting: false });
     }
   },
 
-  confirmLookupPatient() {
-    const patient = this.data.lookupResult && this.data.lookupResult.patient;
-    if (!patient || !patient.id) {
-      wx.showToast({ title: '该查询结果不能直接绑定', icon: 'none' });
-      return;
-    }
-    this.persistPatient(patient);
+  resetBinding() {
+    clearPatientSession();
+    this.setData({
+      bindingStatus: 'UNBOUND',
+      bindingRequest: null,
+      patient: null,
+      message: '已清除本机患者会话，可重新提交绑定申请。'
+    });
   }
 });

@@ -1,4 +1,4 @@
-const { request } = require('../../utils/request');
+const { patientRequest } = require('../../utils/request');
 const {
   typeLabels,
   riskLabels,
@@ -38,8 +38,8 @@ Page({
 
     try {
       const [vitals, alerts] = await Promise.all([
-        request({ url: `/patients/${this.data.patientId}/vital-records` }),
-        request({ url: `/patients/${this.data.patientId}/risk-alerts` })
+        patientRequest({ url: '/vitals' }),
+        patientRequest({ url: '/risk-alerts' })
       ]);
 
       this.setData({
@@ -67,3 +67,5 @@ Page({
     wx.navigateTo({ url: '/pages/bind/index' });
   }
 });
+
+
