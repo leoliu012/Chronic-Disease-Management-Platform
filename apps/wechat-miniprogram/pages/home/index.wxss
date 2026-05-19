@@ -1,0 +1,76 @@
+.hero-card {
+  background: linear-gradient(135deg, #0b63ce, #18a0fb);
+}
+
+.hero-card .card-subtitle,
+.hero-card .hello {
+  color: #ffffff;
+}
+
+.patient-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.hello {
+  font-size: 40rpx;
+  font-weight: 800;
+  margin-bottom: 12rpx;
+}
+
+.switch-btn {
+  width: 130rpx;
+  min-width: 130rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.92);
+  color: #0b63ce;
+  font-size: 24rpx;
+  font-weight: 700;
+  margin: 0;
+}
+
+.bind-btn {
+  margin-top: 28rpx;
+}
+
+.todo-card {
+  padding-top: 6rpx;
+  padding-bottom: 6rpx;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid #e6edf5;
+}
+
+.todo-item:last-child {
+  border-bottom: none;
+}
+
+.todo-action {
+  min-width: 112rpx;
+  text-align: center;
+  color: #0b63ce;
+  background: #eaf3ff;
+  border-radius: 999rpx;
+  padding: 10rpx 16rpx;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.quick-grid button {
+  min-height: 78rpx;
+}

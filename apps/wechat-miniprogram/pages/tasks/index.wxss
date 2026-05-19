@@ -1,0 +1,24 @@
+.hero-card {
+  background: linear-gradient(135deg, #0b63ce, #18a0fb);
+}
+
+.hero-card .card-title,
+.hero-card .card-subtitle {
+  color: #ffffff;
+}
+
+.bind-btn {
+  margin-top: 28rpx;
+}
+
+.filter-card {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+}
+
+.filter-label {
+  color: #37506d;
+  font-size: 26rpx;
+  font-weight: 600;
+}

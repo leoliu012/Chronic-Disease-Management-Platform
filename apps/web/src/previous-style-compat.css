@@ -1,0 +1,244 @@
+
+/* Conservative compatibility styles.
+   These do not introduce a new visual system; they only make newer HIS/patient
+   entry class names render with the existing hospital business-system style. */
+
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.page-heading span,
+.section-eyebrow {
+  color: var(--hospital-blue, #0f5ea8);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.page-heading h1 {
+  margin: 6px 0 6px;
+  font-size: 28px;
+  line-height: 1.2;
+  color: #102033;
+}
+
+.page-heading p {
+  margin: 0;
+  color: var(--muted, #667085);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.section-title-row h2,
+.section-title-row h3 {
+  margin: 0;
+  color: #102033;
+  line-height: 1.3;
+}
+
+.section-title-row h2 {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.section-title-row h3 {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.section-title-row.compact {
+  margin-bottom: 12px;
+}
+
+.patient-his-panel {
+  border: 1px solid rgba(15, 94, 168, 0.16);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.his-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.his-barcode-input,
+.filter-bar input,
+.filter-bar select,
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #172033;
+  background: #fff;
+}
+
+.his-barcode-input {
+  min-width: 320px;
+  flex: 1;
+}
+
+.primary-btn,
+.secondary-btn,
+.ghost-btn {
+  border: none;
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.ghost-btn:hover {
+  transform: translateY(-1px);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.ghost-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  transform: none;
+}
+
+.primary-btn {
+  background: var(--hospital-blue, #0f5ea8);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(15, 94, 168, 0.18);
+}
+
+.secondary-btn {
+  background: #eaf3ff;
+  color: var(--hospital-blue, #0f5ea8);
+  border: 1px solid #cfe2f7;
+}
+
+.ghost-btn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+}
+
+.form-card {
+  margin-top: 16px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.form-grid.three-columns {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #334155;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.wide-field {
+  grid-column: span 2;
+}
+
+.form-actions,
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.form-actions {
+  margin-top: 14px;
+}
+
+.filter-bar {
+  margin: 14px 0;
+}
+
+.filter-bar input {
+  min-width: 280px;
+  flex: 1;
+}
+
+.interface-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.interface-note code {
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.status-message,
+.status-error {
+  margin-top: 12px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.status-message {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.status-error {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+@media (max-width: 960px) {
+  .form-grid,
+  .form-grid.three-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .wide-field {
+    grid-column: auto;
+  }
+}

@@ -1,0 +1,93 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可填写月度健康问卷，异常问卷会自动生成护士复核待办。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card hero-card">
+      <view class="card-title">月度健康问卷</view>
+      <view class="card-subtitle">用于记录院外症状、复诊和用药情况。评分 ≥ 8 会自动触发风险预警。</view>
+    </view>
+
+    <view class="card">
+      <view class="form-item">
+        <text class="form-label">问卷类型</text>
+        <picker mode="selector" range="{{questionnaireTypes}}" range-key="label" value="{{selectedTypeIndex}}" bindchange="onTypeChange">
+          <view class="picker-display">{{selectedTypeLabel}}</view>
+        </picker>
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">总体症状/风险评分：{{score}} / 10</text>
+        <slider min="0" max="10" step="1" value="{{score}}" show-value bindchange="onScoreChange" />
+        <view class="score-hint">0 表示暂无明显不适，10 表示非常严重或需要尽快联系护士。</view>
+      </view>
+
+      <view class="switch-list">
+        <view class="switch-item">
+          <text>最近有头晕/头痛</text>
+          <switch checked="{{dizziness}}" bindchange="onDizzinessChange" />
+        </view>
+        <view class="switch-item">
+          <text>最近有胸闷/胸痛/气短</text>
+          <switch checked="{{chestTightness}}" bindchange="onChestTightnessChange" />
+        </view>
+        <view class="switch-item">
+          <text>出现低血糖反应</text>
+          <switch checked="{{hypoglycemia}}" bindchange="onHypoglycemiaChange" />
+        </view>
+        <view class="switch-item">
+          <text>近期没有规律服药</text>
+          <switch checked="{{medicationIrregular}}" bindchange="onMedicationIrregularChange" />
+        </view>
+        <view class="switch-item">
+          <text>已逾期复诊/检查</text>
+          <switch checked="{{missedFollowUp}}" bindchange="onMissedFollowUpChange" />
+        </view>
+      </view>
+
+      <view class="form-item note-item">
+        <text class="form-label">补充说明</text>
+        <textarea class="textarea" value="{{note}}" placeholder="例如：最近三天餐后血糖偏高，偶尔头晕" bindinput="onNoteInput" />
+      </view>
+
+      <button class="primary-btn submit-btn" loading="{{submitting}}" bindtap="submitQuestionnaire">提交问卷</button>
+    </view>
+
+    <view wx:if="{{lastResult}}" class="card result-card">
+      <view class="card-title">提交结果</view>
+      <view class="item-desc">{{lastResult.evaluation.riskConclusion}}</view>
+      <view wx:if="{{lastResult.generatedRiskAlert}}" class="alert-box">
+        <text class="status-pill status-open">已触发问卷预警</text>
+        <view class="item-title">{{lastResult.generatedRiskAlert.title}}</view>
+        <view class="item-desc">{{lastResult.generatedRiskAlert.description}}</view>
+      </view>
+      <view wx:if="{{lastResult.generatedTask}}" class="alert-box task-box">
+        <text class="status-pill status-progress">已生成护士复核</text>
+        <view class="item-title">{{lastResult.generatedTask.title}}</view>
+      </view>
+      <view wx:if="{{!lastResult.generatedRiskAlert}}" class="alert-box ok-box">
+        <text class="status-pill status-done">未触发高风险规则</text>
+        <view class="item-desc">本次问卷已保存，会进入患者长期档案。</view>
+      </view>
+    </view>
+
+    <view class="section-title">历史问卷</view>
+    <view class="card">
+      <block wx:if="{{results.length}}">
+        <view wx:for="{{results}}" wx:key="id" class="list-item">
+          <text class="status-pill {{item.statusClass}}">{{item.riskText}}</text>
+          <view class="item-title">{{item.typeText}}</view>
+          <view class="item-desc">评分：{{item.score}}/10 ｜ {{item.riskConclusion}}</view>
+          <view class="item-desc">{{item.createdAtText}}</view>
+          <view wx:if="{{item.note}}" class="item-desc">备注：{{item.note}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无问卷记录</view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

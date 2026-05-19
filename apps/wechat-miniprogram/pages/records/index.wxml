@@ -1,0 +1,51 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可查看院外健康指标记录和风险预警。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card header-card">
+      <view class="card-title">健康记录</view>
+      <view class="card-subtitle">下拉可刷新最新健康指标和风险预警。</view>
+    </view>
+
+    <view class="segmented">
+      <view class="segmented-item {{activeTab === 'vitals' ? 'active' : ''}}" data-tab="vitals" bindtap="switchTab">健康指标</view>
+      <view class="segmented-item {{activeTab === 'alerts' ? 'active' : ''}}" data-tab="alerts" bindtap="switchTab">风险预警</view>
+    </view>
+
+    <view wx:if="{{activeTab === 'vitals'}}" class="card">
+      <block wx:if="{{vitals.length}}">
+        <view wx:for="{{vitals}}" wx:key="id" class="list-item">
+          <view>
+            <text wx:if="{{item.isAbnormal}}" class="status-pill status-open">异常</text>
+            <text wx:else class="status-pill status-done">正常</text>
+          </view>
+          <view class="item-title">{{item.typeText}}：{{item.value}} {{item.unit}}</view>
+          <view class="item-desc">{{item.measuredAtText}}</view>
+          <view wx:if="{{item.note}}" class="item-desc">备注：{{item.note}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无健康指标记录</view>
+    </view>
+
+    <view wx:if="{{activeTab === 'alerts'}}" class="card">
+      <block wx:if="{{alerts.length}}">
+        <view wx:for="{{alerts}}" wx:key="id" class="list-item">
+          <view>
+            <text class="status-pill {{item.statusClass}}">{{item.statusText}}</text>
+            <text class="status-pill status-open">{{item.riskText}}</text>
+          </view>
+          <view class="item-title">{{item.title}}</view>
+          <view class="item-desc">{{item.description || '暂无说明'}}</view>
+          <view class="item-desc">{{item.createdAtText}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无风险预警</view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

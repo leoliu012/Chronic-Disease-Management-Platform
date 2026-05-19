@@ -1,0 +1,278 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum DiseaseType {
+  HYPERTENSION
+  TYPE_2_DIABETES
+  COPD
+  CORONARY_HEART_DISEASE
+  HYPERLIPIDEMIA
+  OBESITY
+  OTHER
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  VERY_HIGH
+}
+
+enum DataSource {
+  HIS
+  EMR
+  LIS
+  MINI_PROGRAM
+  NURSE_INPUT
+  MANUAL_IMPORT
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  CANCELED
+}
+
+enum AlertStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+model Patient {
+  id              String   @id @default(uuid())
+  hospitalPatientId String? @unique
+  name            String
+  gender          Gender   @default(UNKNOWN)
+  birthDate       DateTime?
+  phone           String?
+  idCardNo        String?
+  address         String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  responsibleDoctorId String?
+  responsibleNurseId  String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  diseaseProfiles DiseaseProfile[]
+  vitalRecords    VitalRecord[]
+  followUps       FollowUpRecord[]
+  tasks           Task[]
+
+  riskAlerts     RiskAlert[]
+  medicationRecords MedicationRecord[]
+  medicationCheckIns MedicationCheckIn[]
+  questionnaireResults QuestionnaireResult[]
+  vitalMonitoringPlans VitalMonitoringPlan[]
+}
+
+model DiseaseProfile {
+  id             String      @id @default(uuid())
+  patientId      String
+  diseaseType    DiseaseType
+  diagnosisDate  DateTime?
+  diseaseStage   String?
+  complications  String?
+  comorbidities  String?
+  riskLevel      RiskLevel   @default(LOW)
+  dataSource     DataSource  @default(NURSE_INPUT)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+}
+
+model VitalRecord {
+  id          String     @id @default(uuid())
+  patientId   String
+  type        String
+  value       Float
+  unit        String
+  measuredAt  DateTime
+  dataSource  DataSource @default(MINI_PROGRAM)
+  isAbnormal  Boolean    @default(false)
+  note        String?
+  monitoringPlanId String?
+  scheduledAt DateTime?
+
+  createdAt   DateTime @default(now())
+
+  patient     Patient @relation(fields: [patientId], references: [id])
+  monitoringPlan VitalMonitoringPlan? @relation(fields: [monitoringPlanId], references: [id])
+}
+
+model FollowUpRecord {
+  id              String   @id @default(uuid())
+  patientId        String
+  followUpType     String
+  followUpTime     DateTime
+  content          String?
+  result           String?
+  suggestion       String?
+  nextFollowUpTime DateTime?
+  operatorId       String?
+
+  createdAt        DateTime @default(now())
+
+  patient          Patient @relation(fields: [patientId], references: [id])
+}
+
+model Task {
+  id          String     @id @default(uuid())
+  patientId   String
+  title       String
+  type        String
+  status      TaskStatus @default(PENDING)
+  dueAt       DateTime?
+  assigneeId  String?
+  relatedAlertId String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  patient     Patient @relation(fields: [patientId], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  operatorId  String?
+  action      String
+  targetType  String
+  targetId    String?
+  ipAddress   String?
+  beforeData  Json?
+  afterData   Json?
+  createdAt   DateTime @default(now())
+}
+
+model RiskAlert {
+  id                String      @id @default(uuid())
+  patientId          String
+  riskType           String
+  riskLevel          RiskLevel   @default(MEDIUM)
+  title              String
+  description        String?
+  triggerRule        String?
+  sourceVitalRecordId String?
+  status             AlertStatus @default(OPEN)
+
+  handledBy          String?
+  handledAt          DateTime?
+  handlingNote       String?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  patient            Patient @relation(fields: [patientId], references: [id])
+}
+
+
+
+model VitalMonitoringPlan {
+  id             String     @id @default(uuid())
+  patientId      String
+  vitalType      String
+  displayName    String
+  unit           String
+  frequencyUnit  String     @default("DAY")
+  timesPerUnit   Int        @default(1)
+  customMeasureTimes Json?
+  customMeasureDays Json?
+  reminderLeadMinutes Int   @default(180)
+  checkInWindowBeforeMinutes Int @default(180)
+  missedWindowAfterMinutes Int @default(180)
+  sourcePreset   String?
+  evidenceBasis  String?
+  evidenceSource String?
+  isActive       Boolean    @default(true)
+  lastCheckInAt  DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+  vitalRecords   VitalRecord[]
+}
+
+model MedicationRecord {
+  id             String     @id @default(uuid())
+  patientId      String
+  medicationName String
+  dosage         String
+
+  // Backward-compatible display text generated from structured schedule fields.
+  frequency      String
+  frequencyUnit  String     @default("DAY")
+  timesPerUnit   Int        @default(1)
+  timingRelation String     @default("NONE")
+  customDoseTimes Json?
+  customDoseDays Json?
+  reminderLeadMinutes Int   @default(180)
+  checkInWindowBeforeMinutes Int @default(180)
+  missedWindowAfterMinutes Int @default(180)
+
+  instructions   String?
+  startDate      DateTime?
+  endDate        DateTime?
+  dataSource     DataSource @default(NURSE_INPUT)
+  isActive       Boolean    @default(true)
+  lastCheckInAt  DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+  checkIns       MedicationCheckIn[]
+}
+
+model MedicationCheckIn {
+  id           String   @id @default(uuid())
+  medicationId String
+  patientId    String
+  taken        Boolean  @default(true)
+  checkedAt    DateTime
+  scheduledAt  DateTime?
+  note         String?
+
+  createdAt    DateTime @default(now())
+
+  medication   MedicationRecord @relation(fields: [medicationId], references: [id])
+  patient      Patient @relation(fields: [patientId], references: [id])
+}
+
+model QuestionnaireResult {
+  id                String     @id @default(uuid())
+  patientId          String
+  questionnaireType  String
+  score              Int
+  riskLevel          RiskLevel  @default(LOW)
+  riskConclusion     String
+  answers            Json?
+  note               String?
+  dataSource         DataSource @default(MINI_PROGRAM)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  patient            Patient @relation(fields: [patientId], references: [id])
+}
+
+

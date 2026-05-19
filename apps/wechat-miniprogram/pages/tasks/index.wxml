@@ -1,0 +1,34 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可查看复诊提醒、异常复测提醒和护士随访待办。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card hero-card">
+      <view class="card-title">提醒与待办</view>
+      <view class="card-subtitle">这里展示系统根据异常指标、复诊计划和随访规则生成的提醒。</view>
+    </view>
+
+    <view class="card filter-card">
+      <switch checked="{{showHistory}}" bindchange="onShowHistoryChange" />
+      <text class="filter-label">显示已完成/已取消历史提醒</text>
+    </view>
+
+    <view class="card">
+      <block wx:if="{{visibleTasks.length}}">
+        <view wx:for="{{visibleTasks}}" wx:key="id" class="list-item">
+          <text class="status-pill {{item.statusClass}}">{{item.statusText}}</text>
+          <view class="item-title">{{item.title}}</view>
+          <view class="item-desc">任务类型：{{item.type}}</view>
+          <view class="item-desc">截止时间：{{item.dueAtText}}</view>
+          <view wx:if="{{item.relatedAlertId}}" class="item-desc">已关联风险预警</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无提醒</view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

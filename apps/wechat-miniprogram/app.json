@@ -1,0 +1,48 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/vitals/index",
+    "pages/medications/index",
+    "pages/questionnaire/index",
+    "pages/records/index",
+    "pages/tasks/index",
+    "pages/bind/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "慢病健康管理",
+    "navigationBarBackgroundColor": "#0b63ce",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f3f7fb",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#6b7280",
+    "selectedColor": "#0b63ce",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/vitals/index",
+        "text": "录入"
+      },
+      {
+        "pagePath": "pages/medications/index",
+        "text": "用药"
+      },
+      {
+        "pagePath": "pages/records/index",
+        "text": "记录"
+      },
+      {
+        "pagePath": "pages/tasks/index",
+        "text": "提醒"
+      }
+    ]
+  },
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

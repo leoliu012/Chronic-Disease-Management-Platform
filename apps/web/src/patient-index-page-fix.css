@@ -1,0 +1,462 @@
+/* Patient index visual repair: restores the China-hospital business UI after functional patches. */
+
+.business-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 24px;
+  border: 1px solid rgba(15, 94, 168, 0.12);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(239, 247, 255, 0.92) 100%);
+  box-shadow: 0 14px 34px rgba(15, 45, 80, 0.08);
+}
+
+.page-kicker {
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.2;
+  color: #0f172a;
+  letter-spacing: -0.03em;
+}
+
+.page-subtitle {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 15px;
+  line-height: 1.7;
+  max-width: 860px;
+}
+
+.panel,
+.hospital-card,
+.patient-his-panel,
+.form-card {
+  border: 1px solid #dbe5ee;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 28px rgba(15, 35, 66, 0.07);
+}
+
+.panel,
+.hospital-card,
+.patient-his-panel {
+  padding: 20px 22px;
+}
+
+.panel h2,
+.hospital-card h2,
+.patient-his-panel h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.section-title-row,
+.hospital-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.section-title-row.compact {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.section-title-row h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.hospital-section-header span,
+.page-section-kicker {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.action-row,
+.his-action-row,
+.form-actions,
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primary-btn,
+.secondary-btn,
+.ghost-btn,
+.danger-btn,
+.action-btn,
+.button,
+button.primary-btn,
+button.secondary-btn,
+button.ghost-btn,
+button.danger-btn,
+button.action-btn,
+button.button {
+  appearance: none;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 9px 14px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  white-space: nowrap;
+}
+
+.primary-btn,
+.action-btn,
+.button {
+  background: #0f5ea8;
+  color: #ffffff;
+  border-color: #0f5ea8;
+  box-shadow: 0 8px 18px rgba(15, 94, 168, 0.18);
+}
+
+.secondary-btn,
+.secondary-button {
+  background: #e8f1fb;
+  color: #0b3d6d;
+  border: 1px solid #b7d0e8;
+  box-shadow: none;
+}
+
+.ghost-btn {
+  background: #ffffff;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  box-shadow: none;
+}
+
+.danger-btn {
+  background: #fff1f0;
+  color: #b42318;
+  border-color: #ffc9c4;
+  box-shadow: none;
+}
+
+.primary-btn:hover,
+.secondary-btn:hover,
+.ghost-btn:hover,
+.danger-btn:hover,
+.action-btn:hover,
+.button:hover,
+.secondary-button:hover {
+  transform: translateY(-1px);
+  filter: brightness(0.98);
+}
+
+.primary-btn:disabled,
+.secondary-btn:disabled,
+.ghost-btn:disabled,
+.danger-btn:disabled,
+.action-btn:disabled,
+.button:disabled,
+.secondary-button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.his-action-row {
+  margin-top: 12px;
+}
+
+.his-barcode-input,
+.filter-bar input,
+.filter-bar select,
+.form-card input,
+.form-card select,
+.form-card textarea,
+.form-grid input,
+.form-grid select,
+.form-grid textarea,
+.form-row input,
+.form-row select,
+.form-row textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.his-barcode-input:focus,
+.filter-bar input:focus,
+.filter-bar select:focus,
+.form-card input:focus,
+.form-card select:focus,
+.form-card textarea:focus,
+.form-grid input:focus,
+.form-grid select:focus,
+.form-grid textarea:focus,
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+  border-color: #0f5ea8;
+  box-shadow: 0 0 0 3px rgba(15, 94, 168, 0.12);
+}
+
+.his-barcode-input {
+  flex: 1 1 360px;
+  min-width: 280px;
+  font-size: 15px;
+}
+
+.interface-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.interface-note code {
+  border: 1px solid #dbeafe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.form-card {
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.form-grid.three-columns {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.form-grid label,
+.form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #334155;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.wide-field {
+  grid-column: span 2;
+}
+
+.filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 14px 0 16px;
+}
+
+.filter-bar input {
+  min-width: 280px;
+  flex: 1;
+}
+
+.table,
+table.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid #dbe5ee;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.table th,
+.table td,
+table.table th,
+table.table td {
+  padding: 13px 14px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+.table th,
+table.table th {
+  background: #f1f6fb;
+  color: #29415a;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.table tr:last-child td,
+table.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table a,
+table.table a,
+.action-link {
+  color: #0f5ea8;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.table a:hover,
+table.table a:hover,
+.action-link:hover {
+  text-decoration: underline;
+}
+
+.status-message,
+.notice-success {
+  margin: 12px 0;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.status-error,
+.notice-error {
+  margin: 12px 0;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.status-badge,
+.risk-badge,
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.type-badge {
+  background: #eef4ff;
+  color: #194185;
+}
+
+.risk-low,
+.status-done,
+.status-resolved {
+  background: #ecfdf3;
+  color: #157347;
+}
+
+.risk-medium,
+.status-in-progress {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.risk-high,
+.risk-very-high,
+.status-open,
+.status-pending {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.status-canceled,
+.status-dismissed {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.empty-state,
+.loading-state {
+  padding: 18px;
+  background: #f8fafc;
+  border: 1px dashed #dbe5ee;
+  border-radius: 14px;
+  color: #64748b;
+}
+
+.page-subtitle,
+.muted {
+  color: #64748b;
+}
+
+/* Guard against CSS being partially overwritten by later patches. */
+.business-page > h1,
+.business-page > .page-kicker,
+.business-page > .page-subtitle {
+  margin-left: 0;
+}
+
+@media (max-width: 960px) {
+  .page-header,
+  .section-title-row,
+  .hospital-section-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .form-grid,
+  .form-grid.three-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .wide-field {
+    grid-column: auto;
+  }
+
+  .his-barcode-input,
+  .filter-bar input {
+    min-width: 100%;
+  }
+}

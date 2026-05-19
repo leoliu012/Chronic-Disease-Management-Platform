@@ -1,0 +1,31 @@
+.header-card {
+  background: #ffffff;
+}
+
+.bind-btn {
+  margin-top: 28rpx;
+}
+
+.segmented {
+  display: flex;
+  background: #e7f0fb;
+  padding: 8rpx;
+  border-radius: 999rpx;
+  margin-bottom: 24rpx;
+}
+
+.segmented-item {
+  flex: 1;
+  text-align: center;
+  border-radius: 999rpx;
+  padding: 18rpx 0;
+  font-size: 26rpx;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.segmented-item.active {
+  background: #ffffff;
+  color: #0b63ce;
+  box-shadow: 0 8rpx 20rpx rgba(15, 59, 108, 0.08);
+}

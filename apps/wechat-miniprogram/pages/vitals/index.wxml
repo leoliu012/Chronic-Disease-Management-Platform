@@ -1,0 +1,102 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可按医院端设置的血压、血糖、体重、血氧等打卡计划上报数据。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card hero-card">
+      <view class="card-title">院外指标打卡</view>
+      <view class="card-subtitle">医院端可为每位患者设置不同指标频率；异常数据会自动进入护士工作台。</view>
+    </view>
+
+    <view class="section-title">医院端指标打卡计划</view>
+    <view class="card plan-card">
+      <view wx:if="{{loadingPlans}}" class="empty-state">正在加载计划...</view>
+      <block wx:elif="{{activePlans.length}}">
+        <view wx:for="{{activePlans}}" wx:key="id" class="plan-item">
+          <view class="plan-main" data-id="{{item.id}}" bindtap="usePlan">
+            <view class="item-title">{{item.displayName}}</view>
+            <view class="item-desc">下次打卡：{{item.nextDueText}}</view>
+            <view class="item-desc">提醒时间：{{item.reminderText}}</view>
+          </view>
+          <view class="plan-actions">
+            <button wx:if="{{item.canCheckIn}}" class="secondary-btn mini-btn" data-id="{{item.id}}" bindtap="usePlan">去打卡</button>
+            <button wx:if="{{item.canMarkMissed}}" class="danger-btn mini-btn" data-id="{{item.id}}" bindtap="markMissed">漏测</button>
+          </view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无医院端指标打卡计划。请联系护士在医院端配置。</view>
+    </view>
+
+    <view class="card">
+      <view class="form-item">
+        <text class="form-label">指标类型</text>
+        <picker mode="selector" range="{{vitalTypes}}" range-key="label" value="{{selectedTypeIndex}}" bindchange="onTypeChange">
+          <view class="picker-display">{{selectedTypeLabel}}</view>
+        </picker>
+      </view>
+
+      <view wx:if="{{selectedPlan}}" class="alert-box ok-box">
+        <text class="status-pill status-done">按计划打卡</text>
+        <view class="item-title">{{selectedPlan.displayName}}</view>
+        <view class="item-desc">计划时间：{{selectedPlan.nextDueText}}</view>
+      </view>
+
+      <block wx:if="{{selectedTypeLabel === '血压（收缩压/舒张压）'}}">
+        <view class="form-item">
+          <text class="form-label">收缩压</text>
+          <input class="input" type="digit" value="{{systolicValue}}" placeholder="例如 128" bindinput="onSystolicInput" />
+        </view>
+        <view class="form-item">
+          <text class="form-label">舒张压</text>
+          <input class="input" type="digit" value="{{diastolicValue}}" placeholder="例如 82" bindinput="onDiastolicInput" />
+        </view>
+      </block>
+
+      <block wx:else>
+        <view class="form-item">
+          <text class="form-label">数值</text>
+          <input class="input" type="digit" value="{{value}}" placeholder="请输入数值" bindinput="onValueInput" />
+        </view>
+        <view class="quick-row">
+          <button wx:for="{{quickValues}}" wx:key="label" class="quick-btn" data-value="{{item.value}}" bindtap="useQuickValue">{{item.label}}</button>
+        </view>
+      </block>
+
+      <view class="form-item">
+        <text class="form-label">单位</text>
+        <input class="input" value="{{unit}}" placeholder="单位" bindinput="onUnitInput" />
+      </view>
+
+      <view class="form-item">
+        <text class="form-label">备注</text>
+        <textarea class="textarea" value="{{note}}" placeholder="例如：饭后2小时、运动后、头晕等" bindinput="onNoteInput" />
+      </view>
+
+      <button class="primary-btn submit-btn" loading="{{submitting}}" bindtap="submitVital">提交健康数据</button>
+    </view>
+
+    <view wx:if="{{lastResult}}" class="card result-card">
+      <view class="card-title">提交结果</view>
+      <view class="item-desc">健康指标已保存。</view>
+      <view wx:if="{{lastResult.generatedRiskAlert}}" class="alert-box">
+        <text class="status-pill status-open">已触发预警</text>
+        <view class="item-title">{{lastResult.generatedRiskAlert.title}}</view>
+        <view class="item-desc">{{lastResult.generatedRiskAlert.description}}</view>
+      </view>
+      <view wx:if="{{lastResult.generatedTask}}" class="alert-box task-box">
+        <text class="status-pill status-progress">已生成护士待办</text>
+        <view class="item-title">{{lastResult.generatedTask.title}}</view>
+        <view class="item-desc">护士会根据风险等级安排复测或随访。</view>
+      </view>
+      <view wx:if="{{!lastResult.generatedRiskAlert}}" class="alert-box ok-box">
+        <text class="status-pill status-done">未触发异常规则</text>
+        <view class="item-desc">本次数据未进入风险预警。</view>
+      </view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

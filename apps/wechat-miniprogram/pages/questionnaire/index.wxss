@@ -1,0 +1,61 @@
+.hero-card {
+  background: linear-gradient(135deg, #0b63ce, #18a0fb);
+}
+
+.hero-card .card-title,
+.hero-card .card-subtitle {
+  color: #ffffff;
+}
+
+.bind-btn,
+.submit-btn {
+  margin-top: 28rpx;
+}
+
+.score-hint {
+  color: #738197;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.switch-list {
+  border: 1rpx solid #d8e6f6;
+  border-radius: 20rpx;
+  overflow: hidden;
+  margin: 24rpx 0;
+}
+
+.switch-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding: 22rpx;
+  border-bottom: 1rpx solid #e6edf5;
+  color: #37506d;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.switch-item:last-child {
+  border-bottom: none;
+}
+
+.note-item {
+  margin-top: 24rpx;
+}
+
+.alert-box {
+  background: #fff7ed;
+  border-radius: 18rpx;
+  padding: 20rpx;
+  margin-top: 18rpx;
+}
+
+.task-box {
+  background: #e0f2fe;
+}
+
+.ok-box {
+  background: #ecfdf5;
+}

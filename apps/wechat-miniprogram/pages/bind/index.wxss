@@ -1,0 +1,15 @@
+.hero-card {
+  background: linear-gradient(135deg, #0b63ce, #18a0fb);
+}
+
+.hero-card .card-title,
+.hero-card .card-subtitle {
+  color: #ffffff;
+}
+
+.divider {
+  text-align: center;
+  color: #90a0b4;
+  font-size: 24rpx;
+  margin: 28rpx 0;
+}

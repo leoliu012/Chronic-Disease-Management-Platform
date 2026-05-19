@@ -1,0 +1,87 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可查看医院端配置的用药计划，并在开放时间内完成打卡。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card hero-card">
+      <view class="card-title">用药提醒与打卡</view>
+      <view class="card-subtitle">用药计划由医院端医生/护士或 HIS/药房处方接口维护。患者端显示下一次用药时间，并按规则开放打卡或漏服反馈。</view>
+      <view class="btn-row hero-actions">
+        <button class="secondary-btn" bindtap="loadData" loading="{{loading}}">刷新用药计划</button>
+        <button class="secondary-btn" bindtap="goQuestionnaire">填写问卷</button>
+      </view>
+    </view>
+
+    <view class="card source-note-card">
+      <view class="card-title">打卡规则</view>
+      <view class="card-subtitle">用药时间前 3 小时可开始打卡；用药时间后 3 小时显示“漏服/未服”。提前 3 小时的微信订阅提醒已预留后端提醒时间字段，正式上线需接入微信订阅消息模板。</view>
+    </view>
+
+    <view class="card">
+      <view class="card-title">当前用药计划</view>
+      <block wx:if="{{medications.length}}">
+        <view wx:for="{{medications}}" wx:key="id" class="list-item medication-item">
+          <view>
+            <text class="status-pill {{item.isActive ? 'status-done' : 'status-muted'}}">{{item.isActive ? '启用' : '停用'}}</text>
+            <text wx:if="{{item.recentMissedCount}}" class="status-pill status-open">近期待复核</text>
+          </view>
+          <view class="item-title">{{item.medicationName}}</view>
+          <view class="item-desc">剂量：{{item.dosage}}</view>
+          <view class="item-desc">频次：{{item.frequency}}</view>
+          <view class="item-desc">结构化规则：{{item.scheduleText}}</view>
+          <view wx:if="{{item.instructions}}" class="item-desc">说明：{{item.instructions}}</view>
+
+          <view class="next-dose-box">
+            <view class="next-dose-label">下一次用药时间</view>
+            <view class="next-dose-time">{{item.nextDoseText}}</view>
+            <view class="item-desc">提醒时间：{{item.reminderAtText}}</view>
+            <view class="item-desc">{{item.actionHint}}</view>
+          </view>
+
+          <view class="item-desc">最近打卡：{{item.lastCheckInAtText}} ｜ 近期依从率：{{item.adherenceText}}</view>
+          <view class="btn-row checkin-row">
+            <button class="primary-btn" disabled="{{!item.canCheckIn || submitting}}" data-id="{{item.id}}" data-scheduled-at="{{item.nextDoseScheduledAt}}" loading="{{submitting}}" bindtap="checkInTaken">确认已服药</button>
+            <button wx:if="{{item.canReportMissed}}" class="danger-btn" data-id="{{item.id}}" data-scheduled-at="{{item.nextDoseScheduledAt}}" loading="{{submitting}}" bindtap="checkInMissed">漏服/未服</button>
+          </view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无用药计划。请先在医院 Web 后台的患者详情页新增用药计划。</view>
+    </view>
+
+    <view wx:if="{{lastResult}}" class="card result-card">
+      <view class="card-title">打卡结果</view>
+      <view wx:if="{{lastResult.generatedRiskAlert}}" class="alert-box">
+        <text class="status-pill status-open">已触发用药预警</text>
+        <view class="item-title">{{lastResult.generatedRiskAlert.title}}</view>
+        <view class="item-desc">{{lastResult.generatedRiskAlert.description}}</view>
+      </view>
+      <view wx:if="{{lastResult.generatedTask}}" class="alert-box task-box">
+        <text class="status-pill status-progress">已生成护士随访</text>
+        <view class="item-title">{{lastResult.generatedTask.title}}</view>
+      </view>
+      <view wx:if="{{!lastResult.generatedRiskAlert}}" class="alert-box ok-box">
+        <text class="status-pill status-done">已记录</text>
+        <view class="item-desc">本次用药打卡已保存，未触发风险预警。</view>
+      </view>
+    </view>
+
+    <view class="section-title">最近用药打卡</view>
+    <view class="card">
+      <block wx:if="{{checkIns.length}}">
+        <view wx:for="{{checkIns}}" wx:key="id" class="list-item">
+          <text class="status-pill {{item.taken ? 'status-done' : 'status-open'}}">{{item.takenText}}</text>
+          <view class="item-title">{{item.medicationName}}</view>
+          <view class="item-desc">打卡时间：{{item.checkedAtText}}</view>
+          <view wx:if="{{item.scheduledAtText}}" class="item-desc">对应计划时间：{{item.scheduledAtText}}</view>
+          <view wx:if="{{item.note}}" class="item-desc">备注：{{item.note}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无用药打卡记录</view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

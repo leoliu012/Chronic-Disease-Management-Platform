@@ -1,0 +1,43 @@
+<view class="container">
+  <view class="card hero-card">
+    <view class="card-title">绑定慢病档案</view>
+    <view class="card-subtitle">
+      请输入医院患者 ID，或输入院内号/手机号/身份证号走 HIS 模拟查询。绑定后可在患者端录入血压、血糖等院外健康数据。
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="form-item">
+      <text class="form-label">后端 API 地址</text>
+      <input class="input" value="{{apiBaseUrl}}" placeholder="例如 http://127.0.0.1:3000" bindinput="onApiBaseUrlInput" />
+      <view class="muted">开发工具可用 127.0.0.1；真机调试请改为电脑局域网 IP，并在开发工具中关闭合法域名校验。</view>
+    </view>
+
+    <view class="form-item">
+      <text class="form-label">患者 ID</text>
+      <input class="input" value="{{patientId}}" placeholder="直接填写数据库里的 patientId" bindinput="onPatientIdInput" />
+    </view>
+
+    <button class="primary-btn" loading="{{loading}}" bindtap="bindByPatientId">用患者 ID 绑定</button>
+
+    <view class="divider">或</view>
+
+    <view class="form-item">
+      <text class="form-label">院内号 / 就诊卡号 / 手机号 / 身份证号</text>
+      <input class="input" value="{{barcode}}" placeholder="用于 HIS 模拟查询" bindinput="onBarcodeInput" />
+    </view>
+
+    <button class="secondary-btn" loading="{{loading}}" bindtap="lookupHis">HIS 模拟查询</button>
+  </view>
+
+  <view wx:if="{{lookupResult}}" class="card result-card">
+    <view class="card-title">查询结果</view>
+    <view class="item-desc">{{lookupResult.message}}</view>
+    <view wx:if="{{lookupResult.patient && lookupResult.patient.id}}" class="btn-row">
+      <button class="primary-btn" bindtap="confirmLookupPatient">绑定该患者</button>
+    </view>
+    <view wx:else class="empty-state">未匹配到本地患者。当前后端为 HIS 预留接口，需要先在 Web 后台创建患者档案。</view>
+  </view>
+
+  <view class="safe-bottom" />
+</view>

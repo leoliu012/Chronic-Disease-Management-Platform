@@ -1,0 +1,298 @@
+/* Patient detail layout repair: keeps China-hospital business style while restoring forms. */
+.patient-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.patient-detail-page .panel,
+.patient-detail-page .form-panel,
+.patient-detail-page .patient-info-card,
+.patient-detail-page .timeline-panel {
+  background: #ffffff;
+  border: 1px solid #dbe7f3;
+  border-radius: 18px;
+  padding: 22px 24px;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+}
+
+.patient-detail-page .hospital-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.patient-detail-page .hospital-section-header span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.patient-detail-page .hospital-section-header h2 {
+  margin: 5px 0 0;
+  color: #0f172a;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.patient-detail-page .section-hint {
+  max-width: 480px;
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.patient-detail-page .patient-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.patient-detail-page .patient-info-grid > div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.patient-detail-page .patient-info-grid .label {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.patient-detail-page .patient-info-grid strong {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.patient-detail-page .hospital-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.patient-detail-page .form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.patient-detail-page .form-grid-two {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.patient-detail-page .form-grid-three {
+  grid-template-columns: 2fr 1fr 1fr;
+}
+
+.patient-detail-page .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.patient-detail-page .form-row label {
+  color: #334155;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.patient-detail-page .form-row input,
+.patient-detail-page .form-row select,
+.patient-detail-page .form-row textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.patient-detail-page .form-row input,
+.patient-detail-page .form-row select {
+  min-height: 42px;
+  padding: 9px 12px;
+}
+
+.patient-detail-page .form-row textarea {
+  min-height: 86px;
+  padding: 11px 12px;
+  resize: vertical;
+}
+
+.patient-detail-page .form-row input:focus,
+.patient-detail-page .form-row select:focus,
+.patient-detail-page .form-row textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  background: #fbfdff;
+}
+
+.patient-detail-page .checkbox-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+}
+
+.patient-detail-page .checkbox-row label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+}
+
+.patient-detail-page .checkbox-row input[type='checkbox'] {
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+}
+
+.patient-detail-page .auto-rule-note {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.patient-detail-page .form-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.patient-detail-page .button,
+.patient-detail-page .secondary-button,
+.patient-detail-page .secondary-btn {
+  border: none;
+  border-radius: 11px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.patient-detail-page .button {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  box-shadow: 0 10px 18px rgba(37, 99, 235, 0.2);
+}
+
+.patient-detail-page .secondary-button,
+.patient-detail-page .secondary-btn {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.patient-detail-page .button:hover,
+.patient-detail-page .secondary-button:hover,
+.patient-detail-page .secondary-btn:hover {
+  transform: translateY(-1px);
+}
+
+.patient-detail-page .button:disabled,
+.patient-detail-page .secondary-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.patient-detail-page .timeline-filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.patient-detail-page .timeline-tab {
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: #1e3a8a;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.patient-detail-page .timeline-tab span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.patient-detail-page .timeline-tab.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+.patient-detail-page .timeline-tab.active span {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+.patient-detail-page .timeline-extra {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (max-width: 1080px) {
+  .patient-detail-page .form-grid,
+  .patient-detail-page .form-grid-three,
+  .patient-detail-page .patient-info-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .patient-detail-page .hospital-section-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .patient-detail-page .section-hint {
+    text-align: left;
+  }
+
+  .patient-detail-page .form-grid,
+  .patient-detail-page .form-grid-two,
+  .patient-detail-page .form-grid-three,
+  .patient-detail-page .patient-info-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,91 @@
+<view class="container">
+  <view wx:if="{{!patientId}}" class="card unbound-card">
+    <view class="card-title">请先绑定患者档案</view>
+    <view class="card-subtitle">绑定后可进行院外血压、血糖、血氧等数据上报，并查看用药打卡、健康问卷、护士提醒和风险预警。</view>
+    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+  </view>
+
+  <block wx:else>
+    <view class="card hero-card">
+      <view class="patient-row">
+        <view>
+          <view class="hello">您好，{{patient.name || '慢病患者'}}</view>
+          <view class="card-subtitle">{{patientDesc}}</view>
+        </view>
+        <button class="switch-btn" bindtap="goBind">切换</button>
+      </view>
+    </view>
+
+    <view class="metric-grid">
+      <view class="metric-card">
+        <view class="metric-label">今日待办</view>
+        <view class="metric-value">{{todoCount}}</view>
+      </view>
+      <view class="metric-card">
+        <view class="metric-label">待处理提醒</view>
+        <view class="metric-value">{{pendingTaskCount}}</view>
+      </view>
+      <view class="metric-card">
+        <view class="metric-label">风险预警</view>
+        <view class="metric-value">{{openAlertCount}}</view>
+      </view>
+      <view class="metric-card">
+        <view class="metric-label">用药计划</view>
+        <view class="metric-value">{{medicationCount}}</view>
+      </view>
+    </view>
+
+    <view class="section-title">今日慢病管理</view>
+    <view class="card todo-card">
+      <block wx:if="{{todayTodos.length}}">
+        <view wx:for="{{todayTodos}}" wx:key="title" class="todo-item" data-target="{{item.target}}" bindtap="goTodo">
+          <view>
+            <view class="item-title">{{item.title}}</view>
+            <view class="item-desc">{{item.desc}}</view>
+          </view>
+          <view class="todo-action">{{item.action}}</view>
+        </view>
+      </block>
+    </view>
+
+    <view class="card action-card">
+      <view class="card-title">快捷入口</view>
+      <view class="quick-grid">
+        <button class="primary-btn" bindtap="goVitals">录入血压/血糖</button>
+        <button class="secondary-btn" bindtap="goMedications">用药打卡</button>
+        <button class="secondary-btn" bindtap="goQuestionnaire">填写问卷</button>
+        <button class="secondary-btn" bindtap="goRecords">查看记录</button>
+      </view>
+    </view>
+
+    <view class="section-title">最新风险预警</view>
+    <view class="card">
+      <block wx:if="{{recentAlerts.length}}">
+        <view wx:for="{{recentAlerts}}" wx:key="id" class="list-item">
+          <view>
+            <text class="status-pill {{item.statusClass}}">{{item.statusText}}</text>
+            <text class="status-pill status-open">{{item.riskText}}</text>
+          </view>
+          <view class="item-title">{{item.title}}</view>
+          <view class="item-desc">{{item.description || '暂无说明'}}</view>
+          <view class="item-desc">{{item.createdAtText}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无风险预警</view>
+    </view>
+
+    <view class="section-title">护士提醒</view>
+    <view class="card">
+      <block wx:if="{{recentTasks.length}}">
+        <view wx:for="{{recentTasks}}" wx:key="id" class="list-item">
+          <text class="status-pill {{item.statusClass}}">{{item.statusText}}</text>
+          <view class="item-title">{{item.title}}</view>
+          <view class="item-desc">截止时间：{{item.dueAtText}}</view>
+        </view>
+      </block>
+      <view wx:else class="empty-state">暂无待处理提醒</view>
+    </view>
+  </block>
+
+  <view class="safe-bottom" />
+</view>

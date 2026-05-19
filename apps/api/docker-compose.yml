@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chronic-care-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chronic
+      POSTGRES_PASSWORD: chronic_password
+      POSTGRES_DB: chronic_care
+    ports:
+      - "55432:5432"
+    volumes:
+      - chronic_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: chronic-care-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  chronic_postgres_data:

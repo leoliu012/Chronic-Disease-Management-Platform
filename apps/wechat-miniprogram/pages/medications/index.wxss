@@ -1,0 +1,71 @@
+.hero-card {
+  background: linear-gradient(135deg, #0b63ce, #18a0fb);
+}
+
+.hero-card .card-title,
+.hero-card .card-subtitle {
+  color: #ffffff;
+}
+
+.hero-actions .secondary-btn {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.bind-btn,
+.submit-btn {
+  margin-top: 28rpx;
+}
+
+.medication-item .btn-row {
+  margin-top: 24rpx;
+}
+
+.checkin-row button {
+  min-height: 76rpx;
+}
+
+.alert-box {
+  background: #fff7ed;
+  border-radius: 18rpx;
+  padding: 20rpx;
+  margin-top: 18rpx;
+}
+
+.task-box {
+  background: #e0f2fe;
+}
+
+.ok-box {
+  background: #ecfdf5;
+}
+
+
+
+.source-note-card {
+  border-left: 8rpx solid #0b63ce;
+}
+
+.next-dose-box {
+  background: #f8fbff;
+  border: 1rpx solid #dbeafe;
+  border-radius: 18rpx;
+  padding: 18rpx;
+  margin-top: 18rpx;
+}
+
+.next-dose-label {
+  color: #64748b;
+  font-size: 24rpx;
+  margin-bottom: 8rpx;
+}
+
+.next-dose-time {
+  color: #0f3a66;
+  font-size: 34rpx;
+  font-weight: 800;
+  margin-bottom: 8rpx;
+}
+
+button[disabled] {
+  opacity: 0.5;
+}
