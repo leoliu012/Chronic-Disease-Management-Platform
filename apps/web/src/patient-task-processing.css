@@ -359,43 +359,437 @@
   }
 }
 
-/* Unified patient-detail task queue: replaces separate risk disposal / follow-up queues. */
-.unified-patient-task-board .stable-command-board-header {
-  align-items: flex-start;
+/* Task processing UX lock patch: compact workbench + collapsed actions */
+.compact-task-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.unified-command-grid {
-  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+.task-workbench-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid #d8e3ef;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
-.unified-command-card-main {
-  border-color: rgba(30, 95, 138, 0.18);
-  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+.task-workbench-patient-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 14px;
 }
 
-.unified-mini-list {
+.task-workbench-patient-line strong {
+  color: #0f172a;
+  font-size: 20px;
+}
+
+.task-workbench-patient-line span:not(:first-of-type) {
+  padding-left: 10px;
+  border-left: 1px solid #cbd5e1;
+}
+
+.task-workbench-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-workbench-summary-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) auto minmax(0, 1.1fr);
   gap: 12px;
+  align-items: stretch;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-left: 5px solid #1d4ed8;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
 }
 
-.unified-mini-row {
-  align-items: flex-start;
-  border-left: 4px solid #2f80bd;
+.summary-strip-block {
+  min-width: 0;
 }
 
-.unified-mini-row small {
+.summary-strip-block span {
   display: block;
-  margin-top: 5px;
-  color: #5b6b7a;
-  line-height: 1.55;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.alert-only-inline-row {
-  border-left-color: #d97706;
-  background: #fffaf0;
+.summary-strip-block strong {
+  display: block;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.35;
 }
 
-.patient-hero-actions .compact-link-btn {
+.summary-strip-block p {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.alert-strip-main {
+  padding-left: 12px;
+  border-left: 1px dashed #cbd5e1;
+}
+
+.alert-strip-main.muted strong,
+.alert-strip-main.muted p {
+  color: #64748b;
+}
+
+.summary-strip-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-result-summary-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #bbf7d0;
+  border-left: 5px solid #16a34a;
+  border-radius: 16px;
+  background: #f0fdf4;
+  color: #14532d;
+}
+
+.result-check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.task-result-summary-card h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.task-result-summary-card p {
+  margin: 0 0 8px;
+  color: #166534;
+}
+
+.task-result-summary-card ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-workbench-layout {
+  align-items: start;
+}
+
+.compact-panel {
+  padding: 14px;
+}
+
+.task-workbench-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.task-process-summary-panel,
+.related-alert-strong-card,
+.compact-action-card-panel {
+  padding: 16px;
+}
+
+.task-summary-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.task-summary-mini-grid div {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.task-summary-mini-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-summary-mini-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.related-alert-strong-card {
+  border-left: 5px solid #ef4444;
+  background: #fff7ed;
+}
+
+.related-alert-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.related-alert-title-row h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #7f1d1d;
+}
+
+.related-alert-title-row p,
+.related-alert-strong-card > p {
+  margin: 4px 0 0;
+  color: #7c2d12;
+  line-height: 1.55;
+}
+
+.alert-trigger-line {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+}
+
+.action-module-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.action-module-card {
+  min-height: 132px;
+  display: flex !important;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  position: relative;
+}
+
+.action-module-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.action-module-card strong {
+  font-size: 16px;
+}
+
+.action-module-card span {
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+.action-module-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.action-module-footer small {
+  color: #1d4ed8;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.module-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.module-status.pending {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.module-status.in-progress {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.module-status.saved {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.module-status.alert-linked {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.submitting-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.submitting-panel form,
+.submitting-panel .recheck-grid,
+.submitting-panel .plan-editor-layout {
+  opacity: 0.48;
+  pointer-events: none;
+}
+
+.panel-loading-mask {
+  display: none;
+}
+
+.submitting-panel .panel-loading-mask {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.62);
+  color: #1d4ed8;
+  font-size: 16px;
+  font-weight: 800;
+  backdrop-filter: blur(1px);
+}
+
+.compact-two-column-form .form-grid-two,
+.compact-two-column-form.form-grid-two {
+  gap: 12px;
+}
+
+.compact-two-column-form textarea {
+  min-height: 96px;
+}
+
+.sticky-form-actions {
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px dashed #cbd5e1;
+  align-items: center;
+}
+
+.sticky-form-actions .button:disabled,
+.sticky-form-actions .secondary-button:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.compact-recheck-grid {
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+}
+
+.compact-plan-editor {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.strong-sync-box {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+}
+
+.strong-sync-box p {
+  margin: 6px 0 0 22px;
+  color: #1e40af;
+  font-size: 13px;
+}
+
+.submitted-lock-card {
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  border-radius: 14px;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.submitted-lock-card strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #14532d;
+  font-size: 16px;
+}
+
+.submitted-lock-card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.compact-task-list .task-processing-task-card {
+  padding: 12px;
+}
+
+.compact-task-list .task-processing-task-card strong {
+  line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .task-workbench-summary-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-strip-status {
+    justify-content: flex-start;
+  }
+
+  .alert-strip-main {
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px dashed #cbd5e1;
+    padding-top: 10px;
+  }
+
+  .action-module-grid,
+  .task-summary-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .task-workbench-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-workbench-layout,
+  .compact-recheck-grid,
+  .compact-plan-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .action-module-grid,
+  .task-summary-mini-grid {
+    grid-template-columns: 1fr;
+  }
 }

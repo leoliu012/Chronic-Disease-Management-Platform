@@ -12928,6 +12928,375 @@ export function OperationToastHost() {
 }
 
 
+### FILE: apps/web/src/components/TaskActionHistory.tsx
+import type { ActionShellResult } from './TaskActionShell';
+
+/**
+ * TaskActionHistory
+ *
+ * 展示本次工作台会话内、当前任务下所有已成功提交的处理动作。
+ * 与全局 timeline 区别：只显示"在这一次任务处理页打开后"的提交记录，
+ * 让护士能立刻看到自己已经做了什么，避免重复填写或漏掉某个动作。
+ */
+
+export type TaskActionHistoryEntry = ActionShellResult & {
+  /** 哪个处理方式（PHONE / RECHECK / VISIT ...）。 */
+  mode: string;
+  /** 模块标题，用于展示。 */
+  moduleTitle: string;
+};
+
+type Props = {
+  entries: TaskActionHistoryEntry[];
+  /**
+   * 当用户点击某条记录的"查看"时回调，父组件可把对应模块切到 review。
+   */
+  onReview?: (mode: string) => void;
+};
+
+function formatTime(value: string) {
+  return new Date(value).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+export function TaskActionHistory({ entries, onReview }: Props) {
+  if (entries.length === 0) return null;
+
+  return (
+    <section className="panel task-action-history-panel" aria-label="本次处理记录">
+      <header className="action-history-header">
+        <div>
+          <span>本次处理记录</span>
+          <h2>当前任务已完成 {entries.length} 项处理</h2>
+        </div>
+        <p className="section-hint">
+          只展示本次进入工作台后的提交记录。完整历史请到患者档案的时间线查看。
+        </p>
+      </header>
+      <ol className="action-history-timeline">
+        {entries.map((entry, idx) => (
+          <li key={`${entry.mode}-${entry.savedAt}-${idx}`}>
+            <span className="action-history-time">{formatTime(entry.savedAt)}</span>
+            <span className="action-history-dot" aria-hidden />
+            <div className="action-history-content">
+              <strong>
+                {entry.moduleTitle}
+                <em className="action-history-tag">{entry.label}</em>
+              </strong>
+              {entry.details.length > 0 && (
+                <p>{entry.details.join(' · ')}</p>
+              )}
+              {entry.syncedAlert && (
+                <small className="action-history-synced">已同步处置关联风险预警</small>
+              )}
+            </div>
+            {onReview && (
+              <button
+                type="button"
+                className="ghost-button compact-link-btn"
+                onClick={() => onReview(entry.mode)}
+              >
+                查看
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+
+### FILE: apps/web/src/components/TaskActionShell.tsx
+import type { ReactNode } from 'react';
+
+/**
+ * TaskActionShell
+ *
+ * 任务工作台中每个"处理方式"模块的统一外壳。负责三态切换：
+ *   - 'idle'   : 折叠，只显示标题 + 状态 + 一行 hint，点击展开。
+ *   - 'review' : 已提交后再次打开时的"锁定预览"，显示提交摘要 + 关键字段，
+ *                不直接呈现表单；只有点击"继续补充记录"才进入 edit。
+ *   - 'edit'   : 真正展开表单。本组件用 children 渲染表单内容。
+ *
+ * 这样可以保证：
+ *   1. 进入页面默认全部折叠（状态由父组件控制）。
+ *   2. 已提交的模块默认进入 review，让护士先看清"上一次提交了什么"，
+ *      避免在不知道情况下重复填写。
+ *   3. 真正要补充时，明确点击"继续补充记录"，按钮文案不再是"完成任务"。
+ *   4. 表单提交期间显示 loading 遮罩，防止重复提交。
+ */
+export type ActionShellViewState = 'idle' | 'review' | 'edit';
+
+export type ActionShellStatusTone =
+  | 'pending'
+  | 'in-progress'
+  | 'saved'
+  | 'alert-linked'
+  | 'locked';
+
+export type ActionShellResult = {
+  label: string;
+  savedAt: string;
+  details: string[];
+  statusText?: string;
+  syncedAlert?: boolean;
+};
+
+type Props = {
+  /** 模块业务标识。仅用于 data-attr，UI 上不展示。 */
+  moduleKey: string;
+
+  /** 模块标题（如"电话随访沟通"）。 */
+  title: string;
+
+  /** 模块小标签（如"电话随访记录"），显示在标题上方。 */
+  kicker: string;
+
+  /** 模块说明 hint。 */
+  hint: string;
+
+  /** 当前展示状态。 */
+  view: ActionShellViewState;
+
+  /** 状态文案（如"未填写"/"已保存 10:42"）。 */
+  statusLabel: string;
+
+  /** 状态色调，决定徽章颜色。 */
+  statusTone: ActionShellStatusTone;
+
+  /** 已提交后的结果摘要；只有 view === 'review' 时使用。 */
+  result?: ActionShellResult | null;
+
+  /** 是否正在提交。提交期间表单区遮罩 + 禁用。 */
+  isSubmitting?: boolean;
+
+  /** 折叠态显示的右侧按钮文案，例如"展开填写" / "查看 / 继续补充"。 */
+  collapsedActionText: string;
+
+  /** 折叠态点击行为：父组件根据是否已有 result 决定进入 review 还是 edit。 */
+  onExpand: () => void;
+
+  /** 折叠按钮。 */
+  onCollapse: () => void;
+
+  /** 从 review 切到 edit。 */
+  onContinueEdit?: () => void;
+
+  /**
+   * 强制锁死本模块，不允许再提交（例如任务已结案后的 CLOSE 模块）。
+   * 此时即便 view !== 'idle'，也只渲染锁定提示，不渲染 children/review。
+   */
+  locked?: boolean;
+
+  /** 锁定时显示的说明。 */
+  lockedNotice?: ReactNode;
+
+  /** view === 'edit' 时渲染的表单内容。 */
+  children?: ReactNode;
+};
+
+function toneClassName(tone: ActionShellStatusTone) {
+  return `module-status ${tone}`;
+}
+
+function StatusBadge({ label, tone }: { label: string; tone: ActionShellStatusTone }) {
+  return <em className={toneClassName(tone)}>{label}</em>;
+}
+
+function ReviewBody({ result }: { result: ActionShellResult }) {
+  return (
+    <div className="action-shell-review">
+      <header>
+        <span className="review-check">✓</span>
+        <div>
+          <strong>{result.label}</strong>
+          <p>
+            提交时间：{new Date(result.savedAt).toLocaleString('zh-CN', { hour12: false })}
+            ｜处理人：当前护士
+          </p>
+        </div>
+      </header>
+      {result.details.length > 0 && (
+        <ul className="review-details">
+          {result.details.map((item, idx) => (
+            <li key={`${idx}-${item}`}>{item}</li>
+          ))}
+        </ul>
+      )}
+      {result.syncedAlert && (
+        <p className="review-synced-alert">关联风险预警：已同步处置</p>
+      )}
+    </div>
+  );
+}
+
+export function TaskActionShell(props: Props) {
+  const {
+    moduleKey,
+    title,
+    kicker,
+    hint,
+    view,
+    statusLabel,
+    statusTone,
+    result,
+    isSubmitting,
+    collapsedActionText,
+    onExpand,
+    onCollapse,
+    onContinueEdit,
+    locked,
+    lockedNotice,
+    children,
+  } = props;
+
+  // 折叠态：一行式入口卡片
+  if (view === 'idle') {
+    return (
+      <section
+        className={`action-shell idle ${locked ? 'locked' : ''}`}
+        data-module={moduleKey}
+      >
+        <button
+          type="button"
+          className="action-shell-trigger"
+          onClick={onExpand}
+          disabled={locked}
+        >
+          <div className="action-shell-trigger-main">
+            <span className="action-shell-kicker">{kicker}</span>
+            <strong>{title}</strong>
+            <p>{hint}</p>
+          </div>
+          <div className="action-shell-trigger-meta">
+            <StatusBadge label={statusLabel} tone={statusTone} />
+            <small>{locked ? '已结案' : collapsedActionText}</small>
+          </div>
+        </button>
+      </section>
+    );
+  }
+
+  // 锁定态：完全不能再提交（结案后再点 CLOSE 等场景）
+  if (locked) {
+    return (
+      <section
+        className="action-shell locked-state panel"
+        data-module={moduleKey}
+        aria-busy={isSubmitting || false}
+      >
+        <header className="action-shell-header">
+          <div>
+            <span className="action-shell-kicker">{kicker}</span>
+            <h2>{title}</h2>
+            <p className="section-hint">{hint}</p>
+          </div>
+          <StatusBadge label={statusLabel} tone={statusTone} />
+        </header>
+        <div className="submitted-lock-card">
+          {lockedNotice ?? (
+            <>
+              <strong>当前任务已经结案</strong>
+              <p>不能重复提交"完成任务"。如需补充记录，请使用其他模块。</p>
+            </>
+          )}
+        </div>
+        <div className="action-shell-footer">
+          <button
+            type="button"
+            className="secondary-button compact-link-btn"
+            onClick={onCollapse}
+          >
+            收起
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // 复审态：显示已提交摘要 + 继续补充按钮
+  if (view === 'review' && result) {
+    return (
+      <section
+        className="action-shell review-state panel"
+        data-module={moduleKey}
+      >
+        <header className="action-shell-header">
+          <div>
+            <span className="action-shell-kicker">{kicker}</span>
+            <h2>{title}</h2>
+            <p className="section-hint">本次提交结果已锁定。如需更新请明确选择"继续补充记录"。</p>
+          </div>
+          <StatusBadge label={statusLabel} tone={statusTone} />
+        </header>
+        <ReviewBody result={result} />
+        <div className="action-shell-footer">
+          {onContinueEdit && (
+            <button
+              type="button"
+              className="secondary-button compact-link-btn"
+              onClick={onContinueEdit}
+            >
+              继续补充记录
+            </button>
+          )}
+          <button
+            type="button"
+            className="ghost-button compact-link-btn"
+            onClick={onCollapse}
+          >
+            返回摘要
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // 编辑态：渲染表单 + 提交时遮罩
+  return (
+    <section
+      className={`action-shell edit-state panel ${isSubmitting ? 'submitting' : ''}`}
+      data-module={moduleKey}
+      aria-busy={isSubmitting || false}
+    >
+      <header className="action-shell-header">
+        <div>
+          <span className="action-shell-kicker">{kicker}</span>
+          <h2>
+            {result ? `补充记录：${title}` : title}
+          </h2>
+          <p className="section-hint">{hint}</p>
+        </div>
+        <StatusBadge label={statusLabel} tone={statusTone} />
+      </header>
+
+      {result && (
+        <div className="action-shell-prev-result-note">
+          已存在上一次提交（{new Date(result.savedAt).toLocaleString('zh-CN', { hour12: false })}）。
+          本次填写将作为<strong>补充记录</strong>保存，不会覆盖原记录、也不会再次完成任务。
+        </div>
+      )}
+
+      <div className="action-shell-edit-body">{children}</div>
+
+      {isSubmitting && (
+        <div className="action-shell-busy-mask" role="status" aria-live="polite">
+          <div className="action-shell-busy-card">
+            <span className="action-shell-spinner" aria-hidden />
+            <strong>正在保存...</strong>
+            <p>请勿重复提交或关闭页面。</p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 ### FILE: apps/web/src/functional-fixes.css
 
 .field-help {
@@ -16404,6 +16773,7 @@ import './release-hardening-v1.css';
 import './task-followup-risk-disposal.css';
 import './hospital-render-rescue.css';
 import './patient-task-processing.css';
+import './task-workbench-pro.css';
 import './patient-entry-detail-fix.css';
 import './patient-intake-legacy-polish.css';
 import App from './App.tsx';
@@ -16413,8 +16783,6 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
-
-
 
 
 ### FILE: apps/web/src/nurse-dashboard-clickthrough.css
@@ -22249,6 +22617,18 @@ import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
+import {
+  TaskActionShell,
+  type ActionShellResult,
+  type ActionShellStatusTone,
+  type ActionShellViewState,
+} from '../components/TaskActionShell';
+import {
+  TaskActionHistory,
+  type TaskActionHistoryEntry,
+} from '../components/TaskActionHistory';
+
+/* ---------------------------------- 类型 ---------------------------------- */
 
 type Patient = {
   id: string;
@@ -22290,7 +22670,7 @@ type PatientTimelineResponse = {
   timeline: TimelineEvent[];
 };
 
-type HandlingMode = 'PHONE' | 'RECHECK' | 'PLAN' | 'CLOSE';
+type HandlingMode = 'PHONE' | 'RECHECK' | 'VISIT' | 'PLAN' | 'UNREACHABLE' | 'CLOSE';
 
 type VitalMonitoringPlanDraft = {
   vitalType: string;
@@ -22302,6 +22682,8 @@ type VitalMonitoringPlanDraft = {
   customMeasureDays: string;
   evidenceBasis: string;
 };
+
+/* ---------------------------------- 常量 ---------------------------------- */
 
 const nurseId = 'nurse-001';
 
@@ -22333,6 +22715,12 @@ const riskLabelMap: Record<string, string> = {
   VERY_HIGH: '极高危',
 };
 
+const genderLabelMap: Record<string, string> = {
+  MALE: '男',
+  FEMALE: '女',
+  UNKNOWN: '性别未录入',
+};
+
 const vitalTypeLabelMap: Record<string, string> = {
   BLOOD_PRESSURE: '血压（收缩压/舒张压）',
   SYSTOLIC_BP: '收缩压',
@@ -22355,11 +22743,61 @@ const vitalUnitMap: Record<string, string> = {
   LDL_C: 'mmol/L',
 };
 
+const modeMeta: Record<
+  HandlingMode,
+  { kicker: string; title: string; hint: string; defaultStatus: string; collapsedAction: string }
+> = {
+  PHONE: {
+    kicker: '电话随访记录',
+    title: '电话随访沟通',
+    hint: '适合联系患者、记录沟通；保存记录不会自动完成任务。',
+    defaultStatus: '未填写',
+    collapsedAction: '展开填写',
+  },
+  RECHECK: {
+    kicker: '指标复测',
+    title: '新增复测任务',
+    hint: '提醒患者复测血压、血糖、血氧等指标。',
+    defaultStatus: '可选',
+    collapsedAction: '展开创建',
+  },
+  VISIT: {
+    kicker: '门诊复诊',
+    title: '建议门诊复诊',
+    hint: '高危/极高危风险，需要线下就诊。',
+    defaultStatus: '可选',
+    collapsedAction: '展开创建',
+  },
+  PLAN: {
+    kicker: '指标监测计划',
+    title: '调整监测计划',
+    hint: '修改或停用患者端的指标打卡计划。',
+    defaultStatus: '可选',
+    collapsedAction: '展开调整',
+  },
+  UNREACHABLE: {
+    kicker: '联系记录',
+    title: '标记无法联系',
+    hint: '电话未接通、微信未回复时留痕，不结案。',
+    defaultStatus: '未记录',
+    collapsedAction: '展开记录',
+  },
+  CLOSE: {
+    kicker: '任务结案',
+    title: '任务结案 / 风险处置记录',
+    hint: '确认所有处理动作完成后，再统一完成任务并同步处置关联预警。',
+    defaultStatus: '未完成',
+    collapsedAction: '展开结案',
+  },
+};
+
+const allModes: HandlingMode[] = ['PHONE', 'RECHECK', 'VISIT', 'PLAN', 'UNREACHABLE', 'CLOSE'];
+
+/* --------------------------------- 工具函数 -------------------------------- */
+
 function normalizeHandlingMode(value: string | null): HandlingMode | null {
   const normalized = String(value ?? '').toUpperCase();
-  return normalized === 'PHONE' || normalized === 'RECHECK' || normalized === 'PLAN' || normalized === 'CLOSE'
-    ? normalized
-    : null;
+  return (allModes as string[]).includes(normalized) ? (normalized as HandlingMode) : null;
 }
 
 const defaultPlanDraft: VitalMonitoringPlanDraft = {
@@ -22378,9 +22816,25 @@ function formatTime(value?: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
+function formatShortTime(value?: string) {
+  if (!value) return '-';
+  return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
 function maskPhone(value?: string) {
   if (!value || value.length < 7) return value ?? '-';
   return `${value.slice(0, 3)}****${value.slice(-4)}`;
+}
+
+function calculateAge(birthDate?: string) {
+  if (!birthDate) return '-';
+  const birthday = new Date(birthDate);
+  if (Number.isNaN(birthday.getTime())) return '-';
+  const now = new Date();
+  let age = now.getFullYear() - birthday.getFullYear();
+  const monthDiff = now.getMonth() - birthday.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthday.getDate())) age -= 1;
+  return `${age}岁`;
 }
 
 function getStatusClass(status?: string) {
@@ -22421,7 +22875,9 @@ function normalizePlanDraft(plan: any): VitalMonitoringPlanDraft {
     unit: plan?.unit ?? vitalUnitMap[plan?.vitalType] ?? defaultPlanDraft.unit,
     frequencyUnit: plan?.frequencyUnit ?? defaultPlanDraft.frequencyUnit,
     timesPerUnit: String(plan?.timesPerUnit ?? defaultPlanDraft.timesPerUnit),
-    customMeasureTimes: Array.isArray(plan?.customMeasureTimes) ? plan.customMeasureTimes.join(', ') : defaultPlanDraft.customMeasureTimes,
+    customMeasureTimes: Array.isArray(plan?.customMeasureTimes)
+      ? plan.customMeasureTimes.join(', ')
+      : defaultPlanDraft.customMeasureTimes,
     customMeasureDays: Array.isArray(plan?.customMeasureDays) ? plan.customMeasureDays.join(', ') : '',
     evidenceBasis: plan?.evidenceBasis ?? '',
   };
@@ -22431,6 +22887,12 @@ function isOpenTask(task: Task) {
   return task.status === 'PENDING' || task.status === 'IN_PROGRESS';
 }
 
+function isClosedTask(task?: Task | null) {
+  return task?.status === 'DONE' || task?.status === 'CANCELED';
+}
+
+/* ---------------------------------- 主组件 -------------------------------- */
+
 export function PatientTaskProcessingPage() {
   const { patientId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -22439,33 +22901,54 @@ export function PatientTaskProcessingPage() {
   const selectedTaskId = searchParams.get('taskId') ?? '';
   const requestedMode = normalizeHandlingMode(searchParams.get('mode'));
 
+  /* ---------- 加载与数据 state ---------- */
+
   const [patient, setPatient] = useState<Patient | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [mode, setMode] = useState<HandlingMode>(requestedMode ?? 'PHONE');
+
+  /* ---------- 处理状态 state ---------- */
+
+  // 每个模块的展示状态：undefined = 折叠
+  const [moduleView, setModuleView] = useState<Partial<Record<HandlingMode, ActionShellViewState>>>({});
+  // 提交结果（每个模块最新一次的提交摘要）
+  const [actionResults, setActionResults] = useState<Partial<Record<HandlingMode, ActionShellResult>>>({});
+  // 本次会话内所有提交记录（按时间顺序）
+  const [actionHistory, setActionHistory] = useState<TaskActionHistoryEntry[]>([]);
+  // 提交中的模块
+  const [submittingMode, setSubmittingMode] = useState<HandlingMode | null>(null);
+  // 顶部成功提示（最近一次提交的结果），可关闭
+  const [pageResult, setPageResult] = useState<
+    (ActionShellResult & { mode: HandlingMode; moduleTitle: string }) | null
+  >(null);
+
+  /* ---------- 表单 state ---------- */
 
   const [callOutcome, setCallOutcome] = useState('CONTACTED');
+  const [callConclusion, setCallConclusion] = useState('CONTINUE_OBSERVE');
   const [callContent, setCallContent] = useState('');
   const [followUpResult, setFollowUpResult] = useState('');
   const [nursingAdvice, setNursingAdvice] = useState('');
   const [nextFollowUpTime, setNextFollowUpTime] = useState('');
   const [signature, setSignature] = useState('');
-  const [completeTaskAfterSubmit, setCompleteTaskAfterSubmit] = useState(true);
-  const [syncRelatedAlert, setSyncRelatedAlert] = useState(false);
-  const [relatedAlertHandlingNote, setRelatedAlertHandlingNote] = useState('');
 
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [planDraft, setPlanDraft] = useState<VitalMonitoringPlanDraft>(defaultPlanDraft);
   const [recheckTitle, setRecheckTitle] = useState('');
   const [recheckDueAt, setRecheckDueAt] = useState('');
   const [recheckNote, setRecheckNote] = useState('');
+  const [visitReason, setVisitReason] = useState('');
+  const [visitNote, setVisitNote] = useState('');
+  const [unableContactChannel, setUnableContactChannel] = useState('PHONE');
+  const [unableContactNote, setUnableContactNote] = useState('');
   const [closeStatus, setCloseStatus] = useState<'DONE' | 'CANCELED'>('DONE');
   const [closeNote, setCloseNote] = useState('');
   const [closeSyncAlert, setCloseSyncAlert] = useState(true);
+  const [closeSignature, setCloseSignature] = useState('');
+
+  /* ---------- 数据加载 ---------- */
 
   async function loadPage() {
     if (!patientId) return;
@@ -22495,10 +22978,7 @@ export function PatientTaskProcessingPage() {
     loadPage();
   }, [patientId]);
 
-  useEffect(() => {
-    if (!requestedMode) return;
-    setMode(requestedMode);
-  }, [requestedMode]);
+  /* ---------- 任务列表与选中 ---------- */
 
   const openTasks = useMemo(() => tasks.filter(isOpenTask), [tasks]);
   const sortedTasks = useMemo(() => {
@@ -22517,33 +22997,76 @@ export function PatientTaskProcessingPage() {
     return tasks.find((task) => task.id === selectedTaskId) ?? openTasks[0] ?? tasks[0] ?? null;
   }, [openTasks, selectedTaskId, tasks]);
 
+  const nextOpenTask = useMemo(() => {
+    if (!selectedTask) return openTasks[0] ?? null;
+    return openTasks.find((task) => task.id !== selectedTask.id) ?? null;
+  }, [openTasks, selectedTask]);
+
   useEffect(() => {
     if (!selectedTask || selectedTaskId === selectedTask.id) return;
     const next = new URLSearchParams(searchParams);
     next.set('taskId', selectedTask.id);
-    next.set('mode', mode.toLowerCase());
     setSearchParams(next, { replace: true });
-  }, [mode, searchParams, selectedTask, selectedTaskId, setSearchParams]);
+  }, [searchParams, selectedTask, selectedTaskId, setSearchParams]);
 
   const relatedAlert = useMemo(() => {
     if (!selectedTask?.relatedAlertId) return null;
-    return timeline.find((item) => item.type === 'RISK_ALERT' && item.data?.id === selectedTask.relatedAlertId) ?? null;
+    return (
+      timeline.find(
+        (item) => item.type === 'RISK_ALERT' && item.data?.id === selectedTask.relatedAlertId,
+      ) ?? null
+    );
   }, [selectedTask, timeline]);
 
-  const recentVitals = useMemo(() => timeline.filter((item) => item.type === 'VITAL_RECORD').slice(0, 8), [timeline]);
-  const monitoringPlans = useMemo(() => timeline.filter((item) => item.type === 'VITAL_MONITORING_PLAN'), [timeline]);
-  const activeMonitoringPlans = useMemo(() => monitoringPlans.filter((item) => item.data?.isActive !== false), [monitoringPlans]);
-  const followUps = useMemo(() => timeline.filter((item) => item.type === 'FOLLOW_UP').slice(0, 5), [timeline]);
+  const recentVitals = useMemo(
+    () => timeline.filter((item) => item.type === 'VITAL_RECORD').slice(0, 8),
+    [timeline],
+  );
+  const monitoringPlans = useMemo(
+    () => timeline.filter((item) => item.type === 'VITAL_MONITORING_PLAN'),
+    [timeline],
+  );
+  const activeMonitoringPlans = useMemo(
+    () => monitoringPlans.filter((item) => item.data?.isActive !== false),
+    [monitoringPlans],
+  );
+  const followUps = useMemo(
+    () => timeline.filter((item) => item.type === 'FOLLOW_UP').slice(0, 5),
+    [timeline],
+  );
+
+  /* ---------- 任务切换时重置编辑状态 ---------- */
 
   useEffect(() => {
     if (!selectedTask) return;
-    setCallContent(`围绕待办事项“${selectedTask.title}”电话联系患者，核对症状、用药、复测和复诊情况。`);
+    setCallContent(`围绕待办事项"${selectedTask.title}"电话联系患者，核对症状、用药、复测和复诊情况。`);
     setFollowUpResult('已电话联系，待补充患者反馈。');
     setNursingAdvice('请患者按要求复测/用药/复诊，如出现危险症状及时就医。');
     setRecheckTitle(`复测提醒：${selectedTask.title.replace(/^风险随访任务：/, '')}`);
-    setRelatedAlertHandlingNote(selectedTask.relatedAlertId ? '已通过统一任务处理页完成电话随访，并同步处置关联风险预警。' : '');
-    setSyncRelatedAlert(Boolean(selectedTask.relatedAlertId));
+    setVisitReason(
+      relatedAlert
+        ? `因${localizeBackendText(relatedAlert.title)}建议门诊复诊`
+        : `因待办事项"${selectedTask.title}"建议门诊复诊`,
+    );
+    setVisitNote(
+      relatedAlert?.description
+        ? `风险依据：${localizeBackendText(relatedAlert.description)}`
+        : '请患者携带近期居家监测记录到院复核。',
+    );
+    setUnableContactNote(`围绕"${selectedTask.title}"联系患者未成功，需后续再次联系。`);
+    setCloseNote(
+      selectedTask.relatedAlertId
+        ? '已完成沟通/复测/复诊提醒等处理动作，确认结案并同步处置关联风险预警。'
+        : '已完成该待办事项处理，确认结案。',
+    );
     setCloseSyncAlert(Boolean(selectedTask.relatedAlertId));
+
+    // 切换任务时：清空模块展开态、清空提交记录、清空历史
+    setModuleView({});
+    setActionResults({});
+    setActionHistory([]);
+    setPageResult(null);
+    setError('');
   }, [selectedTask?.id]);
 
   useEffect(() => {
@@ -22554,19 +23077,51 @@ export function PatientTaskProcessingPage() {
     }
   }, [activeMonitoringPlans, selectedPlanId]);
 
-  function selectTask(taskId: string) {
-    const next = new URLSearchParams(searchParams);
-    next.set('taskId', taskId);
-    next.set('mode', mode.toLowerCase());
-    setSearchParams(next);
+  /* ---------- 如果 URL 指定 mode，自动展开对应模块 ---------- */
+
+  useEffect(() => {
+    if (!requestedMode || !selectedTask) return;
+    setModuleView((current) => ({ ...current, [requestedMode]: current[requestedMode] ?? 'edit' }));
+  }, [requestedMode, selectedTask?.id]);
+
+  /* ---------- 模块视图状态切换 ---------- */
+
+  function openModule(mode: HandlingMode) {
+    if (isClosedTask(selectedTask) && mode === 'CLOSE') return;
+    setError('');
+    setModuleView((current) => ({
+      ...current,
+      // 已提交过的进入 review，未提交的直接进入 edit
+      [mode]: actionResults[mode] ? 'review' : 'edit',
+    }));
   }
 
-  function changeMode(nextMode: HandlingMode) {
-    setMode(nextMode);
-    const next = new URLSearchParams(searchParams);
-    if (selectedTask?.id) next.set('taskId', selectedTask.id);
-    next.set('mode', nextMode.toLowerCase());
-    setSearchParams(next, { replace: true });
+  function collapseModule(mode: HandlingMode) {
+    setModuleView((current) => {
+      const next = { ...current };
+      delete next[mode];
+      return next;
+    });
+  }
+
+  function continueEdit(mode: HandlingMode) {
+    setError('');
+    setModuleView((current) => ({ ...current, [mode]: 'edit' }));
+  }
+
+  function recordAction(mode: HandlingMode, result: ActionShellResult) {
+    setActionResults((current) => ({ ...current, [mode]: result }));
+    setActionHistory((current) => [
+      ...current,
+      { ...result, mode, moduleTitle: modeMeta[mode].title },
+    ]);
+    // 提交成功后立即折叠该模块
+    setModuleView((current) => {
+      const next = { ...current };
+      delete next[mode];
+      return next;
+    });
+    setPageResult({ ...result, mode, moduleTitle: modeMeta[mode].title });
   }
 
   function choosePlan(planId: string) {
@@ -22575,7 +23130,10 @@ export function PatientTaskProcessingPage() {
     setPlanDraft(normalizePlanDraft(plan));
   }
 
-  function updatePlanDraft<K extends keyof VitalMonitoringPlanDraft>(key: K, value: VitalMonitoringPlanDraft[K]) {
+  function updatePlanDraft<K extends keyof VitalMonitoringPlanDraft>(
+    key: K,
+    value: VitalMonitoringPlanDraft[K],
+  ) {
     setPlanDraft((current) => ({ ...current, [key]: value }));
   }
 
@@ -22588,32 +23146,66 @@ export function PatientTaskProcessingPage() {
     }));
   }
 
+  async function markTaskInProgressIfNeeded(task: Task) {
+    if (task.status !== 'PENDING') return;
+    await api.patch(`/tasks/${task.id}/status`, {
+      status: 'IN_PROGRESS',
+      syncRelatedAlert: false,
+    });
+  }
+
+  function requireSignature(value: string, message: string) {
+    if (!value.trim()) {
+      setError(message);
+      return false;
+    }
+    return true;
+  }
+
+  function selectTask(taskId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set('taskId', taskId);
+    setSearchParams(next);
+  }
+
+  function goToNextTask() {
+    if (!nextOpenTask) {
+      navigate('/nurse-dashboard');
+      return;
+    }
+    selectTask(nextOpenTask.id);
+    setPageResult(null);
+  }
+
+  /* ------------------------------- 提交动作 -------------------------------- */
+
   async function submitPhoneFollowUp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!patientId || !selectedTask || submitting) return;
+    if (!patientId || !selectedTask || submittingMode) return;
 
     const trimmedSignature = signature.trim();
-    if (!trimmedSignature) {
-      setError('请填写电子签名后再提交电话随访记录。');
-      return;
-    }
-    if (completeTaskAfterSubmit && syncRelatedAlert && selectedTask.relatedAlertId && !relatedAlertHandlingNote.trim()) {
-      setError('已选择同步处置关联预警，请填写预警处置记录。');
-      return;
-    }
+    if (!requireSignature(trimmedSignature, '请填写电子签名后再保存电话随访记录。')) return;
 
-    setSubmitting(true);
-    setMessage('');
+    setSubmittingMode('PHONE');
     setError('');
 
     try {
-      const outcomeLabel = callOutcome === 'CONTACTED'
-        ? '已接通'
-        : callOutcome === 'NO_ANSWER'
-          ? '未接通'
-          : callOutcome === 'FAMILY_CONTACTED'
-            ? '已联系家属'
-            : '需再次联系';
+      const outcomeLabel =
+        callOutcome === 'CONTACTED'
+          ? '已接通本人'
+          : callOutcome === 'NO_ANSWER'
+            ? '未接通'
+            : callOutcome === 'FAMILY_CONTACTED'
+              ? '已联系家属'
+              : '需再次联系';
+      const conclusionLabel =
+        callConclusion === 'RECHECK'
+          ? '建议复测'
+          : callConclusion === 'VISIT'
+            ? '建议复诊'
+            : callConclusion === 'URGENT'
+              ? '建议立即就医'
+              : '继续观察';
 
       await api.post(`/patients/${patientId}/follow-ups`, {
         followUpType: 'PHONE',
@@ -22621,46 +23213,52 @@ export function PatientTaskProcessingPage() {
         content: [
           `统一任务处理：${selectedTask.title}`,
           `联系结果：${outcomeLabel}`,
+          `处理结论：${conclusionLabel}`,
           callContent.trim(),
           relatedAlert ? `关联预警：${localizeBackendText(relatedAlert.title)}` : '',
           `电子签名：${trimmedSignature}`,
-        ].filter(Boolean).join('；'),
+        ]
+          .filter(Boolean)
+          .join('；'),
         result: followUpResult.trim() || outcomeLabel,
         suggestion: nursingAdvice.trim() || undefined,
         nextFollowUpTime: nextFollowUpTime ? new Date(nextFollowUpTime).toISOString() : undefined,
         operatorId: nurseId,
       });
 
-      if (completeTaskAfterSubmit) {
-        await api.patch(`/tasks/${selectedTask.id}/status`, {
-          status: 'DONE',
-          syncRelatedAlert: syncRelatedAlert && Boolean(selectedTask.relatedAlertId),
-          relatedAlertHandlingNote: syncRelatedAlert && selectedTask.relatedAlertId
-            ? [`处置记录：${relatedAlertHandlingNote.trim()}`, `电子签名：${trimmedSignature}`].join('；')
-            : undefined,
-        });
-      }
+      await markTaskInProgressIfNeeded(selectedTask);
 
-      setMessage(completeTaskAfterSubmit ? '电话随访已保存，当前任务已完成。' : '电话随访已保存，当前任务状态未变更。');
+      const savedAt = new Date().toISOString();
+      recordAction('PHONE', {
+        label: isClosedTask(selectedTask) ? '补充随访记录已保存' : '电话随访记录已保存',
+        savedAt,
+        statusText: `已保存 ${formatShortTime(savedAt)}`,
+        details: [
+          `联系结果：${outcomeLabel}`,
+          `处理结论：${conclusionLabel}`,
+          isClosedTask(selectedTask)
+            ? '任务已结案，本次仅作为补充随访记录。'
+            : '任务状态刷新为处理中，未自动结案。',
+        ],
+      });
       await loadPage();
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '电话随访提交失败，请稍后重试。'));
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
     }
   }
 
   async function createRecheckTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!patientId || !selectedTask || submitting) return;
+    if (!patientId || !selectedTask || submittingMode) return;
     if (!recheckTitle.trim()) {
       setError('请填写复测任务标题。');
       return;
     }
 
-    setSubmitting(true);
-    setMessage('');
+    setSubmittingMode('RECHECK');
     setError('');
 
     try {
@@ -22683,22 +23281,73 @@ export function PatientTaskProcessingPage() {
         });
       }
 
-      setMessage('复测任务已新增，可在当前任务处理页继续电话沟通或完成原任务。');
+      await markTaskInProgressIfNeeded(selectedTask);
+      const savedAt = new Date().toISOString();
+      recordAction('RECHECK', {
+        label: '复测任务已创建',
+        savedAt,
+        statusText: `已创建 ${formatShortTime(savedAt)}`,
+        details: [
+          `复测任务：${recheckTitle.trim()}`,
+          recheckDueAt ? `截止：${formatTime(new Date(recheckDueAt).toISOString())}` : '未设置截止时间',
+          '原任务未自动结案，可继续电话沟通或在结案模块完成任务。',
+        ],
+      });
       await loadPage();
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '新增复测任务失败，请稍后重试。'));
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
+    }
+  }
+
+  async function createHospitalVisitReminder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!patientId || !selectedTask || submittingMode) return;
+    if (!visitReason.trim()) {
+      setError('请填写复诊提醒原因。');
+      return;
+    }
+
+    setSubmittingMode('VISIT');
+    setError('');
+
+    try {
+      await api.post(`/patients/${patientId}/hospital-visit-reminders`, {
+        sourceRiskAlertId: selectedTask.relatedAlertId || undefined,
+        reason: visitReason.trim(),
+        note: visitNote.trim() || undefined,
+        electronicSignature: signature.trim() || closeSignature.trim() || 'nurse-001',
+      });
+
+      await markTaskInProgressIfNeeded(selectedTask);
+      const savedAt = new Date().toISOString();
+      recordAction('VISIT', {
+        label: '门诊复诊提醒已创建',
+        savedAt,
+        statusText: `已创建 ${formatShortTime(savedAt)}`,
+        details: [
+          `复诊原因：${visitReason.trim()}`,
+          '原任务未自动结案；患者到院或护士确认后，可在结案模块完成任务。',
+        ],
+      });
+      await loadPage();
+    } catch (err) {
+      console.error(err);
+      setError(
+        getApiErrorMessage(err, '创建门诊复诊提醒失败，请确认到院提醒模块已挂载。'),
+      );
+    } finally {
+      setSubmittingMode(null);
     }
   }
 
   async function updateMonitoringPlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedPlanId || submitting) return;
+    if (!selectedTask || !selectedPlanId || submittingMode) return;
 
-    setSubmitting(true);
-    setMessage('');
+    setSubmittingMode('PLAN');
     setError('');
 
     try {
@@ -22709,31 +23358,52 @@ export function PatientTaskProcessingPage() {
         frequencyUnit: planDraft.frequencyUnit,
         timesPerUnit: Number(planDraft.timesPerUnit),
         customMeasureTimes: parseTimeList(planDraft.customMeasureTimes),
-        customMeasureDays: planDraft.frequencyUnit === 'DAY' ? [] : parseDayList(planDraft.customMeasureDays),
+        customMeasureDays:
+          planDraft.frequencyUnit === 'DAY' ? [] : parseDayList(planDraft.customMeasureDays),
         evidenceBasis: planDraft.evidenceBasis || undefined,
         evidenceSource: planDraft.evidenceBasis ? '护士任务处理页调整' : undefined,
       });
-      setMessage('指标监测计划已更新。');
+
+      await markTaskInProgressIfNeeded(selectedTask);
+      const savedAt = new Date().toISOString();
+      recordAction('PLAN', {
+        label: '指标监测计划已更新',
+        savedAt,
+        statusText: `已保存 ${formatShortTime(savedAt)}`,
+        details: [
+          `计划：${planDraft.displayName}`,
+          `${planDraft.timesPerUnit} 次 / ${
+            planDraft.frequencyUnit === 'DAY' ? '日' : planDraft.frequencyUnit === 'WEEK' ? '周' : '月'
+          }`,
+          '原任务未自动结案。',
+        ],
+      });
       await loadPage();
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '监测计划更新失败，请稍后重试。'));
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
     }
   }
 
   async function deactivateMonitoringPlan() {
-    if (!selectedPlanId || submitting) return;
+    if (!selectedTask || !selectedPlanId || submittingMode) return;
     if (!window.confirm('确认停用该指标监测计划？停用后患者端不再按该计划提醒。')) return;
 
-    setSubmitting(true);
-    setMessage('');
+    setSubmittingMode('PLAN');
     setError('');
 
     try {
       await api.delete(`/vital-monitoring-plans/${selectedPlanId}`);
-      setMessage('指标监测计划已停用。');
+      await markTaskInProgressIfNeeded(selectedTask);
+      const savedAt = new Date().toISOString();
+      recordAction('PLAN', {
+        label: '指标监测计划已停用',
+        savedAt,
+        statusText: `已停用 ${formatShortTime(savedAt)}`,
+        details: ['患者端后续不再按该计划提醒。', '原任务未自动结案。'],
+      });
       setSelectedPlanId('');
       setPlanDraft(defaultPlanDraft);
       await loadPage();
@@ -22741,37 +23411,121 @@ export function PatientTaskProcessingPage() {
       console.error(err);
       setError(getApiErrorMessage(err, '停用监测计划失败，请稍后重试。'));
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
+    }
+  }
+
+  async function saveUnableContact(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!patientId || !selectedTask || submittingMode) return;
+    if (!unableContactNote.trim()) {
+      setError('请填写无法联系记录。');
+      return;
+    }
+
+    setSubmittingMode('UNREACHABLE');
+    setError('');
+
+    try {
+      const channelLabel =
+        unableContactChannel === 'PHONE'
+          ? '电话'
+          : unableContactChannel === 'WECHAT'
+            ? '微信'
+            : '电话+微信';
+      await api.post(`/patients/${patientId}/follow-ups`, {
+        followUpType: unableContactChannel === 'WECHAT' ? 'WECHAT' : 'PHONE',
+        followUpTime: new Date().toISOString(),
+        content: `统一任务处理：${selectedTask.title}；联系渠道：${channelLabel}；无法联系记录：${unableContactNote.trim()}`,
+        result: '暂未联系成功。',
+        suggestion: '保留任务为处理中，后续继续联系患者或家属。',
+        operatorId: nurseId,
+      });
+
+      await markTaskInProgressIfNeeded(selectedTask);
+      const savedAt = new Date().toISOString();
+      recordAction('UNREACHABLE', {
+        label: '无法联系记录已保存',
+        savedAt,
+        statusText: `已记录 ${formatShortTime(savedAt)}`,
+        details: [`联系渠道：${channelLabel}`, '任务未结案，状态刷新为处理中。'],
+      });
+      await loadPage();
+    } catch (err) {
+      console.error(err);
+      setError(getApiErrorMessage(err, '无法联系记录保存失败，请稍后重试。'));
+    } finally {
+      setSubmittingMode(null);
     }
   }
 
   async function closeTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedTask || submitting) return;
+    if (!selectedTask || submittingMode || isClosedTask(selectedTask)) return;
     if (!closeNote.trim()) {
       setError('请填写任务处理记录。');
       return;
     }
+    if (!requireSignature(closeSignature.trim(), '请填写电子签名后再提交结案。')) return;
 
-    setSubmitting(true);
-    setMessage('');
+    setSubmittingMode('CLOSE');
     setError('');
 
     try {
       await api.patch(`/tasks/${selectedTask.id}/status`, {
         status: closeStatus,
         syncRelatedAlert: closeSyncAlert && Boolean(selectedTask.relatedAlertId),
-        relatedAlertHandlingNote: closeNote.trim(),
+        relatedAlertHandlingNote: [
+          `处置记录：${closeNote.trim()}`,
+          `电子签名：${closeSignature.trim()}`,
+        ].join('；'),
       });
-      setMessage(closeStatus === 'DONE' ? '任务已完成。' : '任务已取消，并已按选择同步处理关联预警。');
+      const savedAt = new Date().toISOString();
+      recordAction('CLOSE', {
+        label: closeStatus === 'DONE' ? '任务处理已完成' : '任务已取消',
+        savedAt,
+        statusText:
+          closeStatus === 'DONE'
+            ? `已完成 ${formatShortTime(savedAt)}`
+            : `已取消 ${formatShortTime(savedAt)}`,
+        syncedAlert: closeSyncAlert && Boolean(selectedTask.relatedAlertId),
+        details: [
+          closeStatus === 'DONE' ? '待办任务已标记为已完成。' : '待办任务已标记为已取消。',
+          closeSyncAlert && selectedTask.relatedAlertId
+            ? '关联风险预警已同步处置。'
+            : '关联风险预警未同步变更。',
+          '处理记录已保存到任务/预警留痕。',
+          '已生成审计记录。',
+        ],
+      });
       await loadPage();
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '任务状态更新失败，请稍后重试。'));
     } finally {
-      setSubmitting(false);
+      setSubmittingMode(null);
     }
   }
+
+  /* ---------- 模块状态与色调 ---------- */
+
+  function getModuleStatusLabel(mode: HandlingMode) {
+    const result = actionResults[mode];
+    if (result?.statusText) return result.statusText;
+    if (mode === 'CLOSE' && selectedTask?.status === 'DONE') return '已完成';
+    if (mode === 'CLOSE' && selectedTask?.status === 'CANCELED') return '已取消';
+    if (mode === 'PHONE' && followUps.length > 0) return `已有 ${followUps.length} 条记录`;
+    return modeMeta[mode].defaultStatus;
+  }
+
+  function getModuleStatusTone(mode: HandlingMode): ActionShellStatusTone {
+    if (actionResults[mode] || (mode === 'CLOSE' && isClosedTask(selectedTask))) return 'saved';
+    if (mode === 'PHONE' && followUps.length > 0) return 'in-progress';
+    if (mode === 'CLOSE' && selectedTask?.relatedAlertId) return 'alert-linked';
+    return 'pending';
+  }
+
+  /* ---------- 渲染 ---------- */
 
   if (loading && !patient) {
     return <div className="loading-state">正在加载患者任务处理页...</div>;
@@ -22781,63 +23535,163 @@ export function PatientTaskProcessingPage() {
     return (
       <div className="business-page patient-task-processing-page">
         <div className="empty-state">患者任务处理页加载失败。</div>
-        <button className="secondary-btn" type="button" onClick={() => navigate('/nurse-dashboard')}>返回护士工作台</button>
+        <button
+          className="secondary-btn"
+          type="button"
+          onClick={() => navigate('/nurse-dashboard')}
+        >
+          返回护士工作台
+        </button>
       </div>
     );
   }
 
+  const taskIsClosed = isClosedTask(selectedTask);
+
   return (
-    <div className="business-page patient-task-processing-page">
-      <div className="page-header clean-page-header task-processing-hero">
-        <div>
-          <div className="page-kicker">患者详情 / 任务处理</div>
-          <h1>统一任务处理页</h1>
-          <p className="page-subtitle">任务、风险预警和随访记录统一在患者详情下处理。先选择任务，再选择处理方式；不同方式展开对应的医院业务表格和信息区。</p>
+    <div className="business-page patient-task-processing-page compact-task-workbench task-workbench-pro">
+      {/* 顶部紧凑信息条 */}
+      <div className="task-workbench-topbar">
+        <div className="task-workbench-patient-line">
+          <strong>{patient.name}</strong>
+          <span>{genderLabelMap[patient.gender ?? 'UNKNOWN'] ?? patient.gender}</span>
+          <span>{calculateAge(patient.birthDate)}</span>
+          <span>{patient.hospitalPatientId ?? '院内号未录入'}</span>
+          <span>电话 {maskPhone(patient.phone)}</span>
         </div>
-        <div className="task-processing-header-actions">
-          <Link className="secondary-btn" to="/nurse-dashboard">返回护士工作台</Link>
-          <Link className="secondary-btn" to={`/patients/${patient.id}`}>返回患者详情</Link>
+        <div className="task-workbench-actions">
+          <Link className="secondary-btn compact-link-btn" to="/nurse-dashboard">
+            返回待办任务
+          </Link>
+          <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
+            查看患者档案
+          </Link>
         </div>
       </div>
 
-      {message && <div className="notice-success operation-inline-success" role="status">{message}</div>}
-      {error && <div className="notice-error operation-inline-error" role="alert">{error}</div>}
+      {/* 任务 + 关联预警信息带 */}
+      {selectedTask && (
+        <section className="task-workbench-summary-strip">
+          <div className="summary-strip-block task-strip-main">
+            <span>当前任务</span>
+            <strong>{selectedTask.title}</strong>
+            <p>
+              {taskTypeLabelMap[selectedTask.type] ?? selectedTask.type}｜截止{' '}
+              {formatTime(selectedTask.dueAt)}｜状态{' '}
+              {statusLabelMap[selectedTask.status] ?? selectedTask.status}
+            </p>
+          </div>
+          <div className="summary-strip-status">
+            <span className={getStatusClass(selectedTask.status)}>
+              {statusLabelMap[selectedTask.status] ?? selectedTask.status}
+            </span>
+          </div>
+          {relatedAlert ? (
+            <div className="summary-strip-block alert-strip-main">
+              <span>关联风险预警</span>
+              <strong>
+                {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}｜
+                {localizeBackendText(relatedAlert.title)}
+              </strong>
+              <p>
+                {localizeBackendText(relatedAlert.description)}{' '}
+                {relatedAlert.data?.triggerRule
+                  ? `｜触发规则：${relatedAlert.data.triggerRule}`
+                  : ''}
+              </p>
+            </div>
+          ) : (
+            <div className="summary-strip-block alert-strip-main muted">
+              <span>关联风险预警</span>
+              <strong>无关联预警</strong>
+              <p>该任务按普通随访/提醒流程处理。</p>
+            </div>
+          )}
+        </section>
+      )}
 
-      <section className="task-processing-patient-strip panel">
-        <div className="task-processing-patient-main">
-          <span>当前患者</span>
-          <strong>{patient.name}</strong>
-          <p>院内号：{patient.hospitalPatientId ?? '-'} · 电话：{maskPhone(patient.phone)} · 责任护士：{patient.responsibleNurseId ?? '-'}</p>
+      {/* 错误提示 */}
+      {error && (
+        <div className="notice-error operation-inline-error" role="alert">
+          {error}
         </div>
-        <div className="task-processing-patient-meta">
-          <div><span>待处理任务</span><strong>{openTasks.length}</strong></div>
-          <div><span>最近指标</span><strong>{recentVitals.length}</strong></div>
-          <div><span>随访记录</span><strong>{followUps.length}</strong></div>
-        </div>
-      </section>
+      )}
 
-      <div className="task-processing-layout">
-        <aside className="task-processing-sidebar panel">
+      {/* 顶部成功提示 - 可关闭 + 下一条任务 */}
+      {pageResult && (
+        <section className="task-result-summary-card pro-result-card" role="status">
+          <div className="result-check-wrap">
+            <span className="result-check">✓</span>
+          </div>
+          <div className="result-body">
+            <h2>{pageResult.label}</h2>
+            <p>
+              {pageResult.moduleTitle}｜提交时间：{formatTime(pageResult.savedAt)}｜处理人：当前护士
+            </p>
+            <ul>
+              {pageResult.details.map((item, idx) => (
+                <li key={`${idx}-${item}`}>{item}</li>
+              ))}
+            </ul>
+            <div className="result-actions">
+              {nextOpenTask ? (
+                <button className="primary-btn compact-link-btn" type="button" onClick={goToNextTask}>
+                  继续处理下一条任务（剩余 {openTasks.length} 条）
+                </button>
+              ) : (
+                <Link className="primary-btn compact-link-btn" to="/nurse-dashboard">
+                  全部完成，返回工作台
+                </Link>
+              )}
+              <Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>
+                查看患者档案
+              </Link>
+              <button
+                className="ghost-button compact-link-btn"
+                type="button"
+                onClick={() => setPageResult(null)}
+              >
+                关闭提示，继续处理当前任务
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="task-processing-layout task-workbench-layout">
+        {/* 左侧任务队列 */}
+        <aside className="task-processing-sidebar panel compact-panel">
           <div className="hospital-section-header compact-header">
             <div>
-              <span>任务队列</span>
-              <h2>选择需要处理的任务</h2>
+              <span>患者任务队列</span>
+              <h2>选择任务</h2>
             </div>
           </div>
 
           {sortedTasks.length === 0 ? (
             <div className="empty-state compact-empty">当前患者暂无任务。</div>
           ) : (
-            <div className="task-processing-task-list">
+            <div className="task-processing-task-list compact-task-list">
               {sortedTasks.map((task) => {
                 const isSelected = selectedTask?.id === task.id;
                 return (
-                  <button key={task.id} type="button" className={isSelected ? 'task-processing-task-card active' : 'task-processing-task-card'} onClick={() => selectTask(task.id)}>
+                  <button
+                    key={task.id}
+                    type="button"
+                    className={
+                      isSelected ? 'task-processing-task-card active' : 'task-processing-task-card'
+                    }
+                    onClick={() => selectTask(task.id)}
+                  >
                     <span className="badge">{taskTypeLabelMap[task.type] ?? task.type}</span>
                     <strong>{task.title}</strong>
                     <small>截止：{formatTime(task.dueAt)}</small>
-                    <em className={getStatusClass(task.status)}>{statusLabelMap[task.status] ?? task.status}</em>
-                    {task.relatedAlertId && <small className="task-related-alert-hint">已关联风险预警</small>}
+                    <em className={getStatusClass(task.status)}>
+                      {statusLabelMap[task.status] ?? task.status}
+                    </em>
+                    {task.relatedAlertId && (
+                      <small className="task-related-alert-hint">已合并风险预警</small>
+                    )}
                   </button>
                 );
               })}
@@ -22845,76 +23699,177 @@ export function PatientTaskProcessingPage() {
           )}
         </aside>
 
-        <main className="task-processing-main">
+        {/* 右侧主区 */}
+        <main className="task-processing-main task-workbench-main">
           {!selectedTask ? (
-            <section className="panel"><div className="empty-state">请选择一个任务后继续处理。</div></section>
+            <section className="panel">
+              <div className="empty-state">请选择一个任务后继续处理。</div>
+            </section>
           ) : (
             <>
-              <section className="panel selected-task-overview-card">
+              {/* 处理摘要：紧凑、一眼可见 */}
+              <section className="panel task-process-summary-panel">
                 <div className="hospital-section-header compact-header">
                   <div>
-                    <span>当前处理任务</span>
-                    <h2>{selectedTask.title}</h2>
-                    <p className="section-hint">{taskTypeLabelMap[selectedTask.type] ?? selectedTask.type} · {statusLabelMap[selectedTask.status] ?? selectedTask.status} · 截止 {formatTime(selectedTask.dueAt)}</p>
+                    <span>处理摘要</span>
+                    <h2>先确认任务与风险，再选择处理方式</h2>
+                    <p className="section-hint">
+                      所有表单默认折叠；只有点击模块才展开填写。提交成功后立即折叠并锁定本次结果。
+                    </p>
                   </div>
-                  <span className={getStatusClass(selectedTask.status)}>{statusLabelMap[selectedTask.status] ?? selectedTask.status}</span>
                 </div>
-
-                {relatedAlert && (
-                  <div className="selected-task-alert-box">
-                    <span className={getRiskClass(relatedAlert.data?.riskLevel)}>{riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}</span>
-                    <div>
-                      <strong>{localizeBackendText(relatedAlert.title)}</strong>
-                      <p>{localizeBackendText(relatedAlert.description)} {relatedAlert.data?.triggerRule ? `触发依据：${relatedAlert.data.triggerRule}` : ''}</p>
-                    </div>
+                <div className="task-summary-mini-grid">
+                  <div>
+                    <span>任务状态</span>
+                    <strong>{statusLabelMap[selectedTask.status] ?? selectedTask.status}</strong>
                   </div>
-                )}
+                  <div>
+                    <span>任务类型</span>
+                    <strong>{taskTypeLabelMap[selectedTask.type] ?? selectedTask.type}</strong>
+                  </div>
+                  <div>
+                    <span>关联预警</span>
+                    <strong>{selectedTask.relatedAlertId ? '已合并' : '无'}</strong>
+                  </div>
+                  <div>
+                    <span>本次提交</span>
+                    <strong>{actionHistory.length} 项</strong>
+                  </div>
+                </div>
               </section>
 
-              <section className="panel task-processing-mode-card">
+              {/* 关联风险预警（高优先级展示） */}
+              {relatedAlert && (
+                <section className="panel related-alert-strong-card">
+                  <div className="related-alert-title-row">
+                    <span className={getRiskClass(relatedAlert.data?.riskLevel)}>
+                      {riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}
+                    </span>
+                    <div>
+                      <h2>关联风险预警：{localizeBackendText(relatedAlert.title)}</h2>
+                      <p>
+                        当前状态：
+                        {statusLabelMap[relatedAlert.data?.status] ??
+                          relatedAlert.data?.status ??
+                          '未处理'}
+                      </p>
+                    </div>
+                  </div>
+                  <p>{localizeBackendText(relatedAlert.description)}</p>
+                  {relatedAlert.data?.triggerRule && (
+                    <p className="alert-trigger-line">触发规则：{relatedAlert.data.triggerRule}</p>
+                  )}
+                  {relatedAlert.data?.handlingNote && (
+                    <p className="alert-trigger-line">既往处置：{relatedAlert.data.handlingNote}</p>
+                  )}
+                </section>
+              )}
+
+              {/* 处理方式卡片选择区 */}
+              <section className="panel task-processing-mode-card compact-action-card-panel">
                 <div className="hospital-section-header compact-header">
                   <div>
                     <span>处理方式</span>
-                    <h2>选择本次处理动作</h2>
-                    <p className="section-hint">选中后展开相应表格；电话沟通、复测任务、指标计划调整和任务关闭都在同一页完成。</p>
+                    <h2>选择一个动作展开填写</h2>
+                    <p className="section-hint">
+                      每个模块默认折叠；提交成功后自动收起并显示状态徽章，可"查看 / 继续补充"。
+                    </p>
                   </div>
                 </div>
-                <div className="task-processing-mode-grid" role="tablist" aria-label="任务处理方式">
-                  <button type="button" className={mode === 'PHONE' ? 'active' : ''} onClick={() => changeMode('PHONE')}>
-                    <strong>电话随访沟通</strong><span>展开电话随访详情页内容</span>
-                  </button>
-                  <button type="button" className={mode === 'RECHECK' ? 'active' : ''} onClick={() => changeMode('RECHECK')}>
-                    <strong>新增复测任务</strong><span>查看指标数据并安排复测</span>
-                  </button>
-                  <button type="button" className={mode === 'PLAN' ? 'active' : ''} onClick={() => changeMode('PLAN')}>
-                    <strong>调整监测计划</strong><span>修改 / 停用指标打卡计划</span>
-                  </button>
-                  <button type="button" className={mode === 'CLOSE' ? 'active' : ''} onClick={() => changeMode('CLOSE')}>
-                    <strong>完成或取消任务</strong><span>仅更新任务和关联预警状态</span>
-                  </button>
+                <div className="task-processing-mode-grid action-module-grid action-module-grid-pro">
+                  {allModes.map((mode) => {
+                    const view = moduleView[mode];
+                    const result = actionResults[mode] ?? null;
+                    const disabled = mode === 'CLOSE' && taskIsClosed;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={`action-module-card ${view ? 'expanded' : ''} ${
+                          result ? 'has-result' : ''
+                        }`}
+                        onClick={() => openModule(mode)}
+                        disabled={disabled}
+                      >
+                        <div>
+                          <strong>{modeMeta[mode].title}</strong>
+                          <span>{modeMeta[mode].hint}</span>
+                        </div>
+                        <div className="action-module-footer">
+                          <em className={`module-status ${getModuleStatusTone(mode)}`}>
+                            {getModuleStatusLabel(mode)}
+                          </em>
+                          <small>
+                            {disabled
+                              ? '已结案'
+                              : view
+                                ? '已展开'
+                                : result
+                                  ? '查看 / 继续补充'
+                                  : modeMeta[mode].collapsedAction}
+                          </small>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
 
-              {mode === 'PHONE' && (
-                <section className="panel task-call-form-card task-processing-action-panel">
-                  <div className="hospital-section-header compact-header">
-                    <div>
-                      <span>电话随访记录</span>
-                      <h2>电话随访沟通</h2>
-                      <p className="section-hint">该区域沿用电话随访详情页的处理逻辑：先联系患者，再记录沟通内容，最后可同步完成任务和关联预警。</p>
-                    </div>
-                  </div>
+              {/* 展开的模块（按 moduleView 渲染） */}
 
-                  <form className="hospital-form task-follow-up-form" onSubmit={submitPhoneFollowUp} aria-busy={submitting}>
-                    <div className="task-call-two-column-grid">
+              {moduleView.PHONE && (
+                <TaskActionShell
+                  moduleKey="PHONE"
+                  kicker={modeMeta.PHONE.kicker}
+                  title={modeMeta.PHONE.title}
+                  hint="保存该表单只写入随访记录，并将待处理任务刷新为「处理中」；不会自动完成任务。"
+                  view={moduleView.PHONE}
+                  statusLabel={getModuleStatusLabel('PHONE')}
+                  statusTone={getModuleStatusTone('PHONE')}
+                  result={actionResults.PHONE ?? null}
+                  isSubmitting={submittingMode === 'PHONE'}
+                  collapsedActionText={modeMeta.PHONE.collapsedAction}
+                  onExpand={() => openModule('PHONE')}
+                  onCollapse={() => collapseModule('PHONE')}
+                  onContinueEdit={() => continueEdit('PHONE')}
+                >
+                  <form
+                    className="hospital-form task-follow-up-form"
+                    onSubmit={submitPhoneFollowUp}
+                  >
+                    <div className="task-call-two-column-grid compact-two-column-form">
                       <div className="task-call-contact-card embedded-contact-card">
                         <h3>患者联系信息</h3>
                         <dl className="contact-info-list">
-                          <div><dt>患者姓名</dt><dd>{patient.name}</dd></div>
-                          <div><dt>院内号</dt><dd>{patient.hospitalPatientId ?? '-'}</dd></div>
-                          <div><dt>联系电话</dt><dd><a href={patient.phone ? `tel:${patient.phone}` : undefined}>{maskPhone(patient.phone)}</a></dd></div>
-                          <div><dt>住址</dt><dd>{patient.address ?? '-'}</dd></div>
-                          <div><dt>紧急联系人</dt><dd>{patient.emergencyContactName ?? '-'} {patient.emergencyContactPhone ? ` / ${maskPhone(patient.emergencyContactPhone)}` : ''}</dd></div>
+                          <div>
+                            <dt>患者姓名</dt>
+                            <dd>{patient.name}</dd>
+                          </div>
+                          <div>
+                            <dt>院内号</dt>
+                            <dd>{patient.hospitalPatientId ?? '-'}</dd>
+                          </div>
+                          <div>
+                            <dt>联系电话</dt>
+                            <dd>
+                              <a href={patient.phone ? `tel:${patient.phone}` : undefined}>
+                                {maskPhone(patient.phone)}
+                              </a>
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>住址</dt>
+                            <dd>{patient.address ?? '-'}</dd>
+                          </div>
+                          <div>
+                            <dt>紧急联系人</dt>
+                            <dd>
+                              {patient.emergencyContactName ?? '-'}{' '}
+                              {patient.emergencyContactPhone
+                                ? ` / ${maskPhone(patient.emergencyContactPhone)}`
+                                : ''}
+                            </dd>
+                          </div>
                         </dl>
                       </div>
 
@@ -22922,7 +23877,11 @@ export function PatientTaskProcessingPage() {
                         <div className="form-grid form-grid-two">
                           <div className="form-row">
                             <label>联系结果</label>
-                            <select value={callOutcome} onChange={(event) => setCallOutcome(event.target.value)}>
+                            <select
+                              value={callOutcome}
+                              onChange={(event) => setCallOutcome(event.target.value)}
+                              disabled={submittingMode === 'PHONE'}
+                            >
                               <option value="CONTACTED">已接通本人</option>
                               <option value="FAMILY_CONTACTED">已联系家属</option>
                               <option value="NO_ANSWER">未接通</option>
@@ -22930,76 +23889,146 @@ export function PatientTaskProcessingPage() {
                             </select>
                           </div>
                           <div className="form-row">
+                            <label>处理结论</label>
+                            <select
+                              value={callConclusion}
+                              onChange={(event) => setCallConclusion(event.target.value)}
+                              disabled={submittingMode === 'PHONE'}
+                            >
+                              <option value="CONTINUE_OBSERVE">继续观察</option>
+                              <option value="RECHECK">建议复测</option>
+                              <option value="VISIT">建议复诊</option>
+                              <option value="URGENT">建议立即就医</option>
+                            </select>
+                          </div>
+                          <div className="form-row">
                             <label>下次随访时间</label>
-                            <input type="datetime-local" value={nextFollowUpTime} onChange={(event) => setNextFollowUpTime(event.target.value)} />
+                            <input
+                              type="datetime-local"
+                              value={nextFollowUpTime}
+                              onChange={(event) => setNextFollowUpTime(event.target.value)}
+                              disabled={submittingMode === 'PHONE'}
+                            />
+                          </div>
+                          <div className="form-row signature-row">
+                            <label>电子签名</label>
+                            <input
+                              value={signature}
+                              onChange={(event) => setSignature(event.target.value)}
+                              placeholder="请输入护士姓名 / 工号"
+                              disabled={submittingMode === 'PHONE'}
+                            />
                           </div>
                         </div>
                         <div className="form-row">
                           <label>电话沟通内容</label>
-                          <textarea value={callContent} onChange={(event) => setCallContent(event.target.value)} rows={4} />
+                          <textarea
+                            value={callContent}
+                            onChange={(event) => setCallContent(event.target.value)}
+                            rows={4}
+                            disabled={submittingMode === 'PHONE'}
+                          />
                         </div>
-                        <div className="form-row">
-                          <label>患者反馈 / 随访结果</label>
-                          <textarea value={followUpResult} onChange={(event) => setFollowUpResult(event.target.value)} rows={3} />
-                        </div>
-                        <div className="form-row">
-                          <label>护理建议 / 医嘱转述</label>
-                          <textarea value={nursingAdvice} onChange={(event) => setNursingAdvice(event.target.value)} rows={3} />
+                        <div className="form-grid form-grid-two">
+                          <div className="form-row">
+                            <label>患者反馈 / 随访结果</label>
+                            <textarea
+                              value={followUpResult}
+                              onChange={(event) => setFollowUpResult(event.target.value)}
+                              rows={3}
+                              disabled={submittingMode === 'PHONE'}
+                            />
+                          </div>
+                          <div className="form-row">
+                            <label>健康宣教 / 医嘱转达</label>
+                            <textarea
+                              value={nursingAdvice}
+                              onChange={(event) => setNursingAdvice(event.target.value)}
+                              rows={3}
+                              disabled={submittingMode === 'PHONE'}
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="task-processing-sync-box">
-                      <label><input type="checkbox" checked={completeTaskAfterSubmit} onChange={(event) => setCompleteTaskAfterSubmit(event.target.checked)} /> 保存随访后完成当前任务</label>
-                      {selectedTask.relatedAlertId && (
-                        <label><input type="checkbox" checked={syncRelatedAlert} onChange={(event) => setSyncRelatedAlert(event.target.checked)} /> 同步处置关联风险预警</label>
-                      )}
-                    </div>
-
-                    {syncRelatedAlert && selectedTask.relatedAlertId && (
-                      <div className="form-row">
-                        <label>关联预警处置记录</label>
-                        <textarea value={relatedAlertHandlingNote} onChange={(event) => setRelatedAlertHandlingNote(event.target.value)} rows={3} />
-                      </div>
-                    )}
-
-                    <div className="form-row signature-row">
-                      <label>电子签名</label>
-                      <input value={signature} onChange={(event) => setSignature(event.target.value)} placeholder="请输入护士姓名 / 工号" />
-                    </div>
-
-                    <div className="form-actions">
-                      <button className="button" type="submit" disabled={submitting}>{submitting ? '提交中...' : '保存电话随访'}</button>
-                      <span className="operation-form-hint">保存后会写入患者随访记录；如勾选完成任务，会同步更新任务状态。</span>
+                    <div className="form-actions sticky-form-actions pro-form-actions">
+                      <button className="button" type="submit" disabled={submittingMode === 'PHONE'}>
+                        {submittingMode === 'PHONE'
+                          ? '正在保存...'
+                          : actionResults.PHONE
+                            ? '保存补充随访记录'
+                            : '保存电话随访记录'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => collapseModule('PHONE')}
+                        disabled={submittingMode === 'PHONE'}
+                      >
+                        取消
+                      </button>
+                      <span className="operation-form-hint">
+                        不会自动完成任务；完成任务请到"任务结案 / 风险处置记录"。
+                      </span>
                     </div>
                   </form>
-                </section>
+                </TaskActionShell>
               )}
 
-              {mode === 'RECHECK' && (
-                <section className="panel task-processing-action-panel">
-                  <div className="hospital-section-header compact-header">
-                    <div>
-                      <span>指标复测</span>
-                      <h2>新增复测任务</h2>
-                      <p className="section-hint">先查看患者最近指标和当前监测计划，再创建复测提醒任务。</p>
-                    </div>
-                  </div>
-
-                  <div className="recheck-grid">
+              {moduleView.RECHECK && (
+                <TaskActionShell
+                  moduleKey="RECHECK"
+                  kicker={modeMeta.RECHECK.kicker}
+                  title={modeMeta.RECHECK.title}
+                  hint="展示指标检测最近数据；创建复测任务后，原任务不会自动结案。"
+                  view={moduleView.RECHECK}
+                  statusLabel={getModuleStatusLabel('RECHECK')}
+                  statusTone={getModuleStatusTone('RECHECK')}
+                  result={actionResults.RECHECK ?? null}
+                  isSubmitting={submittingMode === 'RECHECK'}
+                  collapsedActionText={modeMeta.RECHECK.collapsedAction}
+                  onExpand={() => openModule('RECHECK')}
+                  onCollapse={() => collapseModule('RECHECK')}
+                  onContinueEdit={() => continueEdit('RECHECK')}
+                >
+                  <div className="recheck-grid compact-recheck-grid">
                     <section className="clean-subpanel">
                       <h3>最近指标记录</h3>
-                      {recentVitals.length === 0 ? <div className="empty-state compact-empty">暂无指标记录</div> : (
+                      {recentVitals.length === 0 ? (
+                        <div className="empty-state compact-empty">暂无指标记录</div>
+                      ) : (
                         <div className="table-wrap clean-table-wrap">
                           <table className="table clean-hospital-table">
-                            <thead><tr><th>指标</th><th>数值</th><th>时间</th><th>状态</th></tr></thead>
+                            <thead>
+                              <tr>
+                                <th>指标</th>
+                                <th>数值</th>
+                                <th>时间</th>
+                                <th>状态</th>
+                              </tr>
+                            </thead>
                             <tbody>
                               {recentVitals.map((item) => (
-                                <tr key={`${item.type}-${item.time}-${item.data?.id ?? item.title}`}>
-                                  <td>{vitalTypeLabelMap[item.data?.type] ?? item.data?.type}</td>
-                                  <td><strong>{item.data?.value} {item.data?.unit}</strong></td>
+                                <tr
+                                  key={`${item.type}-${item.time}-${item.data?.id ?? item.title}`}
+                                >
+                                  <td>
+                                    {vitalTypeLabelMap[item.data?.type] ?? item.data?.type}
+                                  </td>
+                                  <td>
+                                    <strong>
+                                      {item.data?.value} {item.data?.unit}
+                                    </strong>
+                                  </td>
                                   <td>{formatTime(item.time)}</td>
-                                  <td>{item.data?.isAbnormal ? <span className="risk-badge risk-high">异常</span> : <span className="status-badge status-done">正常</span>}</td>
+                                  <td>
+                                    {item.data?.isAbnormal ? (
+                                      <span className="risk-badge risk-high">异常</span>
+                                    ) : (
+                                      <span className="status-badge status-done">正常</span>
+                                    )}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -23009,103 +24038,474 @@ export function PatientTaskProcessingPage() {
                     </section>
 
                     <section className="clean-subpanel">
-                      <h3>新增复测任务</h3>
-                      <form className="hospital-form" onSubmit={createRecheckTask} aria-busy={submitting}>
-                        <div className="form-row"><label>复测任务标题</label><input value={recheckTitle} onChange={(event) => setRecheckTitle(event.target.value)} required /></div>
-                        <div className="form-row"><label>截止时间</label><input type="datetime-local" value={recheckDueAt} onChange={(event) => setRecheckDueAt(event.target.value)} /></div>
-                        <div className="form-row"><label>复测说明</label><textarea value={recheckNote} onChange={(event) => setRecheckNote(event.target.value)} rows={4} placeholder="例如：请患者今晚 19:30 复测血压并通过小程序上传。" /></div>
-                        <div className="form-actions"><button className="button" type="submit" disabled={submitting}>{submitting ? '创建中...' : '创建复测任务'}</button></div>
+                      <h3>创建复测提醒</h3>
+                      <form className="hospital-form" onSubmit={createRecheckTask}>
+                        <div className="form-row">
+                          <label>复测任务标题</label>
+                          <input
+                            value={recheckTitle}
+                            onChange={(event) => setRecheckTitle(event.target.value)}
+                            required
+                            disabled={submittingMode === 'RECHECK'}
+                          />
+                        </div>
+                        <div className="form-row">
+                          <label>截止时间</label>
+                          <input
+                            type="datetime-local"
+                            value={recheckDueAt}
+                            onChange={(event) => setRecheckDueAt(event.target.value)}
+                            disabled={submittingMode === 'RECHECK'}
+                          />
+                        </div>
+                        <div className="form-row">
+                          <label>复测说明</label>
+                          <textarea
+                            value={recheckNote}
+                            onChange={(event) => setRecheckNote(event.target.value)}
+                            rows={4}
+                            placeholder="例如：请患者今晚 19:30 复测血压并通过小程序上传。"
+                            disabled={submittingMode === 'RECHECK'}
+                          />
+                        </div>
+                        <div className="form-actions sticky-form-actions pro-form-actions">
+                          <button
+                            className="button"
+                            type="submit"
+                            disabled={submittingMode === 'RECHECK'}
+                          >
+                            {submittingMode === 'RECHECK' ? '正在创建...' : '创建复测任务'}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => collapseModule('RECHECK')}
+                            disabled={submittingMode === 'RECHECK'}
+                          >
+                            取消
+                          </button>
+                        </div>
                       </form>
                     </section>
                   </div>
-                </section>
+                </TaskActionShell>
               )}
 
-              {mode === 'PLAN' && (
-                <section className="panel task-processing-action-panel">
-                  <div className="hospital-section-header compact-header">
-                    <div>
-                      <span>指标监测计划</span>
-                      <h2>修改 / 停用监测计划</h2>
-                      <p className="section-hint">这里复用指标监测页的计划字段，用于在任务处理时直接调整患者端打卡提醒。</p>
+              {moduleView.VISIT && (
+                <TaskActionShell
+                  moduleKey="VISIT"
+                  kicker={modeMeta.VISIT.kicker}
+                  title={modeMeta.VISIT.title}
+                  hint="高危/极高危风险，创建到院提醒后原任务不会自动结案。"
+                  view={moduleView.VISIT}
+                  statusLabel={getModuleStatusLabel('VISIT')}
+                  statusTone={getModuleStatusTone('VISIT')}
+                  result={actionResults.VISIT ?? null}
+                  isSubmitting={submittingMode === 'VISIT'}
+                  collapsedActionText={modeMeta.VISIT.collapsedAction}
+                  onExpand={() => openModule('VISIT')}
+                  onCollapse={() => collapseModule('VISIT')}
+                  onContinueEdit={() => continueEdit('VISIT')}
+                >
+                  <form
+                    className="hospital-form compact-two-column-form"
+                    onSubmit={createHospitalVisitReminder}
+                  >
+                    <div className="form-grid form-grid-two">
+                      <div className="form-row">
+                        <label>复诊原因</label>
+                        <textarea
+                          value={visitReason}
+                          onChange={(event) => setVisitReason(event.target.value)}
+                          rows={4}
+                          required
+                          disabled={submittingMode === 'VISIT'}
+                        />
+                      </div>
+                      <div className="form-row">
+                        <label>护士备注 / 携带材料</label>
+                        <textarea
+                          value={visitNote}
+                          onChange={(event) => setVisitNote(event.target.value)}
+                          rows={4}
+                          disabled={submittingMode === 'VISIT'}
+                        />
+                      </div>
                     </div>
-                  </div>
+                    <div className="form-actions sticky-form-actions pro-form-actions">
+                      <button
+                        className="button"
+                        type="submit"
+                        disabled={submittingMode === 'VISIT'}
+                      >
+                        {submittingMode === 'VISIT' ? '正在创建...' : '创建门诊复诊提醒'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => collapseModule('VISIT')}
+                        disabled={submittingMode === 'VISIT'}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </form>
+                </TaskActionShell>
+              )}
 
-                  <div className="plan-editor-layout">
+              {moduleView.PLAN && (
+                <TaskActionShell
+                  moduleKey="PLAN"
+                  kicker={modeMeta.PLAN.kicker}
+                  title={modeMeta.PLAN.title}
+                  hint="复用指标监测页字段，调整患者端打卡提醒；不会自动完成当前任务。"
+                  view={moduleView.PLAN}
+                  statusLabel={getModuleStatusLabel('PLAN')}
+                  statusTone={getModuleStatusTone('PLAN')}
+                  result={actionResults.PLAN ?? null}
+                  isSubmitting={submittingMode === 'PLAN'}
+                  collapsedActionText={modeMeta.PLAN.collapsedAction}
+                  onExpand={() => openModule('PLAN')}
+                  onCollapse={() => collapseModule('PLAN')}
+                  onContinueEdit={() => continueEdit('PLAN')}
+                >
+                  <div className="plan-editor-layout compact-plan-editor">
                     <aside className="plan-selector-list">
                       <h3>当前启用计划</h3>
-                      {activeMonitoringPlans.length === 0 ? <div className="empty-state compact-empty">暂无启用中的监测计划。</div> : activeMonitoringPlans.map((item) => (
-                        <button key={item.data?.id} type="button" className={selectedPlanId === item.data?.id ? 'plan-selector-card active' : 'plan-selector-card'} onClick={() => choosePlan(item.data?.id)}>
-                          <strong>{item.data?.displayName ?? vitalTypeLabelMap[item.data?.vitalType] ?? item.data?.vitalType}</strong>
-                          <span>{item.data?.timesPerUnit ?? 1} 次 / {item.data?.frequencyUnit === 'DAY' ? '日' : item.data?.frequencyUnit === 'WEEK' ? '周' : '月'}</span>
-                          <small>{Array.isArray(item.data?.customMeasureTimes) ? item.data.customMeasureTimes.join('、') : '-'}</small>
-                        </button>
-                      ))}
+                      {activeMonitoringPlans.length === 0 ? (
+                        <div className="empty-state compact-empty">暂无启用中的监测计划。</div>
+                      ) : (
+                        activeMonitoringPlans.map((item) => (
+                          <button
+                            key={item.data?.id}
+                            type="button"
+                            className={
+                              selectedPlanId === item.data?.id
+                                ? 'plan-selector-card active'
+                                : 'plan-selector-card'
+                            }
+                            onClick={() => choosePlan(item.data?.id)}
+                            disabled={submittingMode === 'PLAN'}
+                          >
+                            <strong>
+                              {item.data?.displayName ??
+                                vitalTypeLabelMap[item.data?.vitalType] ??
+                                item.data?.vitalType}
+                            </strong>
+                            <span>
+                              {item.data?.timesPerUnit ?? 1} 次 /{' '}
+                              {item.data?.frequencyUnit === 'DAY'
+                                ? '日'
+                                : item.data?.frequencyUnit === 'WEEK'
+                                  ? '周'
+                                  : '月'}
+                            </span>
+                            <small>
+                              {Array.isArray(item.data?.customMeasureTimes)
+                                ? item.data.customMeasureTimes.join('、')
+                                : '-'}
+                            </small>
+                          </button>
+                        ))
+                      )}
                     </aside>
 
-                    <form className="hospital-form monitoring-plan-form" onSubmit={updateMonitoringPlan} aria-busy={submitting}>
+                    <form
+                      className="hospital-form monitoring-plan-form"
+                      onSubmit={updateMonitoringPlan}
+                    >
                       <div className="form-grid form-grid-three">
                         <div className="form-row">
                           <label>指标类型</label>
-                          <select value={planDraft.vitalType} onChange={(event) => updatePlanVitalType(event.target.value)}>
-                            {Object.entries(vitalTypeLabelMap).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                          <select
+                            value={planDraft.vitalType}
+                            onChange={(event) => updatePlanVitalType(event.target.value)}
+                            disabled={submittingMode === 'PLAN'}
+                          >
+                            {Object.entries(vitalTypeLabelMap).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
                           </select>
                         </div>
-                        <div className="form-row"><label>显示名称</label><input value={planDraft.displayName} onChange={(event) => updatePlanDraft('displayName', event.target.value)} required /></div>
-                        <div className="form-row"><label>单位</label><input value={planDraft.unit} onChange={(event) => updatePlanDraft('unit', event.target.value)} required /></div>
+                        <div className="form-row">
+                          <label>显示名称</label>
+                          <input
+                            value={planDraft.displayName}
+                            onChange={(event) => updatePlanDraft('displayName', event.target.value)}
+                            required
+                            disabled={submittingMode === 'PLAN'}
+                          />
+                        </div>
+                        <div className="form-row">
+                          <label>单位</label>
+                          <input
+                            value={planDraft.unit}
+                            onChange={(event) => updatePlanDraft('unit', event.target.value)}
+                            required
+                            disabled={submittingMode === 'PLAN'}
+                          />
+                        </div>
                         <div className="form-row">
                           <label>频率单位</label>
-                          <select value={planDraft.frequencyUnit} onChange={(event) => updatePlanDraft('frequencyUnit', event.target.value)}>
+                          <select
+                            value={planDraft.frequencyUnit}
+                            onChange={(event) => updatePlanDraft('frequencyUnit', event.target.value)}
+                            disabled={submittingMode === 'PLAN'}
+                          >
                             <option value="DAY">每日</option>
                             <option value="WEEK">每周</option>
                             <option value="MONTH">每月</option>
                           </select>
                         </div>
-                        <div className="form-row"><label>每单位次数</label><input type="number" min="1" max="12" value={planDraft.timesPerUnit} onChange={(event) => updatePlanDraft('timesPerUnit', event.target.value)} required /></div>
-                        <div className="form-row"><label>测量时间</label><input value={planDraft.customMeasureTimes} onChange={(event) => updatePlanDraft('customMeasureTimes', event.target.value)} placeholder="07:30, 19:30" /></div>
-                        <div className="form-row"><label>周/月日期</label><input value={planDraft.customMeasureDays} onChange={(event) => updatePlanDraft('customMeasureDays', event.target.value)} placeholder="每周 1-7；每月 1-31" disabled={planDraft.frequencyUnit === 'DAY'} /></div>
+                        <div className="form-row">
+                          <label>每单位次数</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="12"
+                            value={planDraft.timesPerUnit}
+                            onChange={(event) =>
+                              updatePlanDraft('timesPerUnit', event.target.value)
+                            }
+                            required
+                            disabled={submittingMode === 'PLAN'}
+                          />
+                        </div>
+                        <div className="form-row">
+                          <label>测量时间</label>
+                          <input
+                            value={planDraft.customMeasureTimes}
+                            onChange={(event) =>
+                              updatePlanDraft('customMeasureTimes', event.target.value)
+                            }
+                            placeholder="07:30, 19:30"
+                            disabled={submittingMode === 'PLAN'}
+                          />
+                        </div>
+                        <div className="form-row">
+                          <label>周/月日期</label>
+                          <input
+                            value={planDraft.customMeasureDays}
+                            onChange={(event) =>
+                              updatePlanDraft('customMeasureDays', event.target.value)
+                            }
+                            placeholder="每周 1-7；每月 1-31"
+                            disabled={planDraft.frequencyUnit === 'DAY' || submittingMode === 'PLAN'}
+                          />
+                        </div>
                       </div>
-                      <div className="form-row"><label>调整依据</label><textarea value={planDraft.evidenceBasis} onChange={(event) => updatePlanDraft('evidenceBasis', event.target.value)} rows={3} /></div>
-                      <div className="form-actions">
-                        <button className="button" type="submit" disabled={!selectedPlanId || submitting}>{submitting ? '保存中...' : '保存计划调整'}</button>
-                        <button className="secondary-button" type="button" disabled={!selectedPlanId || submitting} onClick={deactivateMonitoringPlan}>停用该计划</button>
-                        <span className="operation-form-hint">保存后会影响患者端后续打卡提醒。</span>
+                      <div className="form-row">
+                        <label>调整依据</label>
+                        <textarea
+                          value={planDraft.evidenceBasis}
+                          onChange={(event) =>
+                            updatePlanDraft('evidenceBasis', event.target.value)
+                          }
+                          rows={3}
+                          disabled={submittingMode === 'PLAN'}
+                        />
+                      </div>
+                      <div className="form-actions sticky-form-actions pro-form-actions">
+                        <button
+                          className="button"
+                          type="submit"
+                          disabled={!selectedPlanId || submittingMode === 'PLAN'}
+                        >
+                          {submittingMode === 'PLAN' ? '正在保存...' : '保存计划调整'}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={!selectedPlanId || submittingMode === 'PLAN'}
+                          onClick={deactivateMonitoringPlan}
+                        >
+                          停用该计划
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          onClick={() => collapseModule('PLAN')}
+                          disabled={submittingMode === 'PLAN'}
+                        >
+                          取消
+                        </button>
                       </div>
                     </form>
                   </div>
-                </section>
+                </TaskActionShell>
               )}
 
-              {mode === 'CLOSE' && (
-                <section className="panel task-processing-action-panel">
-                  <div className="hospital-section-header compact-header">
-                    <div>
-                      <span>任务状态</span>
-                      <h2>完成或取消当前任务</h2>
-                      <p className="section-hint">适用于已通过其他方式处理完成，或确认任务无需继续执行的场景。</p>
-                    </div>
-                  </div>
-                  <form className="hospital-form" onSubmit={closeTask} aria-busy={submitting}>
+              {moduleView.UNREACHABLE && (
+                <TaskActionShell
+                  moduleKey="UNREACHABLE"
+                  kicker={modeMeta.UNREACHABLE.kicker}
+                  title={modeMeta.UNREACHABLE.title}
+                  hint="保存后任务进入处理中，便于后续继续联系；不会自动完成任务。"
+                  view={moduleView.UNREACHABLE}
+                  statusLabel={getModuleStatusLabel('UNREACHABLE')}
+                  statusTone={getModuleStatusTone('UNREACHABLE')}
+                  result={actionResults.UNREACHABLE ?? null}
+                  isSubmitting={submittingMode === 'UNREACHABLE'}
+                  collapsedActionText={modeMeta.UNREACHABLE.collapsedAction}
+                  onExpand={() => openModule('UNREACHABLE')}
+                  onCollapse={() => collapseModule('UNREACHABLE')}
+                  onContinueEdit={() => continueEdit('UNREACHABLE')}
+                >
+                  <form className="hospital-form compact-two-column-form" onSubmit={saveUnableContact}>
                     <div className="form-grid form-grid-two">
                       <div className="form-row">
-                        <label>处理结果</label>
-                        <select value={closeStatus} onChange={(event) => setCloseStatus(event.target.value as 'DONE' | 'CANCELED')}>
+                        <label>联系渠道</label>
+                        <select
+                          value={unableContactChannel}
+                          onChange={(event) => setUnableContactChannel(event.target.value)}
+                          disabled={submittingMode === 'UNREACHABLE'}
+                        >
+                          <option value="PHONE">电话</option>
+                          <option value="WECHAT">微信</option>
+                          <option value="PHONE_WECHAT">电话 + 微信</option>
+                        </select>
+                      </div>
+                      <div className="form-row">
+                        <label>记录说明</label>
+                        <textarea
+                          value={unableContactNote}
+                          onChange={(event) => setUnableContactNote(event.target.value)}
+                          rows={4}
+                          required
+                          disabled={submittingMode === 'UNREACHABLE'}
+                        />
+                      </div>
+                    </div>
+                    <div className="form-actions sticky-form-actions pro-form-actions">
+                      <button
+                        className="button"
+                        type="submit"
+                        disabled={submittingMode === 'UNREACHABLE'}
+                      >
+                        {submittingMode === 'UNREACHABLE' ? '正在保存...' : '保存无法联系记录'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => collapseModule('UNREACHABLE')}
+                        disabled={submittingMode === 'UNREACHABLE'}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </form>
+                </TaskActionShell>
+              )}
+
+              {moduleView.CLOSE && (
+                <TaskActionShell
+                  moduleKey="CLOSE"
+                  kicker={modeMeta.CLOSE.kicker}
+                  title={modeMeta.CLOSE.title}
+                  hint="只有确认本任务已经完成全部必要处理动作后，才在这里完成任务并同步处置关联预警。"
+                  view={moduleView.CLOSE}
+                  statusLabel={getModuleStatusLabel('CLOSE')}
+                  statusTone={getModuleStatusTone('CLOSE')}
+                  result={actionResults.CLOSE ?? null}
+                  isSubmitting={submittingMode === 'CLOSE'}
+                  collapsedActionText={modeMeta.CLOSE.collapsedAction}
+                  onExpand={() => openModule('CLOSE')}
+                  onCollapse={() => collapseModule('CLOSE')}
+                  onContinueEdit={() => continueEdit('CLOSE')}
+                  locked={taskIsClosed}
+                  lockedNotice={
+                    <>
+                      <strong>当前任务已经结案</strong>
+                      <p>
+                        任务状态：{statusLabelMap[selectedTask.status] ?? selectedTask.status}
+                        。不能重复提交"完成任务"。如需补充说明，请使用电话随访或无法联系记录模块保存补充记录。
+                      </p>
+                    </>
+                  }
+                >
+                  <form className="hospital-form" onSubmit={closeTask}>
+                    <div className="form-grid form-grid-two">
+                      <div className="form-row">
+                        <label>结案结果</label>
+                        <select
+                          value={closeStatus}
+                          onChange={(event) =>
+                            setCloseStatus(event.target.value as 'DONE' | 'CANCELED')
+                          }
+                          disabled={submittingMode === 'CLOSE'}
+                        >
                           <option value="DONE">标记为已完成</option>
                           <option value="CANCELED">取消任务 / 不再处理</option>
                         </select>
                       </div>
-                      {selectedTask.relatedAlertId && (
-                        <label className="form-row checkbox-form-row">
-                          <span>关联预警</span>
-                          <label><input type="checkbox" checked={closeSyncAlert} onChange={(event) => setCloseSyncAlert(event.target.checked)} /> 同步更新关联风险预警状态</label>
-                        </label>
-                      )}
+                      <div className="form-row signature-row">
+                        <label>电子签名</label>
+                        <input
+                          value={closeSignature}
+                          onChange={(event) => setCloseSignature(event.target.value)}
+                          placeholder="请输入护士姓名 / 工号"
+                          disabled={submittingMode === 'CLOSE'}
+                        />
+                      </div>
                     </div>
-                    <div className="form-row"><label>处理记录</label><textarea value={closeNote} onChange={(event) => setCloseNote(event.target.value)} rows={4} placeholder="请填写为什么完成或取消该任务，将写入任务/预警留痕。" required /></div>
-                    <div className="form-actions"><button className="button" type="submit" disabled={submitting}>{submitting ? '提交中...' : '提交状态变更'}</button></div>
+
+                    {selectedTask.relatedAlertId && (
+                      <div className="task-processing-sync-box strong-sync-box">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={closeSyncAlert}
+                            onChange={(event) => setCloseSyncAlert(event.target.checked)}
+                            disabled={submittingMode === 'CLOSE'}
+                          />{' '}
+                          完成任务后同步处置关联风险预警
+                        </label>
+                        <p>默认开启。提交后会把关联预警同步标记为已处理/已忽略，并写入处置记录。</p>
+                      </div>
+                    )}
+
+                    <div className="form-row">
+                      <label>任务处理 / 风险处置记录</label>
+                      <textarea
+                        value={closeNote}
+                        onChange={(event) => setCloseNote(event.target.value)}
+                        rows={4}
+                        placeholder="请概括电话沟通、复测安排、复诊建议和最终处理结论。"
+                        required
+                        disabled={submittingMode === 'CLOSE'}
+                      />
+                    </div>
+                    <div className="form-actions sticky-form-actions pro-form-actions">
+                      <button
+                        className="button"
+                        type="submit"
+                        disabled={submittingMode === 'CLOSE'}
+                      >
+                        {submittingMode === 'CLOSE' ? '正在提交...' : '提交结案'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => collapseModule('CLOSE')}
+                        disabled={submittingMode === 'CLOSE'}
+                      >
+                        取消
+                      </button>
+                    </div>
                   </form>
-                </section>
+                </TaskActionShell>
               )}
+
+              {/* 本次提交记录列表（动作 history） */}
+              <TaskActionHistory
+                entries={actionHistory}
+                onReview={(mode) => {
+                  const m = mode as HandlingMode;
+                  setModuleView((current) => ({ ...current, [m]: 'review' }));
+                }}
+              />
             </>
           )}
         </main>
@@ -26424,45 +27824,439 @@ table.table a:hover,
   }
 }
 
-/* Unified patient-detail task queue: replaces separate risk disposal / follow-up queues. */
-.unified-patient-task-board .stable-command-board-header {
-  align-items: flex-start;
+/* Task processing UX lock patch: compact workbench + collapsed actions */
+.compact-task-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.unified-command-grid {
-  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.9fr);
+.task-workbench-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid #d8e3ef;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
-.unified-command-card-main {
-  border-color: rgba(30, 95, 138, 0.18);
-  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+.task-workbench-patient-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 14px;
 }
 
-.unified-mini-list {
+.task-workbench-patient-line strong {
+  color: #0f172a;
+  font-size: 20px;
+}
+
+.task-workbench-patient-line span:not(:first-of-type) {
+  padding-left: 10px;
+  border-left: 1px solid #cbd5e1;
+}
+
+.task-workbench-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-workbench-summary-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) auto minmax(0, 1.1fr);
   gap: 12px;
+  align-items: stretch;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-left: 5px solid #1d4ed8;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
 }
 
-.unified-mini-row {
-  align-items: flex-start;
-  border-left: 4px solid #2f80bd;
+.summary-strip-block {
+  min-width: 0;
 }
 
-.unified-mini-row small {
+.summary-strip-block span {
   display: block;
-  margin-top: 5px;
-  color: #5b6b7a;
-  line-height: 1.55;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
-.alert-only-inline-row {
-  border-left-color: #d97706;
-  background: #fffaf0;
+.summary-strip-block strong {
+  display: block;
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.35;
 }
 
-.patient-hero-actions .compact-link-btn {
+.summary-strip-block p {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.alert-strip-main {
+  padding-left: 12px;
+  border-left: 1px dashed #cbd5e1;
+}
+
+.alert-strip-main.muted strong,
+.alert-strip-main.muted p {
+  color: #64748b;
+}
+
+.summary-strip-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-result-summary-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #bbf7d0;
+  border-left: 5px solid #16a34a;
+  border-radius: 16px;
+  background: #f0fdf4;
+  color: #14532d;
+}
+
+.result-check {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.task-result-summary-card h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.task-result-summary-card p {
+  margin: 0 0 8px;
+  color: #166534;
+}
+
+.task-result-summary-card ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-workbench-layout {
+  align-items: start;
+}
+
+.compact-panel {
+  padding: 14px;
+}
+
+.task-workbench-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.task-process-summary-panel,
+.related-alert-strong-card,
+.compact-action-card-panel {
+  padding: 16px;
+}
+
+.task-summary-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.task-summary-mini-grid div {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.task-summary-mini-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-summary-mini-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.related-alert-strong-card {
+  border-left: 5px solid #ef4444;
+  background: #fff7ed;
+}
+
+.related-alert-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.related-alert-title-row h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #7f1d1d;
+}
+
+.related-alert-title-row p,
+.related-alert-strong-card > p {
+  margin: 4px 0 0;
+  color: #7c2d12;
+  line-height: 1.55;
+}
+
+.alert-trigger-line {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+}
+
+.action-module-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.action-module-card {
+  min-height: 132px;
+  display: flex !important;
+  flex-direction: column;
+  justify-content: space-between;
+  text-align: left;
+  position: relative;
+}
+
+.action-module-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.action-module-card strong {
+  font-size: 16px;
+}
+
+.action-module-card span {
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+.action-module-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.action-module-footer small {
+  color: #1d4ed8;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.module-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.module-status.pending {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.module-status.in-progress {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.module-status.saved {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.module-status.alert-linked {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.submitting-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.submitting-panel form,
+.submitting-panel .recheck-grid,
+.submitting-panel .plan-editor-layout {
+  opacity: 0.48;
+  pointer-events: none;
+}
+
+.panel-loading-mask {
+  display: none;
+}
+
+.submitting-panel .panel-loading-mask {
+  display: flex;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.62);
+  color: #1d4ed8;
+  font-size: 16px;
+  font-weight: 800;
+  backdrop-filter: blur(1px);
+}
+
+.compact-two-column-form .form-grid-two,
+.compact-two-column-form.form-grid-two {
+  gap: 12px;
+}
+
+.compact-two-column-form textarea {
+  min-height: 96px;
+}
+
+.sticky-form-actions {
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px dashed #cbd5e1;
+  align-items: center;
+}
+
+.sticky-form-actions .button:disabled,
+.sticky-form-actions .secondary-button:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.compact-recheck-grid {
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+}
+
+.compact-plan-editor {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
+.strong-sync-box {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+}
+
+.strong-sync-box p {
+  margin: 6px 0 0 22px;
+  color: #1e40af;
+  font-size: 13px;
+}
+
+.submitted-lock-card {
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  border-radius: 14px;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.submitted-lock-card strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #14532d;
+  font-size: 16px;
+}
+
+.submitted-lock-card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.compact-task-list .task-processing-task-card {
+  padding: 12px;
+}
+
+.compact-task-list .task-processing-task-card strong {
+  line-height: 1.35;
+}
+
+@media (max-width: 1180px) {
+  .task-workbench-summary-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-strip-status {
+    justify-content: flex-start;
+  }
+
+  .alert-strip-main {
+    padding-left: 0;
+    border-left: none;
+    border-top: 1px dashed #cbd5e1;
+    padding-top: 10px;
+  }
+
+  .action-module-grid,
+  .task-summary-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .task-workbench-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .task-workbench-layout,
+  .compact-recheck-grid,
+  .compact-plan-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .action-module-grid,
+  .task-summary-mini-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 
@@ -27913,6 +29707,607 @@ button:disabled,
   .task-follow-up-header-actions,
   .task-call-submit-actions {
     justify-content: flex-start;
+  }
+}
+
+
+### FILE: apps/web/src/task-workbench-pro.css
+/* ============================================================
+   Task Workbench Pro
+   ------------------------------------------------------------
+   Additional styles layered on top of patient-task-processing.css
+   to support:
+     - 3-state action modules (idle / review / edit)  via <TaskActionShell />
+     - Action history timeline                       via <TaskActionHistory />
+     - Sticky "处理结果" success card with next-task CTA
+     - Stronger submission lock (busy overlay)
+   ============================================================ */
+
+/* ---------- Page-level container tweaks ---------- */
+
+.task-workbench-pro {
+  /* Slightly tighter rhythm than the legacy compact page so more fits above the fold. */
+  gap: 12px;
+}
+
+.task-workbench-pro .task-workbench-topbar {
+  padding: 12px 16px;
+}
+
+.task-workbench-pro .task-workbench-summary-strip {
+  padding: 12px 14px;
+}
+
+.task-workbench-pro .compact-panel,
+.task-workbench-pro .task-process-summary-panel,
+.task-workbench-pro .compact-action-card-panel,
+.task-workbench-pro .related-alert-strong-card {
+  padding: 14px;
+}
+
+/* ---------- "Pro" sticky result card ---------- */
+
+.pro-result-card {
+  position: sticky;
+  top: 12px;
+  z-index: 30;
+  align-items: start;
+  grid-template-columns: 36px 1fr;
+  padding: 16px 18px;
+  border-left-width: 5px;
+  box-shadow: 0 12px 32px rgba(22, 163, 74, 0.18);
+  animation: proResultFlash 0.36s ease-out;
+}
+
+@keyframes proResultFlash {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pro-result-card .result-check-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+}
+
+.pro-result-card .result-body h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+
+.pro-result-card .result-body p {
+  margin: 0 0 8px;
+  color: #166534;
+  font-size: 13px;
+}
+
+.pro-result-card .result-body ul {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  color: #166534;
+}
+
+.pro-result-card .result-body ul li {
+  line-height: 1.55;
+}
+
+.pro-result-card .result-actions {
+  margin-top: 4px;
+}
+
+.pro-result-card .primary-btn {
+  background: #16a34a;
+  color: #ffffff;
+  border: none;
+}
+
+.pro-result-card .primary-btn:hover {
+  background: #15803d;
+}
+
+.ghost-button {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #475569;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.ghost-button:hover {
+  background: rgba(15, 23, 42, 0.04);
+  color: #0f172a;
+}
+
+.ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* ---------- Action-module grid: visually distinguish has-result / expanded ---------- */
+
+.action-module-grid-pro {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.action-module-grid-pro .action-module-card {
+  border-radius: 14px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid #d8e3ef;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.action-module-grid-pro .action-module-card.has-result {
+  background: linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%);
+  border-color: #86efac;
+}
+
+.action-module-grid-pro .action-module-card.has-result::before {
+  content: "已提交";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #166534;
+  background: #bbf7d0;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.action-module-grid-pro .action-module-card.expanded {
+  border-color: #0f766e;
+  box-shadow: 0 14px 30px rgba(15, 118, 110, 0.16);
+}
+
+.action-module-grid-pro .action-module-card:disabled {
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+
+/* ---------- TaskActionShell: shared shell ---------- */
+
+.action-shell {
+  position: relative;
+}
+
+.action-shell.idle {
+  /* Idle modules are not used in the current page layout (cards grid is the entry),
+     but kept here for completeness. */
+  display: none;
+}
+
+.action-shell-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.action-shell-header .action-shell-kicker {
+  display: block;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.action-shell-header h2 {
+  margin: 0;
+  font-size: 17px;
+  color: #0f172a;
+}
+
+.action-shell-header .section-hint {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.action-shell-prev-result-note {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.action-shell-prev-result-note strong {
+  color: #1e3a8a;
+}
+
+.action-shell-edit-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Review state ---------- */
+
+.action-shell.review-state {
+  border-left: 4px solid #16a34a;
+}
+
+.action-shell-review header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.action-shell-review .review-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.action-shell-review header strong {
+  display: block;
+  color: #14532d;
+  font-size: 16px;
+}
+
+.action-shell-review header p {
+  margin: 4px 0 0;
+  color: #166534;
+  font-size: 13px;
+}
+
+.action-shell-review .review-details {
+  margin: 0 0 10px;
+  padding: 10px 12px 10px 28px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  color: #166534;
+  line-height: 1.6;
+}
+
+.action-shell-review .review-synced-alert {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #9a3412;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.action-shell-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Locked state ---------- */
+
+.action-shell.locked-state {
+  border-left: 4px solid #94a3b8;
+  background: #f8fafc;
+}
+
+/* ---------- Edit state: busy mask (strong submission lock) ---------- */
+
+.action-shell.edit-state.submitting {
+  overflow: hidden;
+}
+
+.action-shell.edit-state.submitting .action-shell-edit-body {
+  opacity: 0.42;
+  pointer-events: none;
+  filter: blur(0.5px);
+}
+
+.action-shell-busy-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.78);
+  backdrop-filter: blur(2px);
+  border-radius: inherit;
+}
+
+.action-shell-busy-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 24px;
+  border: 1px solid #bfdbfe;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.14);
+  color: #1d4ed8;
+}
+
+.action-shell-busy-card strong {
+  font-size: 15px;
+}
+
+.action-shell-busy-card p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.action-shell-spinner {
+  display: inline-block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid #cbd5e1;
+  border-top-color: #1d4ed8;
+  animation: actionShellSpin 0.9s linear infinite;
+}
+
+@keyframes actionShellSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- pro-form-actions: stronger submission button states ---------- */
+
+.pro-form-actions {
+  gap: 12px;
+}
+
+.pro-form-actions .button {
+  min-width: 168px;
+  font-weight: 800;
+}
+
+.pro-form-actions .button:disabled {
+  background: #94a3b8;
+  cursor: progress;
+  opacity: 1;
+}
+
+.pro-form-actions .button:disabled::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #ffffff;
+  vertical-align: -2px;
+  animation: actionShellSpin 0.9s linear infinite;
+}
+
+/* ---------- Action history timeline ---------- */
+
+.task-action-history-panel {
+  padding: 16px;
+  border-left: 4px solid #2563eb;
+}
+
+.action-history-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.action-history-header span {
+  display: block;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.action-history-header h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.action-history-header .section-hint {
+  margin: 0;
+  max-width: 360px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.action-history-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-history-timeline > li {
+  display: grid;
+  grid-template-columns: 56px 18px 1fr auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fbfdff;
+}
+
+.action-history-time {
+  color: #1d4ed8;
+  font-weight: 800;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding-top: 1px;
+}
+
+.action-history-dot {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #16a34a;
+  margin-top: 6px;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.15);
+}
+
+.action-history-content strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.action-history-tag {
+  font-style: normal;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.action-history-content p {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.action-history-synced {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* ---------- Module-status badge tones ---------- */
+
+.module-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.module-status.pending {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.module-status.in-progress {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.module-status.saved {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.module-status.alert-linked {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.module-status.locked {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 1180px) {
+  .action-module-grid-pro {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .action-history-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .action-history-header .section-hint {
+    text-align: left;
+  }
+
+  .action-history-timeline > li {
+    grid-template-columns: 56px 18px 1fr;
+  }
+
+  .action-history-timeline > li > button {
+    grid-column: 3 / 4;
+    justify-self: end;
+    margin-top: 6px;
+  }
+
+  .pro-result-card .result-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+@media (max-width: 720px) {
+  .action-module-grid-pro {
+    grid-template-columns: 1fr;
+  }
+
+  .pro-result-card {
+    position: static;
+    grid-template-columns: 1fr;
+  }
+
+  .pro-result-card .result-check-wrap {
+    margin-bottom: 4px;
+  }
+
+  .action-shell-header {
+    flex-direction: column;
   }
 }
 

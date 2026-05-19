@@ -24,6 +24,7 @@ import './release-hardening-v1.css';
 import './task-followup-risk-disposal.css';
 import './hospital-render-rescue.css';
 import './patient-task-processing.css';
+import './task-workbench-pro.css';
 import './patient-entry-detail-fix.css';
 import './patient-intake-legacy-polish.css';
 import App from './App.tsx';
@@ -33,5 +34,3 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
-
-
