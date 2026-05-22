@@ -74,13 +74,6 @@ const roleHomePath: Record<UserRole, string> = {
   DOCTOR: '/patients',
 };
 
-const roleScopeText: Record<UserRole, string[]> = {
-  ADMIN: ['查看运营总览', '进入护士工作台', '管理患者档案', '审核患者端绑定', '配置病种规则/风险阈值', '管理 HIS/EMR/LIS 接口中心', '执行系统管理操作'],
-  MANAGER: ['查看运营总览和质控指标', '只读查看接口同步状态', '不直接进入患者医疗数据编辑入口'],
-  NURSE: ['处理随访/预警/待办', '查看并维护患者慢病档案', '审核患者端绑定', '只读查看病种规则', '不显示管理驾驶舱入口'],
-  DOCTOR: ['查看患者档案和风险趋势', '只读查看病种规则', '不显示护士批量待办入口', '不显示管理驾驶舱入口'],
-};
-
 function readStoredUser() {
   const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY);
   if (!raw) return null;
@@ -154,16 +147,6 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
           ))}
         </nav>
 
-        <div className="role-scope-card">
-          <div className="sidebar-footer-title">当前角色菜单范围</div>
-          <div className="role-scope-name">{getRoleLabel(user.role)}</div>
-          <ul className="role-scope-list">
-            {roleScopeText[user.role].map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-
         <div className="sidebar-footer security-sidebar-footer">
           <div className="sidebar-footer-title">权限与合规状态</div>
           <div className="status-dot-row">
@@ -188,9 +171,6 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
           </div>
           <div className="topbar-actions">
             <span className="topbar-pill">内网演示环境</span>
-            <span className="topbar-user">
-              当前用户：{user.displayName} / {getRoleLabel(user.role)}
-            </span>
             <button className="ghost-btn topbar-logout" onClick={onLogout}>
               退出登录
             </button>

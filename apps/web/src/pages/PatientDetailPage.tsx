@@ -5,6 +5,7 @@ import { api, getApiErrorMessage } from '../api/client';
 import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
 import { HospitalRecordsView } from '../components/HospitalRecordsView';
 import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';
+import { PatientHandlingHistoryView } from '../components/PatientHandlingHistoryView';
 import { PatientHospitalVisitTab } from '../components/PatientHospitalVisitTab';
 // trend-range-filter-import-v1
 import { BloodPressureTrendChart, VitalTrendChart, TrendRangeFilterBar, filterVitalsByTrendRange, describeTrendRange, DEFAULT_TREND_RANGE } from '../components/VitalTrendChart';
@@ -16,6 +17,7 @@ import '../closed-loop-events.css';
 import '../hospital-records.css';
 import '../patient-task-side-panel.css';
 import '../patient-detail-task-ux-polish.css';
+import '../handling-history-v2.css';
 import '../trend-chart-unified-v1.css';
 
 type TimelineEvent = {
@@ -2219,7 +2221,6 @@ export function PatientDetailPage() {
               <div>
                 <span>护士风险处置中心</span>
                 <h2>风险处置</h2>
-                <p className="section-hint">先选择需要处置的风险预警，再勾选处置方式。提交处置后，该风险预警会自动标记为已处理。普通待办任务和风险随访任务在患者详情页内分区处理。</p>
               </div>
               <div className="action-workspace-header-metrics">
                 <span>未处理预警 <strong>{activeRiskAlertCount}</strong></span>
@@ -2409,7 +2410,6 @@ export function PatientDetailPage() {
                         忽略/误报
                       </button>
                     </div>
-                    <p className="section-hint">处置方式不会通过单击卡片直接提交；必须勾选处置方式、填写电子签名后提交。</p>
                   </section>
                 </form>
               </div>
@@ -2428,7 +2428,6 @@ export function PatientDetailPage() {
               <div>
                 <span>慢病档案</span>
                 <h2>患者已有慢病档案</h2>
-                <p className="section-hint">先查看已有诊断和风险分层；需要补录时再展开新增表单。</p>
               </div>
               <button className="button" type="button" onClick={() => setShowDiseaseForm((value) => !value)}>
                 {showDiseaseForm ? '收起新增慢病档案' : '新增慢病档案'}
@@ -2564,7 +2563,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>近期健康指标</h3>
-                  <p className="muted small">院内录入、患者小程序和 LIS 同步的指标统一进入这里。</p>
                 </div>
               </div>
               {vitalRecordTimeline.length === 0 ? (
@@ -2671,7 +2669,6 @@ export function PatientDetailPage() {
                   <span>健康指标记录</span>
                   <h2>新增健康指标</h2>
                 </div>
-                <p className="section-hint">系统会按阈值自动判定异常并生成风险预警，通常无需手动勾选异常。</p>
               </div>
 
               <form className="hospital-form" onSubmit={submitVitalRecord} aria-busy={savingVital}>
@@ -2757,7 +2754,6 @@ export function PatientDetailPage() {
                 </div>
               </div>
 
-              <p className="section-hint">指标打卡计划由医院端维护。患者端只按计划录入，系统显示下一次打卡时间。</p>
 
               {monitoringRecommendations.length > 0 && (
                 <div className="recommendation-grid">
@@ -2817,7 +2813,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>当前指标打卡计划</h3>
-                  <p className="muted small">这些计划会同步到患者小程序，用于提醒和漏测判断。</p>
                 </div>
                 <label className="history-toggle medication-history-toggle">
                   <input type="checkbox" checked={showInactiveMonitoringPlans} onChange={(event) => setShowInactiveMonitoringPlans(event.target.checked)} />
@@ -2859,7 +2854,6 @@ export function PatientDetailPage() {
               <div>
                 <span>院内用药计划</span>
                 <h2>当前用药计划</h2>
-                <p className="section-hint">先查看患者已有用药计划；新增或修改时再展开表单。</p>
               </div>
               <button className="button" type="button" onClick={() => { resetMedicationForm(); setShowMedicationForm((value) => !value); }}>
                 {showMedicationForm ? '收起新增用药计划' : '新增用药计划'}
@@ -2870,7 +2864,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>当前用药计划</h3>
-                  <p className="muted small">这些计划会同步到患者微信小程序，患者只能按计划打卡或反馈漏服。</p>
                 </div>
                 <label className="history-toggle medication-history-toggle">
                   <input type="checkbox" checked={showInactiveMedications} onChange={(event) => setShowInactiveMedications(event.target.checked)} />
@@ -2911,7 +2904,6 @@ export function PatientDetailPage() {
                   <span>院内用药计划</span>
                   <h2>{editingMedicationId ? '修改用药计划' : '新增用药计划'}</h2>
                 </div>
-                <p className="section-hint">用药计划应由医生/护士或 HIS/药房处方接口维护；患者小程序只负责查看和打卡。</p>
               </div>
 
               {editingMedicationId && <div className="edit-mode-banner">正在修改已有用药计划。保存后会同步患者端下次用药时间；历史打卡记录会保留。</div>}
@@ -2951,7 +2943,6 @@ export function PatientDetailPage() {
               <div>
                 <span>随访任务</span>
                 <h2>电话随访与待办处理</h2>
-                <p className="section-hint">普通待办任务在患者详情页内闭环；电话随访进入独立 tab，到院提醒进入“到院提醒”tab，结案进入右侧面板。</p>
               </div>
               <button className="button" type="button" onClick={() => setShowTaskForm((value) => !value)}>
                 {showTaskForm ? '收起新增任务' : '新增任务'}
@@ -3004,7 +2995,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>当前待办任务</h3>
-                  <p className="muted small">电话随访记录在“电话随访”tab 内维护；任务结案在右侧处置面板内完成。</p>
                   {!showAllTaskHistory && hiddenTaskHistoryCount > 0 && <p className="muted small">已默认隐藏 {hiddenTaskHistoryCount} 条已完成或已取消任务。</p>}
                 </div>
                 <label className="history-toggle task-history-toggle">
@@ -3046,7 +3036,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>待处理风险预警</h3>
-                  <p className="muted small">可以选中预警快速完成处置；如需电话沟通，请进入“电话随访”tab。</p>
                 </div>
               </div>
 
@@ -3089,7 +3078,6 @@ export function PatientDetailPage() {
             <div>
               <span>患者内电话随访</span>
               <h2>电话随访沟通记录</h2>
-              <p className="section-hint">默认展示历史沟通记录，按记录创建时间倒序加载。需要记录新沟通时，再点击右侧按钮展开表单。</p>
             </div>
             <div className="follow-up-header-actions">
               <button
@@ -3107,7 +3095,121 @@ export function PatientDetailPage() {
               </button>
             </div>
           </div>
-          {/* next-follow-up-banner-removed-v1: 下次随访时间 banner intentionally removed from patient detail page. */}
+          {/* phone-follow-up-next-visit-patch:banner */}
+          {overwrittenNextFollowUpNotice && (
+            <div className="follow-up-next-visit-overwrite-notice" role="status">
+              <strong>下次随访时间已被覆盖：</strong>
+              原计划 {formatTime(overwrittenNextFollowUpNotice.previous)}
+              → 现在 {formatTime(overwrittenNextFollowUpNotice.next)}。
+              系统将基于新的时间生成电话随访提醒任务。
+              <button
+                type="button"
+                className="dismiss"
+                onClick={() => setOverwrittenNextFollowUpNotice(null)}
+              >
+                我知道了
+              </button>
+            </div>
+          )}
+          {(() => {
+            if (activeNextFollowUpLoading && !activeNextFollowUp) {
+              return (
+                <div className="follow-up-next-visit-banner is-empty" role="status">
+                  <div className="follow-up-next-visit-banner-main">
+                    <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                    <strong className="follow-up-next-visit-banner-time placeholder">加载中…</strong>
+                  </div>
+                </div>
+              );
+            }
+            if (!activeNextFollowUp) {
+              return (
+                <div className="follow-up-next-visit-banner is-empty" role="note">
+                  <div className="follow-up-next-visit-banner-main">
+                    <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                    <strong className="follow-up-next-visit-banner-time placeholder">尚未设置</strong>
+                    <span className="follow-up-next-visit-banner-hint">在新建电话沟通记录时填写「下次随访时间」即可启用。系统会在到期前 2 天自动生成「电话随访」提醒任务。</span>
+                  </div>
+                </div>
+              );
+            }
+            const nextMs = new Date(activeNextFollowUp.nextFollowUpTime).getTime();
+            const now = Date.now();
+            const isOverdue = Number.isFinite(nextMs) && nextMs < now;
+            const isImminent = Number.isFinite(nextMs) && !isOverdue && (nextMs - now) <= 2 * 24 * 60 * 60 * 1000;
+            const bannerClass = isOverdue
+              ? 'follow-up-next-visit-banner is-overdue'
+              : isImminent
+                ? 'follow-up-next-visit-banner is-imminent'
+                : 'follow-up-next-visit-banner';
+            return (
+              <div className={bannerClass} role="status">
+                <div className="follow-up-next-visit-banner-main">
+                  <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                  <strong className="follow-up-next-visit-banner-time">{formatTime(activeNextFollowUp.nextFollowUpTime)}</strong>
+                  <span className="follow-up-next-visit-banner-hint">
+                    {isOverdue
+                      ? '该时间已过期，请尽快与患者确认随访或重新安排时间。'
+                      : isImminent
+                        ? '距离下次随访不足 2 天，系统已自动生成「电话随访」提醒任务。'
+                        : '距离下次随访 ≥ 2 天，到期前 2 天系统会自动生成提醒任务。'}
+                  </span>
+                  {activeNextFollowUpTask && (
+                    <span className="follow-up-next-visit-banner-task-badge" title={activeNextFollowUpTask.id}>
+                      已生成任务：{activeNextFollowUpTask.title}（{activeNextFollowUpTask.status}）
+                    </span>
+                  )}
+                </div>
+                <div className="follow-up-next-visit-banner-actions">
+                  {editingNextFollowUp ? (
+                    <div className="follow-up-next-visit-banner-edit">
+                      <input
+                        type="datetime-local"
+                        value={nextFollowUpEditDraft}
+                        onChange={(event) => setNextFollowUpEditDraft(event.target.value)}
+                        disabled={savingNextFollowUp}
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={saveEditedNextFollowUp}
+                        disabled={savingNextFollowUp}
+                      >
+                        {savingNextFollowUp ? '保存中…' : '保存'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={cancelEditNextFollowUp}
+                        disabled={savingNextFollowUp}
+                      >
+                        放弃
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={beginEditNextFollowUp}
+                        disabled={savingNextFollowUp || activeNextFollowUpLoading}
+                      >
+                        编辑时间
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={cancelActiveNextFollowUp}
+                        disabled={savingNextFollowUp || activeNextFollowUpLoading}
+                      >
+                        取消计划
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           <section className="visit-patient-detail-card" aria-label="电话随访患者联系信息">
             <div className="visit-patient-detail-identity">
@@ -3150,7 +3252,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>新建电话沟通记录</h3>
-                  <p className="muted small">该记录直接归入患者档案，不再绑定具体任务；任务结案仍在右侧处置面板完成。</p>
                 </div>
                 <button
                   className="secondary-button"
@@ -3228,7 +3329,6 @@ export function PatientDetailPage() {
             <div className="task-inline-list-header follow-up-ledger-toolbar">
               <div>
                 <h3>历史电话沟通记录</h3>
-                <p className="muted small">Lazy loading 分页加载；默认按记录创建时间从新到旧排序。</p>
               </div>
               <strong>{followUpHistoryLoaded ? `${followUpHistory.length}/${followUpHistoryTotal} 条` : '待加载'}</strong>
             </div>
@@ -3312,45 +3412,14 @@ export function PatientDetailPage() {
       )}
 
       {activeWorkspace === 'handling-history' && (
-        <section className="panel patient-handling-history-panel collapsible-workspace-panel">
-          <div className="hospital-section-header">
-            <div>
-              <span>最近处理历史</span>
-              <h2>处置记录与任务闭环</h2>
-              <p className="section-hint">聚合电话随访、任务状态变更和风险处置结果。医护处理任务时可在右侧面板操作，完整病历和趋势仍保留在左侧患者档案。</p>
-            </div>
-            {firstOpenTask?.data?.id && (
-              <button className="button" type="button" onClick={() => openInlineTaskPanel(firstOpenTask.data.id, 'close')}>
-                打开当前任务结案面板
-              </button>
-            )}
-          </div>
-
-          {handlingHistoryTimeline.length === 0 ? (
-            <div className="empty-state">当前患者暂无处理历史。</div>
-          ) : (
-            <div className="handling-history-list">
-              {handlingHistoryTimeline.slice(0, 30).map((item, index) => (
-                <article className="handling-history-card" key={`${item.type}-${item.time}-${item.data?.id ?? index}`}>
-                  <div className="handling-history-time">
-                    <strong>{timelineTypeLabelMap[item.type] ?? item.type}</strong>
-                    <span>{formatTime(item.time)}</span>
-                  </div>
-                  <div>
-                    <h3>{localizeBackendText(item.title)}</h3>
-                    <p>{localizeBackendText(item.description)}</p>
-                    <div className="handling-history-meta">
-                      {item.data?.status && <span>状态：{statusLabelMap[item.data.status] ?? item.data.status}</span>}
-                      {item.data?.followUpType && <span>方式：{followUpTypeLabelMap[item.data.followUpType] ?? item.data.followUpType}</span>}
-                      {item.data?.operatorId && <span>记录人：{item.data.operatorId}</span>}
-                      {item.data?.handledBy && <span>处理人：{item.data.handledBy}</span>}
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+        /* handling-history-v2: lazy-loaded task list + flow chart */
+        <PatientHandlingHistoryView
+          patientId={patientId ?? ''}
+          patient={data.patient}
+          formatTime={formatTime}
+          localizeBackendText={localizeBackendText}
+          focusTaskId={searchParams.get('historyTask') ?? undefined}
+        />
       )}
 
 
@@ -3361,7 +3430,6 @@ export function PatientDetailPage() {
           <div>
             <span>患者长期管理记录</span>
             <h2>全流程记录</h2>
-            <p className="section-hint">将全流程记录拆分为记录明细、指标趋势和处置闭环，避免所有信息直接堆在同一屏。</p>
           </div>
         </div>
         <div className="timeline-subsection-tabs">
@@ -3461,7 +3529,6 @@ export function PatientDetailPage() {
             <div>
               <span>处置闭环</span>
               <h2>处置闭环事件</h2>
-              <p className="section-hint">将相关的预警、任务、处置和随访结果合并为完整流程；该区块只在“处置闭环”二级页签下展示。</p>
             </div>
           </div>
           {closedLoopEvents.length === 0 ? (
@@ -3559,16 +3626,10 @@ export function PatientDetailPage() {
                   {item.type === 'TASK' &&
                     item.data?.status === 'PENDING' && (
                       <div className="timeline-actions">
-                        <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openFollowUpTab(item.data.id)}>
-                          记录电话随访
+                        {/* timeline-task-actions-v3: 只保留单一处理入口 */}
+                        <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>
+                          处理当前任务
                         </button>
-                        <button className="timeline-action-button" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>
-                          打开处置面板
-                        </button>
-                        {item.data?.relatedAlertId && (
-                          <span className="timeline-action-hint">关联风险已合并到该任务详情中</span>
-                        )}
-                        <span className="timeline-action-hint">待办任务请在患者档案内闭环</span>
                       </div>
                     )}
                   {item.type === 'FOLLOW_UP' && (

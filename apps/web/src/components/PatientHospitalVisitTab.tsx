@@ -469,12 +469,29 @@ export function PatientHospitalVisitTab({
           </div>
         </div>
 
-        {hasActiveVisitReminder && (
-          <div className="visit-existing-reminder-lock" role="status">
-            <strong>已存在有效到院提醒</strong>
-            <span>为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。</span>
-          </div>
-        )}
+        {hasActiveVisitReminder && (() => {
+          // Unified with the phone follow-up "下次随访时间" banner so the
+          // "已存在有效到院提醒" state reads the same across both tabs.
+          const primary = activeHospitalVisitReminders[0];
+          return (
+            <div className="follow-up-next-visit-banner is-imminent" role="status">
+              <div className="follow-up-next-visit-banner-main">
+                <span className="follow-up-next-visit-banner-label">当前到院提醒</span>
+                <strong className="follow-up-next-visit-banner-time">已存在有效到院提醒</strong>
+                <span className="follow-up-next-visit-banner-hint">
+                  为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。
+                </span>
+                {primary && (
+                  <span className="follow-up-next-visit-banner-task-badge" title={primary.id}>
+                    {activeHospitalVisitReminders.length > 1
+                      ? `共 ${activeHospitalVisitReminders.length} 条有效提醒 · 最近通知 ${formatTime(primary.remindedAt)}`
+                      : `${localizeBackendText(primary.reason)} · 最近通知 ${formatTime(primary.remindedAt)}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {renderCreateForm()}

@@ -335,19 +335,25 @@
 }
 
 .task-panel-task-list {
-  max-height: 184px;
+  /* Was a tight 184px scroll box that clipped task cards (especially taller
+     non-risk tasks whose longer type labels wrap the title onto two lines).
+     The whole side panel already scrolls, so give the picker generous room
+     and only scroll internally once the list gets very long. */
+  max-height: clamp(240px, 48vh, 540px);
   overflow: auto;
   padding-right: 2px;
 }
 
 .task-panel-task-card {
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-radius: 12px;
+  row-gap: 6px;
 }
 
 .task-panel-task-card strong {
   font-size: 13px;
+  line-height: 1.4;
 }
 
 .task-panel-current-task {

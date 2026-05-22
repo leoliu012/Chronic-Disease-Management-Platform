@@ -227,13 +227,6 @@ function WorkItemsTable({
                 {item.actionText}
               </Link>
             )}
-            <span className="work-item-action-hint">
-              {item.itemType === 'RISK_FOLLOW_UP_TASK'
-                ? '该事项已合并任务和预警；电话随访进入患者详情 tab，到院/结案进入右侧处置面板。'
-                : item.itemType === 'RISK_ALERT_ONLY'
-                  ? '该预警尚未形成随访任务，点击后会先生成风险随访任务，再进入患者详情页的电话随访 tab。'
-                  : '进入患者详情页，可在电话随访 tab 记录沟通，并在右侧面板完成到院/结案。'}
-            </span>
           </div>
         </article>
       ))}
@@ -308,7 +301,7 @@ function CompletedTasksTable({ tasks }: { tasks: Task[] }) {
               <td><PatientLink patient={task.patient} /></td>
               <td>{formatTime(task.dueAt)}</td>
               <td><span className={getStatusClass(task.status)}>{statusLabelMap[task.status] ?? task.status}</span></td>
-              <td>{task.patient && <Link className="secondary-btn compact-link-btn" to={`/patients/${task.patient.id}?workspace=timeline`}>查看时间线</Link>}</td>
+              <td>{task.patient && <Link className="secondary-btn compact-link-btn" to={`/patients/${task.patient.id}?workspace=handling-history&historyTask=${task.id}`}>查看处置记录</Link>}</td>
             </tr>
           ))}
         </tbody>
@@ -495,7 +488,6 @@ export function NurseDashboardPage() {
               <div className="clean-section-heading">
                 <div>
                   <h2>待处理事项</h2>
-                  <p>任务、预警、风险随访合并展示。所有任务回到患者详情页处理；电话随访在独立 tab 记录，到院与结案在右侧面板完成。</p>
                 </div>
               </div>
 
@@ -514,21 +506,21 @@ export function NurseDashboardPage() {
 
           {activeSection === 'vitals' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>最近异常指标</h2><p>指标异常作为风险来源线索；处理入口会落到患者详情页内的电话随访 tab 与处置面板。</p></div></div>
+              <div className="clean-section-heading"><div><h2>最近异常指标</h2></div></div>
               <section className="clean-subpanel"><VitalsTable records={data.recentAbnormalVitals} /></section>
             </div>
           )}
 
           {activeSection === 'patients' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>我的患者</h2><p>当前护士负责患者清单。复杂筛选请进入“患者档案”的主索引页面。</p></div></div>
+              <div className="clean-section-heading"><div><h2>我的患者</h2></div></div>
               <section className="clean-subpanel"><PatientsTable patients={data.myPatients} /></section>
             </div>
           )}
 
           {activeSection === 'completed' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>完成记录</h2><p>显示最近完成任务，更多历史记录请在患者详情页时间线查看。</p></div></div>
+              <div className="clean-section-heading"><div><h2>完成记录</h2></div></div>
               <section className="clean-subpanel"><CompletedTasksTable tasks={completedTasks} /></section>
             </div>
           )}

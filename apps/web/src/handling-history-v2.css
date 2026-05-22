@@ -1,0 +1,156 @@
+/*
+ * handling-history-v2: enhanced 处置记录 page.
+ *
+ * Lists past task processing records with:
+ *  - a start/end date-range filter bar (matches the 历史电话沟通记录 filter)
+ *  - lazy-loaded flow chart per task (expand-on-click; "load more" pagination)
+ *
+ * Reuses the existing .task-processing-flow-card / .task-flow-node-* styles
+ * from patient-detail-task-ux-polish.css so the flow chart looks identical
+ * to the one in PatientTaskSidePanel.
+ */
+
+.handling-history-v2-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.handling-history-v2-header {
+  align-items: center;
+}
+
+.handling-history-v2-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.handling-history-v2-filter-meta {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.handling-history-v2-error {
+  margin: 0;
+}
+
+.handling-history-v2-loading,
+.handling-history-v2-empty {
+  padding: 20px;
+  text-align: center;
+}
+
+.handling-history-v2-list {
+  display: grid;
+  gap: 10px;
+}
+
+.handling-history-v2-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.handling-history-v2-card.is-expanded {
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.handling-history-v2-card.is-focused {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25), 0 12px 28px rgba(37, 99, 235, 0.12);
+}
+
+.handling-history-v2-card-header {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.handling-history-v2-card-header:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: -2px;
+}
+
+.handling-history-v2-card-topline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.handling-history-v2-card-header h3 {
+  margin: 2px 0 0;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.handling-history-v2-card-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.handling-history-v2-card-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.handling-history-v2-toggle-icon {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.handling-history-v2-card.is-expanded .handling-history-v2-toggle-icon {
+  border-color: #0f766e;
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.handling-history-v2-card-body {
+  border-top: 1px solid #e2e8f0;
+  padding: 14px 16px;
+  background: #f8fafc;
+}
+
+.handling-history-flow-card {
+  background: transparent;
+  margin: 0;
+}
+
+.handling-history-flow-loading,
+.handling-history-flow-empty {
+  padding: 8px 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.handling-history-v2-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
+}

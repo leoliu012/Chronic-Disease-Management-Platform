@@ -55,6 +55,28 @@ export class FollowUpsService {
 
   // ----- helpers -----
 
+  /**
+   * phone-follow-up-dedupe-v2: serialize all phone-follow-up task mutations for a
+   * single patient using a transaction-scoped Postgres advisory lock.
+   *
+   * Root cause of the "两个一样的计划电话随访任务" bug: opening the follow-up tab
+   * fires `loadFollowUpHistory` and `loadActiveNextFollowUp` at the same time, and
+   * both endpoints independently run `syncPhoneFollowUpScheduledTask`. With no lock
+   * both transactions read "no open task" and both create one -> two duplicates.
+   *
+   * `pg_advisory_xact_lock` releases automatically when the transaction ends, so the
+   * two syncs run one-after-another and the dedupe logic always sees a consistent
+   * view. Wrapped defensively so a non-Postgres engine (e.g. tests) cannot break the
+   * main flow.
+   */
+  private async lockPatientFollowUp(patientId: string, client: DbClient) {
+    try {
+      await client.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${patientId}, 0))`;
+    } catch (err) {
+      console.warn('Advisory lock for phone follow-up sync unavailable.', err);
+    }
+  }
+
   private async assertPatient(patientId: string) {
     const patient = await this.prisma.patient.findUnique({
       where: { id: patientId },
@@ -155,8 +177,26 @@ export class FollowUpsService {
     if (timeUntil > REMINDER_LEAD_TIME_MS) return null;
     if (timeUntil < -REMINDER_LEAD_TIME_MS) return null;
 
-    const existing = await this.findOpenPhoneFollowUpTask(patientId, client);
-    if (existing) return existing;
+    // phone-follow-up-dedupe-v1: collapse stale duplicates left over from a previous
+    // buggy build into a single open reminder task.
+    const existingTasks = await client.task.findMany({
+      where: {
+        patientId,
+        type: PHONE_FOLLOW_UP_TASK_TYPE,
+        status: { in: OPEN_TASK_STATUSES },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existingTasks.length > 0) {
+      const [keep, ...duplicates] = existingTasks;
+      if (duplicates.length > 0) {
+        await client.task.updateMany({
+          where: { id: { in: duplicates.map((t) => t.id) } },
+          data: { status: TaskStatus.CANCELED },
+        });
+      }
+      return keep;
+    }
 
     const patient = await client.patient.findUnique({
       where: { id: patientId },
@@ -182,13 +222,28 @@ export class FollowUpsService {
    * Safe to call from list/read endpoints to keep the work queue fresh.
    */
   async syncPhoneFollowUpScheduledTask(patientId: string) {
+    // phone-follow-up-dedupe-v1: the previous version used findFirst() which silently
+    // left a second duplicate '电话随访' task untouched when the first
+    // matched activeTime. We now iterate over EVERY open scheduled task,
+    // keep at most one matching active time, and cancel the rest.
     return this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent syncs for this patient (see lockPatientFollowUp).
+      await this.lockPatientFollowUp(patientId, tx);
+
       const active = await this.findActiveScheduledRecord(patientId, tx);
       const activeTime = active?.nextFollowUpTime ?? null;
-      const existingTask = await this.findOpenPhoneFollowUpTask(patientId, tx);
+
+      const existingTasks = await tx.task.findMany({
+        where: {
+          patientId,
+          type: PHONE_FOLLOW_UP_TASK_TYPE,
+          status: { in: OPEN_TASK_STATUSES },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
 
       if (!activeTime) {
-        if (existingTask) {
+        if (existingTasks.length > 0) {
           await this.cancelOpenPhoneFollowUpScheduledTasks(
             patientId,
             '当前没有有效的下次随访时间，原电话随访提醒任务被取消。',
@@ -198,16 +253,41 @@ export class FollowUpsService {
         return { task: null };
       }
 
-      // If existing task already targets the active time (within 1 minute), keep it.
-      if (
-        existingTask &&
-        existingTask.dueAt &&
-        Math.abs(existingTask.dueAt.getTime() - activeTime.getTime()) < 60_000
-      ) {
-        return { task: existingTask };
+      // Prefer the most recent task whose dueAt matches active time within 1 min.
+      const matchingTask = existingTasks.find(
+        (item) =>
+          item.dueAt && Math.abs(item.dueAt.getTime() - activeTime.getTime()) < 60_000,
+      );
+
+      if (matchingTask) {
+        const duplicateIds = existingTasks
+          .filter((item) => item.id !== matchingTask.id)
+          .map((item) => item.id);
+        if (duplicateIds.length > 0) {
+          await tx.task.updateMany({
+            where: { id: { in: duplicateIds } },
+            data: { status: TaskStatus.CANCELED },
+          });
+          await Promise.all(
+            duplicateIds.map((taskId) =>
+              tx.taskProcessingEvent
+                .create({
+                  data: {
+                    taskId,
+                    patientId,
+                    eventType: 'CANCEL_PROCESSING',
+                    title: '重复的电话随访提醒任务被取消',
+                    description: '同一患者存在多条电话随访提醒任务，系统保留最匹配下次随访时间的一条，其余自动取消。',
+                  },
+                })
+                .catch(() => null),
+            ),
+          );
+        }
+        return { task: matchingTask };
       }
 
-      if (existingTask) {
+      if (existingTasks.length > 0) {
         await this.cancelOpenPhoneFollowUpScheduledTasks(
           patientId,
           '下次随访时间已更新，原电话随访提醒任务被取消，将根据最新时间重新生成。',
@@ -308,6 +388,9 @@ export class FollowUpsService {
     await this.assertPatient(patientId);
 
     return this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent phone-follow-up task mutations for this patient.
+      await this.lockPatientFollowUp(patientId, tx);
+
       // Capture the previously active scheduled time so the client can show a
       // "your previous next-follow-up was overwritten" notice.
       const previousActive = await this.findActiveScheduledRecord(patientId, tx);

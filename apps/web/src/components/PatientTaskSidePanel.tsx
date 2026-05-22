@@ -158,13 +158,12 @@ function getRelatedAlertForTask(task: TimelineEvent | null | undefined, timeline
   return timeline.find((item) => item.type === 'RISK_ALERT' && item.data?.id === relatedAlertId) ?? null;
 }
 
-function isActionableTask(task: TimelineEvent, timeline: TimelineEvent[]) {
-  if (!isOpenTask(task)) return false;
-
-  const relatedAlert = getRelatedAlertForTask(task, timeline);
-  if (!relatedAlert) return true;
-
-  return !isClosedAlertStatus(relatedAlert.data?.status);
+// isActionableTask-orphan-fix-v1: a PENDING/IN_PROGRESS task is always actionable, even
+// if its related alert has already been resolved/dismissed. Hiding such
+// tasks was the root cause of the "sidebar 空 but 全部记录 still shows
+// 待办任务" inconsistency reported by clinical users.
+function isActionableTask(task: TimelineEvent, _timeline: TimelineEvent[]) {
+  return isOpenTask(task);
 }
 
 

@@ -171,35 +171,63 @@ select {
 }
 
 .topbar {
-  height: 76px;
+  min-height: 76px;
   background: rgba(255, 255, 255, 0.9);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(14px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 30px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px 30px;
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+/* The title/subtitle block must be allowed to shrink so it never pushes the
+   action buttons off-screen when the viewport narrows. */
+.topbar > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .topbar-title {
   font-weight: 900;
   color: var(--hospital-blue-dark);
   font-size: 18px;
+  overflow-wrap: anywhere;
 }
 
 .topbar-subtitle {
   color: var(--muted);
   font-size: 12px;
   margin-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    padding: 12px 18px;
+  }
+
+  .topbar-title {
+    font-size: 16px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .topbar-pill,

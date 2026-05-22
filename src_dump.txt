@@ -4,36 +4,6 @@
 <<SKIPPED: binary file (6148 bytes)>>
 
 
-### FILE: README.md
-# task_prestart_gate_patch
-
-改动内容：
-
-1. 任务侧边栏在任务未开始前只显示关联风险预警和一个显眼的“开始处理”按钮。
-2. 隐藏未开始状态下的任务列表、流程图、引导说明、结案表单等其余内容，避免护士在未开始处理前看到过多无关区域。
-3. 点击“开始处理”后恢复原有完整处理面板：任务选择、动态流程、结案表单、自动关联流程记录等。
-
-应用方式：
-
-```bash
-ZIP="$HOME/Downloads/task_prestart_gate_patch.zip"
-TMP="/tmp/task_prestart_gate_patch"
-
-rm -rf "$TMP"
-mkdir -p "$TMP"
-unzip -q "$ZIP" -d "$TMP"
-rsync -av "$TMP/" ./
-```
-
-应用后建议：
-
-```bash
-cd apps/web
-npm run build
-npm run dev
-```
-
-
 ### FILE: apps/.DS_Store
 <<SKIPPED: binary file (6148 bytes)>>
 
@@ -5892,6 +5862,28 @@ export class FollowUpsService {
 
   // ----- helpers -----
 
+  /**
+   * phone-follow-up-dedupe-v2: serialize all phone-follow-up task mutations for a
+   * single patient using a transaction-scoped Postgres advisory lock.
+   *
+   * Root cause of the "两个一样的计划电话随访任务" bug: opening the follow-up tab
+   * fires `loadFollowUpHistory` and `loadActiveNextFollowUp` at the same time, and
+   * both endpoints independently run `syncPhoneFollowUpScheduledTask`. With no lock
+   * both transactions read "no open task" and both create one -> two duplicates.
+   *
+   * `pg_advisory_xact_lock` releases automatically when the transaction ends, so the
+   * two syncs run one-after-another and the dedupe logic always sees a consistent
+   * view. Wrapped defensively so a non-Postgres engine (e.g. tests) cannot break the
+   * main flow.
+   */
+  private async lockPatientFollowUp(patientId: string, client: DbClient) {
+    try {
+      await client.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${patientId}, 0))`;
+    } catch (err) {
+      console.warn('Advisory lock for phone follow-up sync unavailable.', err);
+    }
+  }
+
   private async assertPatient(patientId: string) {
     const patient = await this.prisma.patient.findUnique({
       where: { id: patientId },
@@ -5992,8 +5984,26 @@ export class FollowUpsService {
     if (timeUntil > REMINDER_LEAD_TIME_MS) return null;
     if (timeUntil < -REMINDER_LEAD_TIME_MS) return null;
 
-    const existing = await this.findOpenPhoneFollowUpTask(patientId, client);
-    if (existing) return existing;
+    // phone-follow-up-dedupe-v1: collapse stale duplicates left over from a previous
+    // buggy build into a single open reminder task.
+    const existingTasks = await client.task.findMany({
+      where: {
+        patientId,
+        type: PHONE_FOLLOW_UP_TASK_TYPE,
+        status: { in: OPEN_TASK_STATUSES },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (existingTasks.length > 0) {
+      const [keep, ...duplicates] = existingTasks;
+      if (duplicates.length > 0) {
+        await client.task.updateMany({
+          where: { id: { in: duplicates.map((t) => t.id) } },
+          data: { status: TaskStatus.CANCELED },
+        });
+      }
+      return keep;
+    }
 
     const patient = await client.patient.findUnique({
       where: { id: patientId },
@@ -6019,13 +6029,28 @@ export class FollowUpsService {
    * Safe to call from list/read endpoints to keep the work queue fresh.
    */
   async syncPhoneFollowUpScheduledTask(patientId: string) {
+    // phone-follow-up-dedupe-v1: the previous version used findFirst() which silently
+    // left a second duplicate '电话随访' task untouched when the first
+    // matched activeTime. We now iterate over EVERY open scheduled task,
+    // keep at most one matching active time, and cancel the rest.
     return this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent syncs for this patient (see lockPatientFollowUp).
+      await this.lockPatientFollowUp(patientId, tx);
+
       const active = await this.findActiveScheduledRecord(patientId, tx);
       const activeTime = active?.nextFollowUpTime ?? null;
-      const existingTask = await this.findOpenPhoneFollowUpTask(patientId, tx);
+
+      const existingTasks = await tx.task.findMany({
+        where: {
+          patientId,
+          type: PHONE_FOLLOW_UP_TASK_TYPE,
+          status: { in: OPEN_TASK_STATUSES },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
 
       if (!activeTime) {
-        if (existingTask) {
+        if (existingTasks.length > 0) {
           await this.cancelOpenPhoneFollowUpScheduledTasks(
             patientId,
             '当前没有有效的下次随访时间，原电话随访提醒任务被取消。',
@@ -6035,16 +6060,41 @@ export class FollowUpsService {
         return { task: null };
       }
 
-      // If existing task already targets the active time (within 1 minute), keep it.
-      if (
-        existingTask &&
-        existingTask.dueAt &&
-        Math.abs(existingTask.dueAt.getTime() - activeTime.getTime()) < 60_000
-      ) {
-        return { task: existingTask };
+      // Prefer the most recent task whose dueAt matches active time within 1 min.
+      const matchingTask = existingTasks.find(
+        (item) =>
+          item.dueAt && Math.abs(item.dueAt.getTime() - activeTime.getTime()) < 60_000,
+      );
+
+      if (matchingTask) {
+        const duplicateIds = existingTasks
+          .filter((item) => item.id !== matchingTask.id)
+          .map((item) => item.id);
+        if (duplicateIds.length > 0) {
+          await tx.task.updateMany({
+            where: { id: { in: duplicateIds } },
+            data: { status: TaskStatus.CANCELED },
+          });
+          await Promise.all(
+            duplicateIds.map((taskId) =>
+              tx.taskProcessingEvent
+                .create({
+                  data: {
+                    taskId,
+                    patientId,
+                    eventType: 'CANCEL_PROCESSING',
+                    title: '重复的电话随访提醒任务被取消',
+                    description: '同一患者存在多条电话随访提醒任务，系统保留最匹配下次随访时间的一条，其余自动取消。',
+                  },
+                })
+                .catch(() => null),
+            ),
+          );
+        }
+        return { task: matchingTask };
       }
 
-      if (existingTask) {
+      if (existingTasks.length > 0) {
         await this.cancelOpenPhoneFollowUpScheduledTasks(
           patientId,
           '下次随访时间已更新，原电话随访提醒任务被取消，将根据最新时间重新生成。',
@@ -6145,6 +6195,9 @@ export class FollowUpsService {
     await this.assertPatient(patientId);
 
     return this.prisma.$transaction(async (tx) => {
+      // Serialize concurrent phone-follow-up task mutations for this patient.
+      await this.lockPatientFollowUp(patientId, tx);
+
       // Capture the previously active scheduled time so the client can show a
       // "your previous next-follow-up was overwritten" notice.
       const previousActive = await this.findActiveScheduledRecord(patientId, tx);
@@ -15845,13 +15898,6 @@ const roleHomePath: Record<UserRole, string> = {
   DOCTOR: '/patients',
 };
 
-const roleScopeText: Record<UserRole, string[]> = {
-  ADMIN: ['查看运营总览', '进入护士工作台', '管理患者档案', '审核患者端绑定', '配置病种规则/风险阈值', '管理 HIS/EMR/LIS 接口中心', '执行系统管理操作'],
-  MANAGER: ['查看运营总览和质控指标', '只读查看接口同步状态', '不直接进入患者医疗数据编辑入口'],
-  NURSE: ['处理随访/预警/待办', '查看并维护患者慢病档案', '审核患者端绑定', '只读查看病种规则', '不显示管理驾驶舱入口'],
-  DOCTOR: ['查看患者档案和风险趋势', '只读查看病种规则', '不显示护士批量待办入口', '不显示管理驾驶舱入口'],
-};
-
 function readStoredUser() {
   const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY);
   if (!raw) return null;
@@ -15925,16 +15971,6 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
           ))}
         </nav>
 
-        <div className="role-scope-card">
-          <div className="sidebar-footer-title">当前角色菜单范围</div>
-          <div className="role-scope-name">{getRoleLabel(user.role)}</div>
-          <ul className="role-scope-list">
-            {roleScopeText[user.role].map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-
         <div className="sidebar-footer security-sidebar-footer">
           <div className="sidebar-footer-title">权限与合规状态</div>
           <div className="status-dot-row">
@@ -15959,9 +15995,6 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
           </div>
           <div className="topbar-actions">
             <span className="topbar-pill">内网演示环境</span>
-            <span className="topbar-user">
-              当前用户：{user.displayName} / {getRoleLabel(user.role)}
-            </span>
             <button className="ghost-btn topbar-logout" onClick={onLogout}>
               退出登录
             </button>
@@ -18670,6 +18703,574 @@ export function OperationToastHost() {
 }
 
 
+### FILE: apps/web/src/components/PatientHandlingHistoryView.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api/client';
+
+/**
+ * 处置记录 (handling history) view.
+ *
+ * Lists past task-processing records for one patient, embedding the same
+ * "动态处理流程" chart shown in PatientTaskSidePanel. Supports:
+ *   - Time-range filter (start/end date, inclusive).
+ *   - Lazy loading: tasks are fetched in one shot but only `pageSize` rows are
+ *     rendered until the nurse clicks "加载更多". Each task's processing
+ *     events are loaded on-demand the first time the task card is expanded.
+ *
+ * Backend contract used (already exists):
+ *   GET /patients/:patientId/tasks          (returns full task list)
+ *   GET /tasks/:id/processing-events        (returns ordered TaskProcessingEvent[])
+ */
+
+type Patient = {
+  id: string;
+  hospitalPatientId?: string;
+  name: string;
+};
+
+type Task = {
+  id: string;
+  patientId: string;
+  title: string;
+  type: string;
+  status: string;
+  dueAt?: string | null;
+  createdAt: string;
+  relatedAlertId?: string | null;
+  assigneeId?: string | null;
+};
+
+type TaskProcessingEvent = {
+  id: string;
+  taskId: string;
+  patientId: string;
+  eventType: string;
+  title: string;
+  description?: string | null;
+  sourceType?: string | null;
+  sourceId?: string | null;
+  operatorId?: string | null;
+  electronicSignature?: string | null;
+  createdAt: string;
+};
+
+type Props = {
+  patientId: string;
+  patient: Patient;
+  formatTime: (value?: string) => string;
+  localizeBackendText: (value?: string | null) => string;
+  /**
+   * When provided (e.g. navigated from the nurse workbench "查看处置记录"
+   * action), the matching task card is forced into the visible window,
+   * auto-expanded, and scrolled into view.
+   */
+  focusTaskId?: string;
+};
+
+const TASK_TYPE_LABEL: Record<string, string> = {
+  FOLLOW_UP: '随访任务',
+  RISK_ALERT_FOLLOW_UP: '风险预警处理',
+  RECHECK_REMINDER: '复查提醒',
+  MEDICATION_REMINDER: '用药提醒',
+  MEDICATION_ADHERENCE_FOLLOW_UP: '用药依从性随访',
+  VITAL_MEASUREMENT_MISSED: '指标漏测复核',
+  QUESTIONNAIRE_REVIEW: '问卷复核',
+  LAB_TEST_REMINDER: '检查提醒',
+  HOSPITAL_VISIT_FOLLOW_UP: '到院提醒任务',
+  PHONE_FOLLOW_UP_SCHEDULED: '电话随访（计划提醒）',
+};
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  PENDING: '待处理',
+  IN_PROGRESS: '处理中',
+  DONE: '已完成',
+  CANCELED: '已取消',
+};
+
+const EVENT_TYPE_LABEL: Record<string, string> = {
+  TASK_CREATED: '任务生成',
+  START_PROCESSING: '开始处理',
+  VISIT_REMINDER_SENT: '建议到院',
+  VISIT_REMIND_AGAIN: '再次提醒',
+  VISIT_ARRIVED: '已到院',
+  VISIT_NO_SHOW: '未到院',
+  VISIT_REFUSED: '拒绝到院',
+  AUTO_PATIENT_ACTION: '档案操作',
+  COMPLETE_PROCESSING: '处理完成',
+  CANCEL_PROCESSING: '取消/误报',
+};
+
+const SOURCE_TYPE_LABEL: Record<string, string> = {
+  FRONTEND_AUTO_ASSOCIATION: '患者档案自动关联',
+  HOSPITAL_VISIT_REMINDER: '到院提醒',
+  TASK_PROCESSING: '任务处理',
+};
+
+const STATUS_CLASS: Record<string, string> = {
+  PENDING: 'status-badge status-pending',
+  IN_PROGRESS: 'status-badge status-in-progress',
+  DONE: 'status-badge status-done',
+  CANCELED: 'status-badge status-canceled',
+};
+
+const DEFAULT_PAGE_SIZE = 5;
+
+function eventClass(eventType: string) {
+  return `task-flow-node-${String(eventType || 'other').toLowerCase().replace(/_/g, '-')}`;
+}
+
+type ParsedDescriptionRow = {
+  id: string;
+  label?: string;
+  value?: string;
+  before?: string;
+  after?: string;
+  raw?: string;
+};
+
+function parseStructuredDescription(description?: string | null) {
+  const text = String(description ?? '').replace(/[。；;\s]+$/g, '').trim();
+  if (!text) return null;
+  const firstColon = text.indexOf('：');
+  if (firstColon < 0) return null;
+  const summary = text.slice(0, firstColon).trim();
+  const detailsText = text.slice(firstColon + 1).trim();
+  if (!summary || !detailsText) return null;
+
+  const rows: ParsedDescriptionRow[] = detailsText
+    .split('；')
+    .map((p) => p.replace(/[。；;\s]+$/g, '').trim())
+    .filter(Boolean)
+    .map((part, index) => {
+      const ci = part.indexOf('：');
+      if (ci < 0) return { id: `${index}-${part}`, raw: part };
+      const label = part.slice(0, ci).trim();
+      const value = part.slice(ci + 1).trim();
+      const arrowIdx = value.indexOf(' → ');
+      if (arrowIdx >= 0) {
+        return {
+          id: `${index}-${label}`,
+          label,
+          before: value.slice(0, arrowIdx).trim(),
+          after: value.slice(arrowIdx + 3).trim(),
+        };
+      }
+      return { id: `${index}-${label}`, label, value };
+    });
+  if (rows.length === 0) return null;
+  return { summary, rows };
+}
+
+function renderFlowDescription(description: string, localizeBackendText: (v?: string | null) => string) {
+  const localized = localizeBackendText(description);
+  const parsed = parseStructuredDescription(localized);
+  if (!parsed) return <p>{localized}</p>;
+
+  return (
+    <div className="task-flow-node-description">
+      <p className="task-flow-node-summary">
+        <strong>{parsed.summary}</strong>
+      </p>
+      <dl className="task-flow-node-detail-list">
+        {parsed.rows.map((row) => (
+          <div key={row.id} className="task-flow-node-detail-row">
+            {row.raw ? (
+              <dd className="task-flow-node-detail-value task-flow-node-detail-raw">{row.raw}</dd>
+            ) : (
+              <>
+                <dt className="task-flow-node-detail-label">{row.label}</dt>
+                <dd className="task-flow-node-detail-value">
+                  {row.before !== undefined && row.after !== undefined ? (
+                    <span className="task-flow-node-change">
+                      <span className="task-flow-node-before">{row.before || '未填写'}</span>
+                      <span className="task-flow-node-arrow">→</span>
+                      <strong className="task-flow-node-after">{row.after || '未填写'}</strong>
+                    </span>
+                  ) : (
+                    <strong>{row.value}</strong>
+                  )}
+                </dd>
+              </>
+            )}
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function FlowChart({
+  events,
+  loading,
+  formatTime,
+  localizeBackendText,
+}: {
+  events: TaskProcessingEvent[];
+  loading: boolean;
+  formatTime: (v?: string) => string;
+  localizeBackendText: (v?: string | null) => string;
+}) {
+  const nodes = useMemo(
+    () =>
+      [...events]
+        .filter((node) => node.eventType !== 'TASK_CREATED')
+        .sort((l, r) => new Date(l.createdAt).getTime() - new Date(r.createdAt).getTime()),
+    [events],
+  );
+
+  if (loading) {
+    return <div className="handling-history-flow-loading">正在加载处理流程...</div>;
+  }
+  if (nodes.length === 0) {
+    return <div className="handling-history-flow-empty">该任务暂无处置流程节点。</div>;
+  }
+  return (
+    <div className="task-processing-flow-card handling-history-flow-card">
+      <div className="task-processing-flow-header">
+        <div>
+          <span>动态处理流程</span>
+          <strong>{nodes.length} 个节点</strong>
+        </div>
+      </div>
+      <ol className="task-processing-flow-rail">
+        {nodes.map((node, index) => (
+          <li key={node.id} className={eventClass(node.eventType)}>
+            <div className="task-flow-node-index">{index + 1}</div>
+            <div className="task-flow-node-body">
+              <div className="task-flow-node-topline">
+                <strong>{EVENT_TYPE_LABEL[node.eventType] ?? node.title}</strong>
+                <span>{formatTime(node.createdAt)}</span>
+              </div>
+              <h4>{localizeBackendText(node.title)}</h4>
+              {node.description && renderFlowDescription(node.description, localizeBackendText)}
+              {(node.sourceType || node.electronicSignature) && (
+                <div className="task-flow-node-meta">
+                  {node.sourceType && <span>{SOURCE_TYPE_LABEL[node.sourceType] ?? node.sourceType}</span>}
+                  {node.electronicSignature && <span>签名：{node.electronicSignature}</span>}
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+export function PatientHandlingHistoryView({
+  patientId,
+  patient,
+  formatTime,
+  localizeBackendText,
+  focusTaskId,
+}: Props) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState('');
+
+  // Time filter mirrors the "历史电话沟通记录" filter: a simple start/end date
+  // range with 查询 / 重置, no quick presets. Empty range = show all records.
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
+  const focusedCardRef = useRef<HTMLElement | null>(null);
+  const focusHandledRef = useRef<string | null>(null);
+
+  const [visibleCount, setVisibleCount] = useState(DEFAULT_PAGE_SIZE);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+  const [eventsByTaskId, setEventsByTaskId] = useState<Record<string, TaskProcessingEvent[]>>({});
+  const [eventsLoadingByTaskId, setEventsLoadingByTaskId] = useState<Record<string, boolean>>({});
+
+  async function loadTasks() {
+    if (!patientId) return;
+    setTasksLoading(true);
+    setTasksError('');
+    try {
+      const response = await api.get<Task[]>(`/patients/${patientId}/tasks`);
+      const list = Array.isArray(response.data) ? response.data : [];
+      setTasks(list);
+    } catch (err) {
+      console.warn('Failed to load tasks for handling history.', err);
+      setTasksError('处置记录加载失败，请稍后重试。');
+    } finally {
+      setTasksLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadTasks();
+    setExpandedTaskIds(new Set());
+    setEventsByTaskId({});
+    setEventsLoadingByTaskId({});
+    setVisibleCount(DEFAULT_PAGE_SIZE);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId]);
+
+  // Filter tasks by the user-selected time range. We use task.createdAt as the
+  // canonical timestamp; this matches "when the task was created and started
+  // the closed loop". An inclusive end-of-day boundary is applied to endDate.
+  const filteredTasks = useMemo(() => {
+    const startMs = startDate ? new Date(startDate).getTime() : Number.NEGATIVE_INFINITY;
+    const endMs = endDate
+      ? new Date(endDate).getTime() + 24 * 60 * 60 * 1000 - 1
+      : Number.POSITIVE_INFINITY;
+    return tasks
+      .filter((task) => {
+        const created = new Date(task.createdAt).getTime();
+        if (!Number.isFinite(created)) return false;
+        return created >= startMs && created <= endMs;
+      })
+      .sort((l, r) => new Date(r.createdAt).getTime() - new Date(l.createdAt).getTime());
+  }, [tasks, startDate, endDate]);
+
+  // When the user changes the time range, snap visibleCount back to the page
+  // size so the list re-paginates from the top.
+  useEffect(() => {
+    setVisibleCount(DEFAULT_PAGE_SIZE);
+  }, [startDate, endDate]);
+
+  const visibleTasks = useMemo(() => filteredTasks.slice(0, visibleCount), [filteredTasks, visibleCount]);
+  const hasMore = filteredTasks.length > visibleCount;
+
+  async function loadEventsForTask(taskId: string) {
+    if (eventsByTaskId[taskId] || eventsLoadingByTaskId[taskId]) return;
+    setEventsLoadingByTaskId((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      const response = await api.get<TaskProcessingEvent[]>(`/tasks/${taskId}/processing-events`);
+      setEventsByTaskId((prev) => ({ ...prev, [taskId]: Array.isArray(response.data) ? response.data : [] }));
+    } catch (err) {
+      console.warn(`Failed to load processing events for task ${taskId}`, err);
+      setEventsByTaskId((prev) => ({ ...prev, [taskId]: [] }));
+    } finally {
+      setEventsLoadingByTaskId((prev) => ({ ...prev, [taskId]: false }));
+    }
+  }
+
+  function toggleExpanded(taskId: string) {
+    setExpandedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+        void loadEventsForTask(taskId);
+      }
+      return next;
+    });
+  }
+
+  function expandAll() {
+    const ids = new Set(visibleTasks.map((task) => task.id));
+    setExpandedTaskIds(ids);
+    visibleTasks.forEach((task) => {
+      if (!eventsByTaskId[task.id]) {
+        void loadEventsForTask(task.id);
+      }
+    });
+  }
+
+  function collapseAll() {
+    setExpandedTaskIds(new Set());
+  }
+
+  function resetRange() {
+    setStartDate('');
+    setEndDate('');
+  }
+
+  // When arriving with a focusTaskId (e.g. from the nurse workbench), make sure
+  // the target task is within the rendered window, auto-expand it, and scroll
+  // it into view once. Guarded by focusHandledRef so manual collapse afterwards
+  // is respected.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    if (focusHandledRef.current === focusTaskId) return;
+    const index = filteredTasks.findIndex((task) => task.id === focusTaskId);
+    if (index < 0) return; // not loaded yet (or filtered out) — wait for tasks to load
+
+    focusHandledRef.current = focusTaskId;
+    if (index >= visibleCount) {
+      setVisibleCount(index + 1);
+    }
+    setExpandedTaskIds((prev) => {
+      const next = new Set(prev);
+      next.add(focusTaskId);
+      return next;
+    });
+    void loadEventsForTask(focusTaskId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTaskId, filteredTasks]);
+
+  useEffect(() => {
+    if (!focusTaskId || focusHandledRef.current !== focusTaskId) return;
+    const node = focusedCardRef.current;
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [focusTaskId, visibleCount, expandedTaskIds]);
+
+  return (
+    <section className="panel patient-handling-history-panel collapsible-workspace-panel handling-history-v2-panel">
+      <div className="hospital-section-header handling-history-v2-header">
+        <div>
+          <span>处置记录</span>
+          <h2>过去处置记录</h2>
+        </div>
+        <div className="handling-history-v2-actions">
+          <button
+            type="button"
+            className="secondary-button compact-link-btn"
+            onClick={() => loadTasks()}
+            disabled={tasksLoading}
+          >
+            {tasksLoading ? '加载中…' : '刷新'}
+          </button>
+          {visibleTasks.length > 0 && (
+            expandedTaskIds.size === visibleTasks.length ? (
+              <button type="button" className="secondary-button compact-link-btn" onClick={collapseAll}>
+                收起全部
+              </button>
+            ) : (
+              <button type="button" className="secondary-button compact-link-btn" onClick={expandAll}>
+                展开全部
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      <form
+        className="follow-up-history-filter"
+        aria-label="按时间筛选处置记录"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setVisibleCount(DEFAULT_PAGE_SIZE);
+        }}
+      >
+        <label>
+          <span>创建时间从</span>
+          <input
+            type="date"
+            value={startDate}
+            max={endDate || undefined}
+            onChange={(event) => setStartDate(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>创建时间至</span>
+          <input
+            type="date"
+            value={endDate}
+            min={startDate || undefined}
+            onChange={(event) => setEndDate(event.target.value)}
+          />
+        </label>
+        <div className="follow-up-filter-actions">
+          <button className="secondary-button" type="submit" disabled={tasksLoading}>查询</button>
+          <button
+            className="secondary-button subtle"
+            type="button"
+            disabled={tasksLoading}
+            onClick={resetRange}
+          >
+            重置
+          </button>
+        </div>
+      </form>
+
+      <div className="handling-history-v2-filter-meta">
+        {patient.name} · 共匹配 {filteredTasks.length} 条 · 已展示 {visibleTasks.length}
+      </div>
+
+      {tasksError && (
+        <div className="notice-error handling-history-v2-error" role="alert">
+          {tasksError}
+        </div>
+      )}
+
+      {tasksLoading && tasks.length === 0 ? (
+        <div className="loading-state handling-history-v2-loading">正在加载处置记录...</div>
+      ) : filteredTasks.length === 0 ? (
+        <div className="empty-state handling-history-v2-empty">
+          {tasks.length === 0
+            ? '当前患者暂无任务处置记录。'
+            : '所选时间范围内没有处置记录，请调整时间范围。'}
+        </div>
+      ) : (
+        <div className="handling-history-v2-list">
+          {visibleTasks.map((task) => {
+            const isExpanded = expandedTaskIds.has(task.id);
+            const events = eventsByTaskId[task.id] ?? [];
+            const isEventsLoading = Boolean(eventsLoadingByTaskId[task.id]);
+            const statusClass = STATUS_CLASS[task.status] ?? 'status-badge';
+            const isFocused = Boolean(focusTaskId) && task.id === focusTaskId;
+            return (
+              <article
+                key={task.id}
+                ref={isFocused ? focusedCardRef : undefined}
+                className={
+                  `handling-history-v2-card${isExpanded ? ' is-expanded' : ''}${isFocused ? ' is-focused' : ''}`
+                }
+              >
+                <header
+                  className="handling-history-v2-card-header"
+                  onClick={() => toggleExpanded(task.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      toggleExpanded(task.id);
+                    }
+                  }}
+                >
+                  <div className="handling-history-v2-card-topline">
+                    <span className="badge">{TASK_TYPE_LABEL[task.type] ?? task.type}</span>
+                    <em className={statusClass}>{TASK_STATUS_LABEL[task.status] ?? task.status}</em>
+                    {task.relatedAlertId && (
+                      <span className="handling-history-v2-card-pill">已关联风险预警</span>
+                    )}
+                  </div>
+                  <h3>{localizeBackendText(task.title)}</h3>
+                  <div className="handling-history-v2-card-meta">
+                    <span>创建：{formatTime(task.createdAt)}</span>
+                    <span>截止：{formatTime(task.dueAt ?? undefined)}</span>
+                    <span aria-hidden className="handling-history-v2-toggle-icon">
+                      {isExpanded ? '−' : '+'}
+                    </span>
+                  </div>
+                </header>
+                {isExpanded && (
+                  <div className="handling-history-v2-card-body">
+                    <FlowChart
+                      events={events}
+                      loading={isEventsLoading}
+                      formatTime={formatTime}
+                      localizeBackendText={localizeBackendText}
+                    />
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {hasMore && (
+            <div className="handling-history-v2-load-more">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setVisibleCount((current) => current + DEFAULT_PAGE_SIZE)}
+              >
+                加载更多（还有 {filteredTasks.length - visibleCount} 条）
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 ### FILE: apps/web/src/components/PatientHospitalVisitTab.tsx
 import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
@@ -19142,12 +19743,29 @@ export function PatientHospitalVisitTab({
           </div>
         </div>
 
-        {hasActiveVisitReminder && (
-          <div className="visit-existing-reminder-lock" role="status">
-            <strong>已存在有效到院提醒</strong>
-            <span>为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。</span>
-          </div>
-        )}
+        {hasActiveVisitReminder && (() => {
+          // Unified with the phone follow-up "下次随访时间" banner so the
+          // "已存在有效到院提醒" state reads the same across both tabs.
+          const primary = activeHospitalVisitReminders[0];
+          return (
+            <div className="follow-up-next-visit-banner is-imminent" role="status">
+              <div className="follow-up-next-visit-banner-main">
+                <span className="follow-up-next-visit-banner-label">当前到院提醒</span>
+                <strong className="follow-up-next-visit-banner-time">已存在有效到院提醒</strong>
+                <span className="follow-up-next-visit-banner-hint">
+                  为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。
+                </span>
+                {primary && (
+                  <span className="follow-up-next-visit-banner-task-badge" title={primary.id}>
+                    {activeHospitalVisitReminders.length > 1
+                      ? `共 ${activeHospitalVisitReminders.length} 条有效提醒 · 最近通知 ${formatTime(primary.remindedAt)}`
+                      : `${localizeBackendText(primary.reason)} · 最近通知 ${formatTime(primary.remindedAt)}`}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       {renderCreateForm()}
@@ -19547,13 +20165,12 @@ function getRelatedAlertForTask(task: TimelineEvent | null | undefined, timeline
   return timeline.find((item) => item.type === 'RISK_ALERT' && item.data?.id === relatedAlertId) ?? null;
 }
 
-function isActionableTask(task: TimelineEvent, timeline: TimelineEvent[]) {
-  if (!isOpenTask(task)) return false;
-
-  const relatedAlert = getRelatedAlertForTask(task, timeline);
-  if (!relatedAlert) return true;
-
-  return !isClosedAlertStatus(relatedAlert.data?.status);
+// isActionableTask-orphan-fix-v1: a PENDING/IN_PROGRESS task is always actionable, even
+// if its related alert has already been resolved/dismissed. Hiding such
+// tasks was the root cause of the "sidebar 空 but 全部记录 still shows
+// 待办任务" inconsistency reported by clinical users.
+function isActionableTask(task: TimelineEvent, _timeline: TimelineEvent[]) {
+  return isOpenTask(task);
 }
 
 
@@ -19967,10 +20584,38 @@ export function PatientTaskSidePanel({
   );
 
   if (shouldShowPreStartOnly) {
+    // prestart-task-list-v1: before the task is started, show task selection + related risk alert + start button only.
     return (
       <aside className="patient-task-side-panel" aria-label="患者任务处置面板">
         {renderPanelHeader()}
         {renderPanelNotices()}
+
+        <section className="task-panel-section task-panel-queue-section task-panel-prestart-task-list">
+          <div className="task-panel-section-title task-panel-prestart-task-list-title">
+            <span>选择任务</span>
+            <strong>{openTasks.length} 条待处理</strong>
+          </div>
+          <div className="task-panel-task-list">
+            {sortedTasks.map((task) => {
+              const taskId = getTaskId(task);
+              const selected = taskId === selectedTaskStableId;
+              const status = getTaskStatus(task);
+              return (
+                <button
+                  key={taskId || `${task.time}-${task.title}`}
+                  type="button"
+                  className={selected ? 'task-panel-task-card active' : 'task-panel-task-card'}
+                  onClick={() => onSelectTask(taskId, 'close')}
+                >
+                  <span>{taskTypeLabelMap[getTaskType(task)] ?? getTaskType(task)}</span>
+                  <strong>{localizeBackendText(task.title)}</strong>
+                  <small>截止：{formatTime(getTaskDueAt(task))}</small>
+                  <em className={getStatusClass(status)}>{statusLabelMap[status] ?? status}</em>
+                </button>
+              );
+            })}
+          </div>
+        </section>
 
         <section className="task-panel-section task-panel-prestart-gate">
           {relatedAlert ? (
@@ -21725,7 +22370,7 @@ function FollowUpEditForm({
 
 
 ### FILE: apps/web/src/components/VitalTrendChart.tsx
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 type TimelineEvent = {
   type: string;
@@ -21750,6 +22395,138 @@ type TrendTooltipPoint = {
   x: number;
   y: number;
 };
+
+/**
+ * Trend chart time-range filter shared by every chart on the patient detail page.
+ *
+ * - Quick presets (全部 / 近 7 / 30 / 90 / 180 天) match clinical review windows.
+ * - "自定义" exposes two `<input type="date">` controls so the nurse can pick an
+ *   arbitrary `[start, end]` window. The window is inclusive on both ends.
+ * - A range value of `'all'` means "do not filter, show every record".
+ */
+export type TrendRangeValue =
+  | { kind: 'preset'; preset: 'all' | '7' | '30' | '90' | '180' }
+  | { kind: 'custom'; startISO?: string; endISO?: string };
+
+export const DEFAULT_TREND_RANGE: TrendRangeValue = { kind: 'preset', preset: '90' };
+
+const PRESET_OPTIONS: Array<{ value: TrendRangeValue['kind'] extends 'preset' ? never : never; label: string }> = [] as never;
+
+const PRESET_LABELS: Record<'all' | '7' | '30' | '90' | '180', string> = {
+  all: '全部',
+  '7': '近 7 天',
+  '30': '近 30 天',
+  '90': '近 90 天',
+  '180': '近 180 天',
+};
+
+export function filterVitalsByTrendRange<T extends { time: string }>(
+  vitals: T[],
+  range: TrendRangeValue,
+): T[] {
+  if (!Array.isArray(vitals) || vitals.length === 0) return vitals ?? [];
+  if (range.kind === 'preset') {
+    if (range.preset === 'all') return vitals;
+    const days = Number(range.preset);
+    if (!Number.isFinite(days) || days <= 0) return vitals;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    return vitals.filter((item) => {
+      const t = new Date(item.time).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    });
+  }
+  // custom
+  const startMs = range.startISO ? new Date(range.startISO).getTime() : Number.NEGATIVE_INFINITY;
+  const endMs = range.endISO ? new Date(range.endISO).getTime() + 24 * 60 * 60 * 1000 - 1 : Number.POSITIVE_INFINITY;
+  return vitals.filter((item) => {
+    const t = new Date(item.time).getTime();
+    if (!Number.isFinite(t)) return false;
+    return t >= startMs && t <= endMs;
+  });
+}
+
+export function describeTrendRange(range: TrendRangeValue): string {
+  if (range.kind === 'preset') return PRESET_LABELS[range.preset] ?? '全部';
+  const parts: string[] = [];
+  if (range.startISO) parts.push(`${range.startISO} 起`);
+  if (range.endISO) parts.push(`${range.endISO} 止`);
+  if (!parts.length) return '自定义时间范围';
+  return parts.join(' · ');
+}
+
+/**
+ * Shared time-range filter bar. Put this above a stack of trend charts and
+ * thread the resulting `range` through `filterVitalsByTrendRange(...)`.
+ *
+ * Self-contained UI; styles live in `trend-chart-unified-v1.css`.
+ */
+export function TrendRangeFilterBar({
+  value,
+  onChange,
+  className,
+}: {
+  value: TrendRangeValue;
+  onChange: (next: TrendRangeValue) => void;
+  className?: string;
+}) {
+  const presets: Array<'all' | '7' | '30' | '90' | '180'> = ['all', '7', '30', '90', '180'];
+  const isCustom = value.kind === 'custom';
+  return (
+    <div className={`trend-range-filter-bar ${className ?? ''}`.trim()} role="toolbar" aria-label="趋势图时间范围">
+      <span className="trend-range-filter-label">时间范围</span>
+      <div className="trend-range-filter-presets" role="group" aria-label="快速时间范围">
+        {presets.map((preset) => {
+          const active = value.kind === 'preset' && value.preset === preset;
+          return (
+            <button
+              key={preset}
+              type="button"
+              className={active ? 'trend-range-preset-btn active' : 'trend-range-preset-btn'}
+              onClick={() => onChange({ kind: 'preset', preset })}
+              aria-pressed={active}
+            >
+              {PRESET_LABELS[preset]}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className={isCustom ? 'trend-range-preset-btn active' : 'trend-range-preset-btn'}
+          onClick={() =>
+            onChange({
+              kind: 'custom',
+              startISO: isCustom ? value.startISO : undefined,
+              endISO: isCustom ? value.endISO : undefined,
+            })
+          }
+          aria-pressed={isCustom}
+        >
+          自定义
+        </button>
+      </div>
+      {isCustom && (
+        <div className="trend-range-filter-custom">
+          <label>
+            <span>起</span>
+            <input
+              type="date"
+              value={value.startISO ?? ''}
+              onChange={(event) => onChange({ kind: 'custom', startISO: event.target.value || undefined, endISO: value.endISO })}
+            />
+          </label>
+          <label>
+            <span>止</span>
+            <input
+              type="date"
+              value={value.endISO ?? ''}
+              onChange={(event) => onChange({ kind: 'custom', startISO: value.startISO, endISO: event.target.value || undefined })}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatPointValue(value: number) {
   if (!Number.isFinite(value)) return '-';
@@ -21786,6 +22563,16 @@ function renderTrendTooltip(point: TrendTooltipPoint | null, width: number, padd
   );
 }
 
+/**
+ * Keep only "risk alert generated" markers. Per spec the trend chart should
+ * annotate that single event class — phone follow-up and recheck markers were
+ * removed because they distracted from the clinically actionable signal.
+ */
+function filterRiskAlertMarkers(markers: EventMarker[] | undefined): EventMarker[] {
+  if (!markers || markers.length === 0) return [];
+  return markers.filter((marker) => marker.type === 'alert');
+}
+
 type Props = {
   vitals: TimelineEvent[];
   vitalType: string;
@@ -21795,6 +22582,11 @@ type Props = {
   thresholdLow?: number;
   eventMarkers?: EventMarker[];
   formatTime: (value?: string) => string;
+  /**
+   * Description of the active time range (e.g., "近 90 天"). Shown in the
+   * subtitle so the legend stays small but the data window stays explicit.
+   */
+  rangeLabel?: string;
 };
 
 export function VitalTrendChart({
@@ -21806,8 +22598,12 @@ export function VitalTrendChart({
   thresholdLow,
   eventMarkers = [],
   formatTime,
+  rangeLabel,
 }: Props) {
   const [selectedPoint, setSelectedPoint] = useState<TrendTooltipPoint | null>(null);
+
+  // Unified spec: only "风险预警生成" events are annotated on the chart.
+  const alertMarkers = useMemo(() => filterRiskAlertMarkers(eventMarkers), [eventMarkers]);
 
   if (vitals.length === 0) {
     return (
@@ -21815,7 +22611,9 @@ export function VitalTrendChart({
         <div className="vital-trend-chart-header">
           <div>
             <div className="vital-trend-chart-title">{vitalTypeName}趋势</div>
-            <div className="vital-trend-chart-subtitle">暂无数据</div>
+            <div className="vital-trend-chart-subtitle">
+              {rangeLabel ? `${rangeLabel} · 暂无数据` : '暂无数据'}
+            </div>
           </div>
         </div>
       </div>
@@ -21868,24 +22666,27 @@ export function VitalTrendChart({
         <div>
           <div className="vital-trend-chart-title">{vitalTypeName}趋势</div>
           <div className="vital-trend-chart-subtitle">
-            最近 {sortedVitals.length} 次记录 · 单位：{unit}
+            {rangeLabel ? `${rangeLabel} · ` : ''}{sortedVitals.length} 次记录 · 单位：{unit}
           </div>
         </div>
+        {/* Unified legend (trend-chart-unified-v1):
+            colors match the actual rendered shapes (line / threshold / alert marker).
+            Only the items that are actually rendered on this chart are listed. */}
         <div className="vital-trend-chart-legend">
           <div className="vital-trend-legend-item">
-            <div className="vital-trend-legend-dot dot-value" />
-            <span>指标值</span>
+            <span className="vital-trend-legend-line legend-color-value" />
+            <span>{vitalTypeName}</span>
           </div>
-          {thresholdHigh && (
+          {(thresholdHigh !== undefined || thresholdLow !== undefined) && (
             <div className="vital-trend-legend-item">
-              <div className="vital-trend-legend-dot dot-alert" />
-              <span>高危阈值</span>
+              <span className="vital-trend-legend-dash legend-color-threshold" />
+              <span>预警阈值</span>
             </div>
           )}
-          {eventMarkers.length > 0 && (
+          {alertMarkers.length > 0 && (
             <div className="vital-trend-legend-item">
-              <div className="vital-trend-legend-dot dot-followup" />
-              <span>事件标注</span>
+              <span className="vital-trend-legend-dash legend-color-alert" />
+              <span>风险预警生成</span>
             </div>
           )}
         </div>
@@ -21945,18 +22746,16 @@ export function VitalTrendChart({
         {/* 折线 */}
         <path className="vital-trend-line" d={linePath} />
 
-        {/* 事件标注 */}
-        {eventMarkers.map((marker, i) => {
+        {/* 事件标注：只显示"风险预警生成" */}
+        {alertMarkers.map((marker, i) => {
           const markerTime = new Date(marker.time).getTime();
           if (markerTime < minTime || markerTime > maxTime) return null;
           const x = toX(markerTime);
-          const markerClass = `vital-trend-event-marker marker-${marker.type}`;
-          const icon = marker.type === 'alert' ? '⚠' : marker.type === 'followup' ? '📞' : '🔄';
           return (
-            <g key={`marker-${i}`} className={markerClass}>
+            <g key={`marker-${i}`} className="vital-trend-event-marker marker-alert">
               <line x1={x} y1={padding.top} x2={x} y2={padding.top + chartH} />
               <text className="vital-trend-event-icon" x={x} y={padding.top - 4}>
-                {icon}
+                ⚠
               </text>
             </g>
           );
@@ -22019,6 +22818,7 @@ type BloodPressureProps = {
   unit: string;
   eventMarkers?: EventMarker[];
   formatTime: (value?: string) => string;
+  rangeLabel?: string;
 };
 
 function buildSeriesPoints(
@@ -22048,8 +22848,11 @@ export function BloodPressureTrendChart({
   unit,
   eventMarkers = [],
   formatTime,
+  rangeLabel,
 }: BloodPressureProps) {
   const [selectedPoint, setSelectedPoint] = useState<TrendTooltipPoint | null>(null);
+  const alertMarkers = useMemo(() => filterRiskAlertMarkers(eventMarkers), [eventMarkers]);
+
   const allVitals = [...systolicVitals, ...diastolicVitals];
   if (allVitals.length === 0) {
     return (
@@ -22057,7 +22860,9 @@ export function BloodPressureTrendChart({
         <div className="vital-trend-chart-header">
           <div>
             <div className="vital-trend-chart-title">血压趋势</div>
-            <div className="vital-trend-chart-subtitle">暂无数据</div>
+            <div className="vital-trend-chart-subtitle">
+              {rangeLabel ? `${rangeLabel} · 暂无数据` : '暂无数据'}
+            </div>
           </div>
         </div>
       </div>
@@ -22101,13 +22906,34 @@ export function BloodPressureTrendChart({
         <div>
           <div className="vital-trend-chart-title">血压趋势</div>
           <div className="vital-trend-chart-subtitle">
-            收缩压 {systolicVitals.length} 次 · 舒张压 {diastolicVitals.length} 次 · 单位：{unit}
+            {rangeLabel ? `${rangeLabel} · ` : ''}收缩压 {systolicVitals.length} 次 · 舒张压 {diastolicVitals.length} 次 · 单位：{unit}
           </div>
         </div>
+        {/* Unified legend: legend swatches use the exact color of the matching
+            line / threshold / marker rendered below. */}
         <div className="vital-trend-chart-legend">
-          <div className="vital-trend-legend-item"><div className="vital-trend-legend-dot dot-value" /><span>收缩压</span></div>
-          <div className="vital-trend-legend-item"><div className="vital-trend-legend-dot dot-diastolic" /><span>舒张压</span></div>
-          <div className="vital-trend-legend-item"><div className="vital-trend-legend-dot dot-alert" /><span>高危阈值</span></div>
+          <div className="vital-trend-legend-item">
+            <span className="vital-trend-legend-line legend-color-systolic" />
+            <span>收缩压</span>
+          </div>
+          <div className="vital-trend-legend-item">
+            <span className="vital-trend-legend-line legend-color-diastolic" />
+            <span>舒张压</span>
+          </div>
+          <div className="vital-trend-legend-item">
+            <span className="vital-trend-legend-dash legend-color-threshold" />
+            <span>收缩压阈值</span>
+          </div>
+          <div className="vital-trend-legend-item">
+            <span className="vital-trend-legend-dash legend-color-diastolic-threshold" />
+            <span>舒张压阈值</span>
+          </div>
+          {alertMarkers.length > 0 && (
+            <div className="vital-trend-legend-item">
+              <span className="vital-trend-legend-dash legend-color-alert" />
+              <span>风险预警生成</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -22135,16 +22961,14 @@ export function BloodPressureTrendChart({
         {systolicPoints.length > 0 && <path className="vital-trend-line bp-systolic-line" d={toPath(systolicPoints)} />}
         {diastolicPoints.length > 0 && <path className="vital-trend-line bp-diastolic-line" d={toPath(diastolicPoints)} />}
 
-        {eventMarkers.map((marker, i) => {
+        {alertMarkers.map((marker, i) => {
           const markerTime = new Date(marker.time).getTime();
           if (markerTime < minTime || markerTime > maxTime) return null;
           const x = toX(markerTime);
-          const markerClass = `vital-trend-event-marker marker-${marker.type}`;
-          const icon = marker.type === 'alert' ? '⚠' : marker.type === 'followup' ? '📞' : '🔄';
           return (
-            <g key={`bp-marker-${i}`} className={markerClass}>
+            <g key={`bp-marker-${i}`} className="vital-trend-event-marker marker-alert">
               <line x1={x} y1={padding.top} x2={x} y2={padding.top + chartH} />
-              <text className="vital-trend-event-icon" x={x} y={padding.top - 4}>{icon}</text>
+              <text className="vital-trend-event-icon" x={x} y={padding.top - 4}>⚠</text>
             </g>
           );
         })}
@@ -22371,8 +23195,6 @@ export function MiniBloodPressureTrendPreview({
 }
 
 
-
-
 ### FILE: apps/web/src/follow-up-next-visit.css
 /* Active scheduled "下次随访时间" banner on the phone follow-up tab.
  *
@@ -22567,6 +23389,165 @@ export function MiniBloodPressureTrendPreview({
   color: #0f766e;
   font-weight: 800;
   text-decoration: none;
+}
+
+
+### FILE: apps/web/src/handling-history-v2.css
+/*
+ * handling-history-v2: enhanced 处置记录 page.
+ *
+ * Lists past task processing records with:
+ *  - a start/end date-range filter bar (matches the 历史电话沟通记录 filter)
+ *  - lazy-loaded flow chart per task (expand-on-click; "load more" pagination)
+ *
+ * Reuses the existing .task-processing-flow-card / .task-flow-node-* styles
+ * from patient-detail-task-ux-polish.css so the flow chart looks identical
+ * to the one in PatientTaskSidePanel.
+ */
+
+.handling-history-v2-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.handling-history-v2-header {
+  align-items: center;
+}
+
+.handling-history-v2-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.handling-history-v2-filter-meta {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.handling-history-v2-error {
+  margin: 0;
+}
+
+.handling-history-v2-loading,
+.handling-history-v2-empty {
+  padding: 20px;
+  text-align: center;
+}
+
+.handling-history-v2-list {
+  display: grid;
+  gap: 10px;
+}
+
+.handling-history-v2-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.handling-history-v2-card.is-expanded {
+  border-color: rgba(15, 118, 110, 0.32);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.handling-history-v2-card.is-focused {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25), 0 12px 28px rgba(37, 99, 235, 0.12);
+}
+
+.handling-history-v2-card-header {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.handling-history-v2-card-header:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: -2px;
+}
+
+.handling-history-v2-card-topline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.handling-history-v2-card-header h3 {
+  margin: 2px 0 0;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.handling-history-v2-card-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.handling-history-v2-card-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.handling-history-v2-toggle-icon {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.handling-history-v2-card.is-expanded .handling-history-v2-toggle-icon {
+  border-color: #0f766e;
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.handling-history-v2-card-body {
+  border-top: 1px solid #e2e8f0;
+  padding: 14px 16px;
+  background: #f8fafc;
+}
+
+.handling-history-flow-card {
+  background: transparent;
+  margin: 0;
+}
+
+.handling-history-flow-loading,
+.handling-history-flow-empty {
+  padding: 8px 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.handling-history-v2-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 2px;
 }
 
 
@@ -25355,35 +26336,63 @@ select {
 }
 
 .topbar {
-  height: 76px;
+  min-height: 76px;
   background: rgba(255, 255, 255, 0.9);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(14px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 30px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px 30px;
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+/* The title/subtitle block must be allowed to shrink so it never pushes the
+   action buttons off-screen when the viewport narrows. */
+.topbar > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .topbar-title {
   font-weight: 900;
   color: var(--hospital-blue-dark);
   font-size: 18px;
+  overflow-wrap: anywhere;
 }
 
 .topbar-subtitle {
   color: var(--muted);
   font-size: 12px;
   margin-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .topbar-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    padding: 12px 18px;
+  }
+
+  .topbar-title {
+    font-size: 16px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .topbar-pill,
@@ -29522,13 +30531,6 @@ function WorkItemsTable({
                 {item.actionText}
               </Link>
             )}
-            <span className="work-item-action-hint">
-              {item.itemType === 'RISK_FOLLOW_UP_TASK'
-                ? '该事项已合并任务和预警；电话随访进入患者详情 tab，到院/结案进入右侧处置面板。'
-                : item.itemType === 'RISK_ALERT_ONLY'
-                  ? '该预警尚未形成随访任务，点击后会先生成风险随访任务，再进入患者详情页的电话随访 tab。'
-                  : '进入患者详情页，可在电话随访 tab 记录沟通，并在右侧面板完成到院/结案。'}
-            </span>
           </div>
         </article>
       ))}
@@ -29603,7 +30605,7 @@ function CompletedTasksTable({ tasks }: { tasks: Task[] }) {
               <td><PatientLink patient={task.patient} /></td>
               <td>{formatTime(task.dueAt)}</td>
               <td><span className={getStatusClass(task.status)}>{statusLabelMap[task.status] ?? task.status}</span></td>
-              <td>{task.patient && <Link className="secondary-btn compact-link-btn" to={`/patients/${task.patient.id}?workspace=timeline`}>查看时间线</Link>}</td>
+              <td>{task.patient && <Link className="secondary-btn compact-link-btn" to={`/patients/${task.patient.id}?workspace=handling-history&historyTask=${task.id}`}>查看处置记录</Link>}</td>
             </tr>
           ))}
         </tbody>
@@ -29790,7 +30792,6 @@ export function NurseDashboardPage() {
               <div className="clean-section-heading">
                 <div>
                   <h2>待处理事项</h2>
-                  <p>任务、预警、风险随访合并展示。所有任务回到患者详情页处理；电话随访在独立 tab 记录，到院与结案在右侧面板完成。</p>
                 </div>
               </div>
 
@@ -29809,21 +30810,21 @@ export function NurseDashboardPage() {
 
           {activeSection === 'vitals' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>最近异常指标</h2><p>指标异常作为风险来源线索；处理入口会落到患者详情页内的电话随访 tab 与处置面板。</p></div></div>
+              <div className="clean-section-heading"><div><h2>最近异常指标</h2></div></div>
               <section className="clean-subpanel"><VitalsTable records={data.recentAbnormalVitals} /></section>
             </div>
           )}
 
           {activeSection === 'patients' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>我的患者</h2><p>当前护士负责患者清单。复杂筛选请进入“患者档案”的主索引页面。</p></div></div>
+              <div className="clean-section-heading"><div><h2>我的患者</h2></div></div>
               <section className="clean-subpanel"><PatientsTable patients={data.myPatients} /></section>
             </div>
           )}
 
           {activeSection === 'completed' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>完成记录</h2><p>显示最近完成任务，更多历史记录请在患者详情页时间线查看。</p></div></div>
+              <div className="clean-section-heading"><div><h2>完成记录</h2></div></div>
               <section className="clean-subpanel"><CompletedTasksTable tasks={completedTasks} /></section>
             </div>
           )}
@@ -30596,8 +31597,10 @@ import { api, getApiErrorMessage } from '../api/client';
 import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
 import { HospitalRecordsView } from '../components/HospitalRecordsView';
 import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';
+import { PatientHandlingHistoryView } from '../components/PatientHandlingHistoryView';
 import { PatientHospitalVisitTab } from '../components/PatientHospitalVisitTab';
-import { BloodPressureTrendChart, VitalTrendChart } from '../components/VitalTrendChart';
+// trend-range-filter-import-v1
+import { BloodPressureTrendChart, VitalTrendChart, TrendRangeFilterBar, filterVitalsByTrendRange, describeTrendRange, DEFAULT_TREND_RANGE } from '../components/VitalTrendChart';
 import { buildLatestVitalDisplayItemsByMetric } from '../utils/vitalDisplay';
 import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 import '../patient-snapshot.css';
@@ -30606,6 +31609,8 @@ import '../closed-loop-events.css';
 import '../hospital-records.css';
 import '../patient-task-side-panel.css';
 import '../patient-detail-task-ux-polish.css';
+import '../handling-history-v2.css';
+import '../trend-chart-unified-v1.css';
 
 type TimelineEvent = {
   type: string;
@@ -31429,6 +32434,9 @@ export function PatientDetailPage() {
       return order[a.status] - order[b.status];
     });
   }, [data]);
+
+  // vital-trend-range-state-v1: shared time-range filter for every trend chart on this page.
+  const [vitalTrendRange, setVitalTrendRange] = useState(DEFAULT_TREND_RANGE);
 
   // 指标趋势图的事件标注
   const vitalEventMarkers = useMemo(() => {
@@ -32805,7 +33813,6 @@ export function PatientDetailPage() {
               <div>
                 <span>护士风险处置中心</span>
                 <h2>风险处置</h2>
-                <p className="section-hint">先选择需要处置的风险预警，再勾选处置方式。提交处置后，该风险预警会自动标记为已处理。普通待办任务和风险随访任务在患者详情页内分区处理。</p>
               </div>
               <div className="action-workspace-header-metrics">
                 <span>未处理预警 <strong>{activeRiskAlertCount}</strong></span>
@@ -32995,7 +34002,6 @@ export function PatientDetailPage() {
                         忽略/误报
                       </button>
                     </div>
-                    <p className="section-hint">处置方式不会通过单击卡片直接提交；必须勾选处置方式、填写电子签名后提交。</p>
                   </section>
                 </form>
               </div>
@@ -33014,7 +34020,6 @@ export function PatientDetailPage() {
               <div>
                 <span>慢病档案</span>
                 <h2>患者已有慢病档案</h2>
-                <p className="section-hint">先查看已有诊断和风险分层；需要补录时再展开新增表单。</p>
               </div>
               <button className="button" type="button" onClick={() => setShowDiseaseForm((value) => !value)}>
                 {showDiseaseForm ? '收起新增慢病档案' : '新增慢病档案'}
@@ -33150,26 +34155,47 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>近期健康指标</h3>
-                  <p className="muted small">院内录入、患者小程序和 LIS 同步的指标统一进入这里。</p>
                 </div>
               </div>
               {vitalRecordTimeline.length === 0 ? (
                 <div className="empty-state task-empty-state">当前患者暂无健康指标记录。</div>
               ) : (() => {
-                const systolicVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'SYSTOLIC_BP');
-                const diastolicVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'DIASTOLIC_BP');
-                const glucoseVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'BLOOD_GLUCOSE');
-                const weightVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'WEIGHT');
-                const heartRateVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'HEART_RATE');
-                const spo2Vitals = vitalRecordTimeline.filter((item) => item.data?.type === 'SPO2');
+                // trend-range-filter-wrap-v1: share one time-range across every trend chart on this tab.
+                const rangeLabel = describeTrendRange(vitalTrendRange);
+                const systolicVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'SYSTOLIC_BP'),
+                  vitalTrendRange,
+                );
+                const diastolicVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'DIASTOLIC_BP'),
+                  vitalTrendRange,
+                );
+                const glucoseVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'BLOOD_GLUCOSE'),
+                  vitalTrendRange,
+                );
+                const weightVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'WEIGHT'),
+                  vitalTrendRange,
+                );
+                const heartRateVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'HEART_RATE'),
+                  vitalTrendRange,
+                );
+                const spo2Vitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'SPO2'),
+                  vitalTrendRange,
+                );
                 return (
                   <div className="metric-trend-stack">
+                    <TrendRangeFilterBar value={vitalTrendRange} onChange={setVitalTrendRange} />
                     {(systolicVitals.length > 0 || diastolicVitals.length > 0) && (
                       <BloodPressureTrendChart
                         systolicVitals={systolicVitals}
                         diastolicVitals={diastolicVitals}
                         unit="mmHg"
                         eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
                         formatTime={formatTime}
                       />
                     )}
@@ -33182,6 +34208,7 @@ export function PatientDetailPage() {
                         thresholdHigh={10}
                         thresholdLow={3.9}
                         eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
                         formatTime={formatTime}
                       />
                     )}
@@ -33192,6 +34219,7 @@ export function PatientDetailPage() {
                         vitalTypeName="体重"
                         unit="kg"
                         eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
                         formatTime={formatTime}
                       />
                     )}
@@ -33204,6 +34232,7 @@ export function PatientDetailPage() {
                         thresholdHigh={120}
                         thresholdLow={50}
                         eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
                         formatTime={formatTime}
                       />
                     )}
@@ -33215,6 +34244,7 @@ export function PatientDetailPage() {
                         unit="%"
                         thresholdLow={95}
                         eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
                         formatTime={formatTime}
                       />
                     )}
@@ -33231,7 +34261,6 @@ export function PatientDetailPage() {
                   <span>健康指标记录</span>
                   <h2>新增健康指标</h2>
                 </div>
-                <p className="section-hint">系统会按阈值自动判定异常并生成风险预警，通常无需手动勾选异常。</p>
               </div>
 
               <form className="hospital-form" onSubmit={submitVitalRecord} aria-busy={savingVital}>
@@ -33317,7 +34346,6 @@ export function PatientDetailPage() {
                 </div>
               </div>
 
-              <p className="section-hint">指标打卡计划由医院端维护。患者端只按计划录入，系统显示下一次打卡时间。</p>
 
               {monitoringRecommendations.length > 0 && (
                 <div className="recommendation-grid">
@@ -33377,7 +34405,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>当前指标打卡计划</h3>
-                  <p className="muted small">这些计划会同步到患者小程序，用于提醒和漏测判断。</p>
                 </div>
                 <label className="history-toggle medication-history-toggle">
                   <input type="checkbox" checked={showInactiveMonitoringPlans} onChange={(event) => setShowInactiveMonitoringPlans(event.target.checked)} />
@@ -33419,7 +34446,6 @@ export function PatientDetailPage() {
               <div>
                 <span>院内用药计划</span>
                 <h2>当前用药计划</h2>
-                <p className="section-hint">先查看患者已有用药计划；新增或修改时再展开表单。</p>
               </div>
               <button className="button" type="button" onClick={() => { resetMedicationForm(); setShowMedicationForm((value) => !value); }}>
                 {showMedicationForm ? '收起新增用药计划' : '新增用药计划'}
@@ -33430,7 +34456,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header medication-list-header">
                 <div>
                   <h3>当前用药计划</h3>
-                  <p className="muted small">这些计划会同步到患者微信小程序，患者只能按计划打卡或反馈漏服。</p>
                 </div>
                 <label className="history-toggle medication-history-toggle">
                   <input type="checkbox" checked={showInactiveMedications} onChange={(event) => setShowInactiveMedications(event.target.checked)} />
@@ -33471,7 +34496,6 @@ export function PatientDetailPage() {
                   <span>院内用药计划</span>
                   <h2>{editingMedicationId ? '修改用药计划' : '新增用药计划'}</h2>
                 </div>
-                <p className="section-hint">用药计划应由医生/护士或 HIS/药房处方接口维护；患者小程序只负责查看和打卡。</p>
               </div>
 
               {editingMedicationId && <div className="edit-mode-banner">正在修改已有用药计划。保存后会同步患者端下次用药时间；历史打卡记录会保留。</div>}
@@ -33511,7 +34535,6 @@ export function PatientDetailPage() {
               <div>
                 <span>随访任务</span>
                 <h2>电话随访与待办处理</h2>
-                <p className="section-hint">普通待办任务在患者详情页内闭环；电话随访进入独立 tab，到院提醒进入“到院提醒”tab，结案进入右侧面板。</p>
               </div>
               <button className="button" type="button" onClick={() => setShowTaskForm((value) => !value)}>
                 {showTaskForm ? '收起新增任务' : '新增任务'}
@@ -33564,7 +34587,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>当前待办任务</h3>
-                  <p className="muted small">电话随访记录在“电话随访”tab 内维护；任务结案在右侧处置面板内完成。</p>
                   {!showAllTaskHistory && hiddenTaskHistoryCount > 0 && <p className="muted small">已默认隐藏 {hiddenTaskHistoryCount} 条已完成或已取消任务。</p>}
                 </div>
                 <label className="history-toggle task-history-toggle">
@@ -33606,7 +34628,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>待处理风险预警</h3>
-                  <p className="muted small">可以选中预警快速完成处置；如需电话沟通，请进入“电话随访”tab。</p>
                 </div>
               </div>
 
@@ -33649,7 +34670,6 @@ export function PatientDetailPage() {
             <div>
               <span>患者内电话随访</span>
               <h2>电话随访沟通记录</h2>
-              <p className="section-hint">默认展示历史沟通记录，按记录创建时间倒序加载。需要记录新沟通时，再点击右侧按钮展开表单。</p>
             </div>
             <div className="follow-up-header-actions">
               <button
@@ -33824,7 +34844,6 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>新建电话沟通记录</h3>
-                  <p className="muted small">该记录直接归入患者档案，不再绑定具体任务；任务结案仍在右侧处置面板完成。</p>
                 </div>
                 <button
                   className="secondary-button"
@@ -33902,7 +34921,6 @@ export function PatientDetailPage() {
             <div className="task-inline-list-header follow-up-ledger-toolbar">
               <div>
                 <h3>历史电话沟通记录</h3>
-                <p className="muted small">Lazy loading 分页加载；默认按记录创建时间从新到旧排序。</p>
               </div>
               <strong>{followUpHistoryLoaded ? `${followUpHistory.length}/${followUpHistoryTotal} 条` : '待加载'}</strong>
             </div>
@@ -33986,45 +35004,14 @@ export function PatientDetailPage() {
       )}
 
       {activeWorkspace === 'handling-history' && (
-        <section className="panel patient-handling-history-panel collapsible-workspace-panel">
-          <div className="hospital-section-header">
-            <div>
-              <span>最近处理历史</span>
-              <h2>处置记录与任务闭环</h2>
-              <p className="section-hint">聚合电话随访、任务状态变更和风险处置结果。医护处理任务时可在右侧面板操作，完整病历和趋势仍保留在左侧患者档案。</p>
-            </div>
-            {firstOpenTask?.data?.id && (
-              <button className="button" type="button" onClick={() => openInlineTaskPanel(firstOpenTask.data.id, 'close')}>
-                打开当前任务结案面板
-              </button>
-            )}
-          </div>
-
-          {handlingHistoryTimeline.length === 0 ? (
-            <div className="empty-state">当前患者暂无处理历史。</div>
-          ) : (
-            <div className="handling-history-list">
-              {handlingHistoryTimeline.slice(0, 30).map((item, index) => (
-                <article className="handling-history-card" key={`${item.type}-${item.time}-${item.data?.id ?? index}`}>
-                  <div className="handling-history-time">
-                    <strong>{timelineTypeLabelMap[item.type] ?? item.type}</strong>
-                    <span>{formatTime(item.time)}</span>
-                  </div>
-                  <div>
-                    <h3>{localizeBackendText(item.title)}</h3>
-                    <p>{localizeBackendText(item.description)}</p>
-                    <div className="handling-history-meta">
-                      {item.data?.status && <span>状态：{statusLabelMap[item.data.status] ?? item.data.status}</span>}
-                      {item.data?.followUpType && <span>方式：{followUpTypeLabelMap[item.data.followUpType] ?? item.data.followUpType}</span>}
-                      {item.data?.operatorId && <span>记录人：{item.data.operatorId}</span>}
-                      {item.data?.handledBy && <span>处理人：{item.data.handledBy}</span>}
-                    </div>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+        /* handling-history-v2: lazy-loaded task list + flow chart */
+        <PatientHandlingHistoryView
+          patientId={patientId ?? ''}
+          patient={data.patient}
+          formatTime={formatTime}
+          localizeBackendText={localizeBackendText}
+          focusTaskId={searchParams.get('historyTask') ?? undefined}
+        />
       )}
 
 
@@ -34035,7 +35022,6 @@ export function PatientDetailPage() {
           <div>
             <span>患者长期管理记录</span>
             <h2>全流程记录</h2>
-            <p className="section-hint">将全流程记录拆分为记录明细、指标趋势和处置闭环，避免所有信息直接堆在同一屏。</p>
           </div>
         </div>
         <div className="timeline-subsection-tabs">
@@ -34135,7 +35121,6 @@ export function PatientDetailPage() {
             <div>
               <span>处置闭环</span>
               <h2>处置闭环事件</h2>
-              <p className="section-hint">将相关的预警、任务、处置和随访结果合并为完整流程；该区块只在“处置闭环”二级页签下展示。</p>
             </div>
           </div>
           {closedLoopEvents.length === 0 ? (
@@ -34233,16 +35218,10 @@ export function PatientDetailPage() {
                   {item.type === 'TASK' &&
                     item.data?.status === 'PENDING' && (
                       <div className="timeline-actions">
-                        <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openFollowUpTab(item.data.id)}>
-                          记录电话随访
+                        {/* timeline-task-actions-v3: 只保留单一处理入口 */}
+                        <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>
+                          处理当前任务
                         </button>
-                        <button className="timeline-action-button" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>
-                          打开处置面板
-                        </button>
-                        {item.data?.relatedAlertId && (
-                          <span className="timeline-action-hint">关联风险已合并到该任务详情中</span>
-                        )}
-                        <span className="timeline-action-hint">待办任务请在患者档案内闭环</span>
                       </div>
                     )}
                   {item.type === 'FOLLOW_UP' && (
@@ -40218,19 +41197,25 @@ export function TaskFollowUpRedirect() {
 }
 
 .task-panel-task-list {
-  max-height: 184px;
+  /* Was a tight 184px scroll box that clipped task cards (especially taller
+     non-risk tasks whose longer type labels wrap the title onto two lines).
+     The whole side panel already scrolls, so give the picker generous room
+     and only scroll internally once the list gets very long. */
+  max-height: clamp(240px, 48vh, 540px);
   overflow: auto;
   padding-right: 2px;
 }
 
 .task-panel-task-card {
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 9px 10px;
+  padding: 10px 12px;
   border-radius: 12px;
+  row-gap: 6px;
 }
 
 .task-panel-task-card strong {
   font-size: 13px;
+  line-height: 1.4;
 }
 
 .task-panel-current-task {
@@ -49663,6 +50648,271 @@ button:disabled,
 }
 
 
+### FILE: apps/web/src/trend-chart-unified-v1.css
+/*
+ * trend-chart-unified-v1
+ *
+ * Unifies trend chart presentation across the patient detail page:
+ *   1. Legend swatches use the exact color of the line / dashed threshold /
+ *      alert marker rendered in SVG, so the legend can never lie.
+ *   2. Adds a shared "时间范围" filter bar above the trend stack.
+ *   3. Adds pre-start gate styling for the task selection list shown before
+ *      a task is started (used by PatientTaskSidePanel).
+ *   4. Hardens task-flow node layout to prevent overlap of the timestamp,
+ *      title, and detail rows when descriptions are long.
+ */
+
+/* ---------- 1. Unified legend swatches ---------- */
+
+.vital-trend-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  row-gap: 6px;
+  max-width: 60%;
+  justify-content: flex-end;
+}
+
+.vital-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+/*
+ * Solid line swatch for series colors (matches the SVG `.vital-trend-line`
+ * stroke-width / line-cap so the eye reads it as the same line).
+ */
+.vital-trend-legend-line {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/*
+ * Dashed swatch for threshold / alert markers (matches the SVG `stroke-dasharray`).
+ */
+.vital-trend-legend-dash {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px dashed;
+}
+
+/* The legacy `.dot` swatches stay for backward-compat with the older charts,
+   but the canonical legend uses these line/dash classes. */
+
+.legend-color-value { background: #2563eb; }                 /* matches .vital-trend-line */
+.legend-color-systolic { background: #2563eb; }              /* matches .bp-systolic-line */
+.legend-color-diastolic { background: #7c3aed; }             /* matches .bp-diastolic-line */
+.legend-color-threshold { border-top-color: #dc2626; }       /* matches .threshold-high */
+.legend-color-diastolic-threshold { border-top-color: #7c3aed; } /* matches .threshold-diastolic-high */
+.legend-color-alert { border-top-color: #dc2626; }           /* matches marker-alert */
+
+/* ---------- 2. Shared time-range filter bar ---------- */
+
+.trend-range-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.trend-range-filter-label {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+
+.trend-range-filter-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trend-range-preset-btn {
+  appearance: none;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.trend-range-preset-btn:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.trend-range-preset-btn.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.18);
+}
+
+.trend-range-filter-custom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.trend-range-filter-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.trend-range-filter-custom label > span {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.trend-range-filter-custom input[type='date'] {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .trend-range-filter-bar {
+    padding: 10px;
+  }
+
+  .trend-range-preset-btn {
+    padding: 4px 10px;
+  }
+}
+
+/* ---------- 3. Pre-start gate: include task selection list ---------- */
+
+.task-panel-prestart-task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-panel-prestart-task-list-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-panel-prestart-task-list-title > span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.task-panel-prestart-task-list-title > strong {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-panel-prestart-task-list .task-panel-task-card {
+  /* Reuse the existing task card visuals but tighten spacing when shown
+     in the prestart gate (no surrounding queue section). */
+  width: 100%;
+}
+
+/* ---------- 4. Task-flow node anti-overlap hardening ---------- */
+
+/*
+ * The task-flow-node-topline used to render the event-type label and timestamp
+ * on the same baseline; for long event-type labels (e.g. "建议到院 / 再次提醒")
+ * this caused the timestamp text to overlap with the label. We force a column
+ * fallback below a min-content threshold and keep the timestamp on its own row.
+ */
+.task-flow-node-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  row-gap: 4px;
+}
+
+.task-flow-node-topline strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-flow-node-topline span {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* When the description includes a "before → after" change pair, force the
+   arrow + tokens to wrap as a single block instead of overlapping the label
+   column to its right. */
+.task-flow-node-detail-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.34fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.task-flow-node-change {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.task-flow-node-before,
+.task-flow-node-after {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Some descriptions include long ISO timestamps inside the "新值" cell;
+   keep them from pushing the layout wider than the card. */
+.task-flow-node-detail-value,
+.task-flow-node-detail-value strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Tablet / narrow-sidebar: stack label above value. */
+@media (max-width: 880px) {
+  .task-flow-node-detail-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .task-flow-node-detail-label {
+    white-space: normal;
+  }
+}
+
+
 ### FILE: apps/web/src/unified-work-items-v1.css
 /* Unified Work Items v1: hospital-style task/alert merge UX */
 .unified-workbench-page .page-subtitle {
@@ -51153,6 +52403,93 @@ export default defineConfig({
 })
 
 
+### FILE: scripts/apply_demo_ux_fixes_patch.py
+#!/usr/bin/env python3
+"""
+慢病平台 UI / 随访修复补丁 (demo_ux_fixes_patch)
+
+Idempotent in-place patcher. Run from the project root:
+
+    python3 scripts/apply_demo_ux_fixes_patch.py "$PWD"
+
+Fixes:
+  1. 顶栏窄屏换行 + 移除“当前用户：…”               apps/web/src/App.tsx, index.css
+  2. 移除侧边栏“当前角色菜单范围”板块               apps/web/src/App.tsx
+  3. 完成记录“查看时间线”改为跳转该任务“过去处置记录”
+       apps/web/src/pages/NurseDashboardPage.tsx, PatientDetailPage.tsx,
+       components/PatientHandlingHistoryView.tsx
+  4. 电话随访“计划电话随访”重复任务（并发竞态）修复  apps/api/.../follow-ups.service.ts
+  6. 统一任务处理中心“选择任务”卡片纵向被截断修复    apps/web/src/patient-detail-task-ux-polish.css
+  7. 过去处置记录时间筛选 UI 与“历史电话沟通记录”统一
+       components/PatientHandlingHistoryView.tsx, handling-history-v2.css
+  8. 到院提醒“已存在有效到院提醒”UI 与下次随访时间横幅统一
+       components/PatientHospitalVisitTab.tsx
+
+Safe to re-run: edits already present are skipped. If a file has drifted from
+the expected baseline, the script aborts WITHOUT modifying any file.
+"""
+import base64
+import json
+import sys
+from collections import OrderedDict
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd().resolve()
+
+EDITS = json.loads(base64.b64decode("W3siZmlsZSI6ICJhcHBzL3dlYi9zcmMvQXBwLnRzeCIsICJvbGQiOiAiY29uc3Qgcm9sZVNjb3BlVGV4dDogUmVjb3JkPFVzZXJSb2xlLCBzdHJpbmdbXT4gPSB7XG4gIEFETUlOOiBbJ+afpeeci+i/kOiQpeaAu+iniCcsICfov5vlhaXmiqTlo6vlt6XkvZzlj7AnLCAn566h55CG5oKj6ICF5qGj5qGIJywgJ+WuoeaguOaCo+iAheerr+e7keWumicsICfphY3nva7nl4Xnp43op4TliJkv6aOO6Zmp6ZiI5YC8JywgJ+euoeeQhiBISVMvRU1SL0xJUyDmjqXlj6PkuK3lv4MnLCAn5omn6KGM57O757uf566h55CG5pON5L2cJ10sXG4gIE1BTkFHRVI6IFsn5p+l55yL6L+Q6JCl5oC76KeI5ZKM6LSo5o6n5oyH5qCHJywgJ+WPquivu+afpeeci+aOpeWPo+WQjOatpeeKtuaAgScsICfkuI3nm7TmjqXov5vlhaXmgqPogIXljLvnlpfmlbDmja7nvJbovpHlhaXlj6MnXSxcbiAgTlVSU0U6IFsn5aSE55CG6ZqP6K6/L+mihOitpi/lvoXlip4nLCAn5p+l55yL5bm257u05oqk5oKj6ICF5oWi55eF5qGj5qGIJywgJ+WuoeaguOaCo+iAheerr+e7keWumicsICflj6ror7vmn6XnnIvnl4Xnp43op4TliJknLCAn5LiN5pi+56S6566h55CG6am+6am26Iix5YWl5Y+jJ10sXG4gIERPQ1RPUjogWyfmn6XnnIvmgqPogIXmoaPmoYjlkozpo47pmanotovlir8nLCAn5Y+q6K+75p+l55yL55eF56eN6KeE5YiZJywgJ+S4jeaYvuekuuaKpOWjq+aJuemHj+W+heWKnuWFpeWPoycsICfkuI3mmL7npLrnrqHnkIbpqb7pqbboiLHlhaXlj6MnXSxcbn07XG5cbiIsICJuZXciOiAiIiwgImtpbmQiOiAiYWJzZW50IiwgInNpZyI6ICJjb25zdCByb2xlU2NvcGVUZXh0OiJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL0FwcC50c3giLCAib2xkIjogIiAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJyb2xlLXNjb3BlLWNhcmRcIj5cbiAgICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cInNpZGViYXItZm9vdGVyLXRpdGxlXCI+5b2T5YmN6KeS6Imy6I+c5Y2V6IyD5Zu0PC9kaXY+XG4gICAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJyb2xlLXNjb3BlLW5hbWVcIj57Z2V0Um9sZUxhYmVsKHVzZXIucm9sZSl9PC9kaXY+XG4gICAgICAgICAgPHVsIGNsYXNzTmFtZT1cInJvbGUtc2NvcGUtbGlzdFwiPlxuICAgICAgICAgICAge3JvbGVTY29wZVRleHRbdXNlci5yb2xlXS5tYXAoKGl0ZW0pID0+IChcbiAgICAgICAgICAgICAgPGxpIGtleT17aXRlbX0+e2l0ZW19PC9saT5cbiAgICAgICAgICAgICkpfVxuICAgICAgICAgIDwvdWw+XG4gICAgICAgIDwvZGl2PlxuXG4gICAgICAgIDxkaXYgY2xhc3NOYW1lPVwic2lkZWJhci1mb290ZXIgc2VjdXJpdHktc2lkZWJhci1mb290ZXJcIj4iLCAibmV3IjogIiAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJzaWRlYmFyLWZvb3RlciBzZWN1cml0eS1zaWRlYmFyLWZvb3RlclwiPiIsICJraW5kIjogImFic2VudCIsICJzaWciOiAicm9sZS1zY29wZS1jYXJkIn0sIHsiZmlsZSI6ICJhcHBzL3dlYi9zcmMvQXBwLnRzeCIsICJvbGQiOiAiICAgICAgICAgIDxkaXYgY2xhc3NOYW1lPVwidG9wYmFyLWFjdGlvbnNcIj5cbiAgICAgICAgICAgIDxzcGFuIGNsYXNzTmFtZT1cInRvcGJhci1waWxsXCI+5YaF572R5ryU56S6546v5aKDPC9zcGFuPlxuICAgICAgICAgICAgPHNwYW4gY2xhc3NOYW1lPVwidG9wYmFyLXVzZXJcIj5cbiAgICAgICAgICAgICAg5b2T5YmN55So5oi377yae3VzZXIuZGlzcGxheU5hbWV9IC8ge2dldFJvbGVMYWJlbCh1c2VyLnJvbGUpfVxuICAgICAgICAgICAgPC9zcGFuPlxuICAgICAgICAgICAgPGJ1dHRvbiBjbGFzc05hbWU9XCJnaG9zdC1idG4gdG9wYmFyLWxvZ291dFwiIG9uQ2xpY2s9e29uTG9nb3V0fT4iLCAibmV3IjogIiAgICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cInRvcGJhci1hY3Rpb25zXCI+XG4gICAgICAgICAgICA8c3BhbiBjbGFzc05hbWU9XCJ0b3BiYXItcGlsbFwiPuWGhee9kea8lOekuueOr+Wigzwvc3Bhbj5cbiAgICAgICAgICAgIDxidXR0b24gY2xhc3NOYW1lPVwiZ2hvc3QtYnRuIHRvcGJhci1sb2dvdXRcIiBvbkNsaWNrPXtvbkxvZ291dH0+IiwgImtpbmQiOiAiYWJzZW50IiwgInNpZyI6ICJ0b3BiYXItdXNlciJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2luZGV4LmNzcyIsICJvbGQiOiAiLnRvcGJhciB7XG4gIGhlaWdodDogNzZweDtcbiAgYmFja2dyb3VuZDogcmdiYSgyNTUsIDI1NSwgMjU1LCAwLjkpO1xuICBib3JkZXItYm90dG9tOiAxcHggc29saWQgdmFyKC0tbGluZSk7XG4gIGJhY2tkcm9wLWZpbHRlcjogYmx1cigxNHB4KTtcbiAgZGlzcGxheTogZmxleDtcbiAgYWxpZ24taXRlbXM6IGNlbnRlcjtcbiAganVzdGlmeS1jb250ZW50OiBzcGFjZS1iZXR3ZWVuO1xuICBwYWRkaW5nOiAwIDMwcHg7XG4gIHBvc2l0aW9uOiBzdGlja3k7XG4gIHRvcDogMDtcbiAgei1pbmRleDogMTA7XG59XG5cbi50b3BiYXItdGl0bGUge1xuICBmb250LXdlaWdodDogOTAwO1xuICBjb2xvcjogdmFyKC0taG9zcGl0YWwtYmx1ZS1kYXJrKTtcbiAgZm9udC1zaXplOiAxOHB4O1xufVxuXG4udG9wYmFyLXN1YnRpdGxlIHtcbiAgY29sb3I6IHZhcigtLW11dGVkKTtcbiAgZm9udC1zaXplOiAxMnB4O1xuICBtYXJnaW4tdG9wOiA1cHg7XG59XG5cbi50b3BiYXItYWN0aW9ucyB7XG4gIGRpc3BsYXk6IGZsZXg7XG4gIGFsaWduLWl0ZW1zOiBjZW50ZXI7XG4gIGdhcDogMTBweDtcbn0iLCAibmV3IjogIi50b3BiYXIge1xuICBtaW4taGVpZ2h0OiA3NnB4O1xuICBiYWNrZ3JvdW5kOiByZ2JhKDI1NSwgMjU1LCAyNTUsIDAuOSk7XG4gIGJvcmRlci1ib3R0b206IDFweCBzb2xpZCB2YXIoLS1saW5lKTtcbiAgYmFja2Ryb3AtZmlsdGVyOiBibHVyKDE0cHgpO1xuICBkaXNwbGF5OiBmbGV4O1xuICBhbGlnbi1pdGVtczogY2VudGVyO1xuICBqdXN0aWZ5LWNvbnRlbnQ6IHNwYWNlLWJldHdlZW47XG4gIGZsZXgtd3JhcDogd3JhcDtcbiAgZ2FwOiA4cHggMTZweDtcbiAgcGFkZGluZzogMTJweCAzMHB4O1xuICBwb3NpdGlvbjogc3RpY2t5O1xuICB0b3A6IDA7XG4gIHotaW5kZXg6IDEwO1xufVxuXG4vKiBUaGUgdGl0bGUvc3VidGl0bGUgYmxvY2sgbXVzdCBiZSBhbGxvd2VkIHRvIHNocmluayBzbyBpdCBuZXZlciBwdXNoZXMgdGhlXG4gICBhY3Rpb24gYnV0dG9ucyBvZmYtc2NyZWVuIHdoZW4gdGhlIHZpZXdwb3J0IG5hcnJvd3MuICovXG4udG9wYmFyID4gZGl2OmZpcnN0LWNoaWxkIHtcbiAgbWluLXdpZHRoOiAwO1xuICBmbGV4OiAxIDEgYXV0bztcbn1cblxuLnRvcGJhci10aXRsZSB7XG4gIGZvbnQtd2VpZ2h0OiA5MDA7XG4gIGNvbG9yOiB2YXIoLS1ob3NwaXRhbC1ibHVlLWRhcmspO1xuICBmb250LXNpemU6IDE4cHg7XG4gIG92ZXJmbG93LXdyYXA6IGFueXdoZXJlO1xufVxuXG4udG9wYmFyLXN1YnRpdGxlIHtcbiAgY29sb3I6IHZhcigtLW11dGVkKTtcbiAgZm9udC1zaXplOiAxMnB4O1xuICBtYXJnaW4tdG9wOiA1cHg7XG4gIG92ZXJmbG93LXdyYXA6IGFueXdoZXJlO1xufVxuXG4udG9wYmFyLWFjdGlvbnMge1xuICBkaXNwbGF5OiBmbGV4O1xuICBhbGlnbi1pdGVtczogY2VudGVyO1xuICBmbGV4LXdyYXA6IHdyYXA7XG4gIGp1c3RpZnktY29udGVudDogZmxleC1lbmQ7XG4gIGdhcDogMTBweDtcbn1cblxuQG1lZGlhIChtYXgtd2lkdGg6IDcyMHB4KSB7XG4gIC50b3BiYXIge1xuICAgIHBhZGRpbmc6IDEycHggMThweDtcbiAgfVxuXG4gIC50b3BiYXItdGl0bGUge1xuICAgIGZvbnQtc2l6ZTogMTZweDtcbiAgfVxuXG4gIC50b3BiYXItYWN0aW9ucyB7XG4gICAgd2lkdGg6IDEwMCU7XG4gICAganVzdGlmeS1jb250ZW50OiBmbGV4LXN0YXJ0O1xuICB9XG59IiwgImtpbmQiOiAicHJlc2VudCIsICJzaWciOiAiLnRvcGJhciA+IGRpdjpmaXJzdC1jaGlsZCJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL3BhZ2VzL051cnNlRGFzaGJvYXJkUGFnZS50c3giLCAib2xkIjogIiAgICAgICAgICAgICAgPHRkPnt0YXNrLnBhdGllbnQgJiYgPExpbmsgY2xhc3NOYW1lPVwic2Vjb25kYXJ5LWJ0biBjb21wYWN0LWxpbmstYnRuXCIgdG89e2AvcGF0aWVudHMvJHt0YXNrLnBhdGllbnQuaWR9P3dvcmtzcGFjZT10aW1lbGluZWB9Puafpeeci+aXtumXtOe6vzwvTGluaz59PC90ZD4iLCAibmV3IjogIiAgICAgICAgICAgICAgPHRkPnt0YXNrLnBhdGllbnQgJiYgPExpbmsgY2xhc3NOYW1lPVwic2Vjb25kYXJ5LWJ0biBjb21wYWN0LWxpbmstYnRuXCIgdG89e2AvcGF0aWVudHMvJHt0YXNrLnBhdGllbnQuaWR9P3dvcmtzcGFjZT1oYW5kbGluZy1oaXN0b3J5Jmhpc3RvcnlUYXNrPSR7dGFzay5pZH1gfT7mn6XnnIvlpITnva7orrDlvZU8L0xpbms+fTwvdGQ+IiwgImtpbmQiOiAicHJlc2VudCIsICJzaWciOiAid29ya3NwYWNlPWhhbmRsaW5nLWhpc3RvcnkmaGlzdG9yeVRhc2sifSwgeyJmaWxlIjogImFwcHMvd2ViL3NyYy9wYWdlcy9QYXRpZW50RGV0YWlsUGFnZS50c3giLCAib2xkIjogIiAgICAgICAgPFBhdGllbnRIYW5kbGluZ0hpc3RvcnlWaWV3XG4gICAgICAgICAgcGF0aWVudElkPXtwYXRpZW50SWQgPz8gJyd9XG4gICAgICAgICAgcGF0aWVudD17ZGF0YS5wYXRpZW50fVxuICAgICAgICAgIGZvcm1hdFRpbWU9e2Zvcm1hdFRpbWV9XG4gICAgICAgICAgbG9jYWxpemVCYWNrZW5kVGV4dD17bG9jYWxpemVCYWNrZW5kVGV4dH1cbiAgICAgICAgLz4iLCAibmV3IjogIiAgICAgICAgPFBhdGllbnRIYW5kbGluZ0hpc3RvcnlWaWV3XG4gICAgICAgICAgcGF0aWVudElkPXtwYXRpZW50SWQgPz8gJyd9XG4gICAgICAgICAgcGF0aWVudD17ZGF0YS5wYXRpZW50fVxuICAgICAgICAgIGZvcm1hdFRpbWU9e2Zvcm1hdFRpbWV9XG4gICAgICAgICAgbG9jYWxpemVCYWNrZW5kVGV4dD17bG9jYWxpemVCYWNrZW5kVGV4dH1cbiAgICAgICAgICBmb2N1c1Rhc2tJZD17c2VhcmNoUGFyYW1zLmdldCgnaGlzdG9yeVRhc2snKSA/PyB1bmRlZmluZWR9XG4gICAgICAgIC8+IiwgImtpbmQiOiAicHJlc2VudCIsICJzaWciOiAiZm9jdXNUYXNrSWQ9e3NlYXJjaFBhcmFtcy5nZXQoJ2hpc3RvcnlUYXNrJykifSwgeyJmaWxlIjogImFwcHMvd2ViL3NyYy9jb21wb25lbnRzL1BhdGllbnRIYW5kbGluZ0hpc3RvcnlWaWV3LnRzeCIsICJvbGQiOiAiaW1wb3J0IHsgdXNlRWZmZWN0LCB1c2VNZW1vLCB1c2VTdGF0ZSB9IGZyb20gJ3JlYWN0JzsiLCAibmV3IjogImltcG9ydCB7IHVzZUVmZmVjdCwgdXNlTWVtbywgdXNlUmVmLCB1c2VTdGF0ZSB9IGZyb20gJ3JlYWN0JzsiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJ1c2VFZmZlY3QsIHVzZU1lbW8sIHVzZVJlZiwgdXNlU3RhdGUifSwgeyJmaWxlIjogImFwcHMvd2ViL3NyYy9jb21wb25lbnRzL1BhdGllbnRIYW5kbGluZ0hpc3RvcnlWaWV3LnRzeCIsICJvbGQiOiAidHlwZSBQcm9wcyA9IHtcbiAgcGF0aWVudElkOiBzdHJpbmc7XG4gIHBhdGllbnQ6IFBhdGllbnQ7XG4gIGZvcm1hdFRpbWU6ICh2YWx1ZT86IHN0cmluZykgPT4gc3RyaW5nO1xuICBsb2NhbGl6ZUJhY2tlbmRUZXh0OiAodmFsdWU/OiBzdHJpbmcgfCBudWxsKSA9PiBzdHJpbmc7XG59OyIsICJuZXciOiAidHlwZSBQcm9wcyA9IHtcbiAgcGF0aWVudElkOiBzdHJpbmc7XG4gIHBhdGllbnQ6IFBhdGllbnQ7XG4gIGZvcm1hdFRpbWU6ICh2YWx1ZT86IHN0cmluZykgPT4gc3RyaW5nO1xuICBsb2NhbGl6ZUJhY2tlbmRUZXh0OiAodmFsdWU/OiBzdHJpbmcgfCBudWxsKSA9PiBzdHJpbmc7XG4gIC8qKlxuICAgKiBXaGVuIHByb3ZpZGVkIChlLmcuIG5hdmlnYXRlZCBmcm9tIHRoZSBudXJzZSB3b3JrYmVuY2ggXCLmn6XnnIvlpITnva7orrDlvZVcIlxuICAgKiBhY3Rpb24pLCB0aGUgbWF0Y2hpbmcgdGFzayBjYXJkIGlzIGZvcmNlZCBpbnRvIHRoZSB2aXNpYmxlIHdpbmRvdyxcbiAgICogYXV0by1leHBhbmRlZCwgYW5kIHNjcm9sbGVkIGludG8gdmlldy5cbiAgICovXG4gIGZvY3VzVGFza0lkPzogc3RyaW5nO1xufTsiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJmb2N1c1Rhc2tJZD86IHN0cmluZzsifSwgeyJmaWxlIjogImFwcHMvd2ViL3NyYy9jb21wb25lbnRzL1BhdGllbnRIYW5kbGluZ0hpc3RvcnlWaWV3LnRzeCIsICJvbGQiOiAiZnVuY3Rpb24gdG9EYXRlSW5wdXRWYWx1ZShkYXRlOiBEYXRlKSB7XG4gIGNvbnN0IHBhZCA9IChuOiBudW1iZXIpID0+IFN0cmluZyhuKS5wYWRTdGFydCgyLCAnMCcpO1xuICByZXR1cm4gYCR7ZGF0ZS5nZXRGdWxsWWVhcigpfS0ke3BhZChkYXRlLmdldE1vbnRoKCkgKyAxKX0tJHtwYWQoZGF0ZS5nZXREYXRlKCkpfWA7XG59XG5cbmV4cG9ydCBmdW5jdGlvbiBQYXRpZW50SGFuZGxpbmdIaXN0b3J5Vmlldyh7IiwgIm5ldyI6ICJleHBvcnQgZnVuY3Rpb24gUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcoeyIsICJraW5kIjogImFic2VudCIsICJzaWciOiAiZnVuY3Rpb24gdG9EYXRlSW5wdXRWYWx1ZSJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2NvbXBvbmVudHMvUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcudHN4IiwgIm9sZCI6ICJleHBvcnQgZnVuY3Rpb24gUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcoe1xuICBwYXRpZW50SWQsXG4gIHBhdGllbnQsXG4gIGZvcm1hdFRpbWUsXG4gIGxvY2FsaXplQmFja2VuZFRleHQsXG59OiBQcm9wcykge1xuICBjb25zdCBbdGFza3MsIHNldFRhc2tzXSA9IHVzZVN0YXRlPFRhc2tbXT4oW10pO1xuICBjb25zdCBbdGFza3NMb2FkaW5nLCBzZXRUYXNrc0xvYWRpbmddID0gdXNlU3RhdGUoZmFsc2UpO1xuICBjb25zdCBbdGFza3NFcnJvciwgc2V0VGFza3NFcnJvcl0gPSB1c2VTdGF0ZSgnJyk7XG5cbiAgLy8gOTAtZGF5IGRlZmF1bHQgd2luZG93IG1hdGNoZXMgdGhlIHRyZW5kLWNoYXJ0IGRlZmF1bHQgc28gdGhlIHR3byB2aWV3c1xuICAvLyBzdGF5IGFsaWduZWQgb24gZmlyc3QgbG9hZC5cbiAgY29uc3QgdG9kYXkgPSB1c2VNZW1vKCgpID0+IG5ldyBEYXRlKCksIFtdKTtcbiAgY29uc3QgbmluZXR5RGF5c0FnbyA9IHVzZU1lbW8oKCkgPT4ge1xuICAgIGNvbnN0IGQgPSBuZXcgRGF0ZSgpO1xuICAgIGQuc2V0RGF0ZShkLmdldERhdGUoKSAtIDkwKTtcbiAgICByZXR1cm4gZDtcbiAgfSwgW10pO1xuICBjb25zdCBbc3RhcnREYXRlLCBzZXRTdGFydERhdGVdID0gdXNlU3RhdGU8c3RyaW5nPih0b0RhdGVJbnB1dFZhbHVlKG5pbmV0eURheXNBZ28pKTtcbiAgY29uc3QgW2VuZERhdGUsIHNldEVuZERhdGVdID0gdXNlU3RhdGU8c3RyaW5nPih0b0RhdGVJbnB1dFZhbHVlKHRvZGF5KSk7IiwgIm5ldyI6ICJleHBvcnQgZnVuY3Rpb24gUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcoe1xuICBwYXRpZW50SWQsXG4gIHBhdGllbnQsXG4gIGZvcm1hdFRpbWUsXG4gIGxvY2FsaXplQmFja2VuZFRleHQsXG4gIGZvY3VzVGFza0lkLFxufTogUHJvcHMpIHtcbiAgY29uc3QgW3Rhc2tzLCBzZXRUYXNrc10gPSB1c2VTdGF0ZTxUYXNrW10+KFtdKTtcbiAgY29uc3QgW3Rhc2tzTG9hZGluZywgc2V0VGFza3NMb2FkaW5nXSA9IHVzZVN0YXRlKGZhbHNlKTtcbiAgY29uc3QgW3Rhc2tzRXJyb3IsIHNldFRhc2tzRXJyb3JdID0gdXNlU3RhdGUoJycpO1xuXG4gIC8vIFRpbWUgZmlsdGVyIG1pcnJvcnMgdGhlIFwi5Y6G5Y+y55S16K+d5rKf6YCa6K6w5b2VXCIgZmlsdGVyOiBhIHNpbXBsZSBzdGFydC9lbmQgZGF0ZVxuICAvLyByYW5nZSB3aXRoIOafpeivoiAvIOmHjee9riwgbm8gcXVpY2sgcHJlc2V0cy4gRW1wdHkgcmFuZ2UgPSBzaG93IGFsbCByZWNvcmRzLlxuICBjb25zdCBbc3RhcnREYXRlLCBzZXRTdGFydERhdGVdID0gdXNlU3RhdGU8c3RyaW5nPignJyk7XG4gIGNvbnN0IFtlbmREYXRlLCBzZXRFbmREYXRlXSA9IHVzZVN0YXRlPHN0cmluZz4oJycpO1xuXG4gIGNvbnN0IGZvY3VzZWRDYXJkUmVmID0gdXNlUmVmPEhUTUxFbGVtZW50IHwgbnVsbD4obnVsbCk7XG4gIGNvbnN0IGZvY3VzSGFuZGxlZFJlZiA9IHVzZVJlZjxzdHJpbmcgfCBudWxsPihudWxsKTsiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJjb25zdCBbc3RhcnREYXRlLCBzZXRTdGFydERhdGVdID0gdXNlU3RhdGU8c3RyaW5nPignJyk7In0sIHsiZmlsZSI6ICJhcHBzL3dlYi9zcmMvY29tcG9uZW50cy9QYXRpZW50SGFuZGxpbmdIaXN0b3J5Vmlldy50c3giLCAib2xkIjogIiAgZnVuY3Rpb24gcmVzZXRSYW5nZSgpIHtcbiAgICBzZXRTdGFydERhdGUodG9EYXRlSW5wdXRWYWx1ZShuaW5ldHlEYXlzQWdvKSk7XG4gICAgc2V0RW5kRGF0ZSh0b0RhdGVJbnB1dFZhbHVlKHRvZGF5KSk7XG4gIH1cblxuICBmdW5jdGlvbiBzZWxlY3RQcmVzZXQoZGF5czogbnVtYmVyIHwgJ2FsbCcpIHtcbiAgICBpZiAoZGF5cyA9PT0gJ2FsbCcpIHtcbiAgICAgIHNldFN0YXJ0RGF0ZSgnJyk7XG4gICAgICBzZXRFbmREYXRlKCcnKTtcbiAgICAgIHJldHVybjtcbiAgICB9XG4gICAgY29uc3QgZW5kID0gbmV3IERhdGUoKTtcbiAgICBjb25zdCBzdGFydCA9IG5ldyBEYXRlKCk7XG4gICAgc3RhcnQuc2V0RGF0ZShzdGFydC5nZXREYXRlKCkgLSBkYXlzKTtcbiAgICBzZXRTdGFydERhdGUodG9EYXRlSW5wdXRWYWx1ZShzdGFydCkpO1xuICAgIHNldEVuZERhdGUodG9EYXRlSW5wdXRWYWx1ZShlbmQpKTtcbiAgfSIsICJuZXciOiAiICBmdW5jdGlvbiByZXNldFJhbmdlKCkge1xuICAgIHNldFN0YXJ0RGF0ZSgnJyk7XG4gICAgc2V0RW5kRGF0ZSgnJyk7XG4gIH1cblxuICAvLyBXaGVuIGFycml2aW5nIHdpdGggYSBmb2N1c1Rhc2tJZCAoZS5nLiBmcm9tIHRoZSBudXJzZSB3b3JrYmVuY2gpLCBtYWtlIHN1cmVcbiAgLy8gdGhlIHRhcmdldCB0YXNrIGlzIHdpdGhpbiB0aGUgcmVuZGVyZWQgd2luZG93LCBhdXRvLWV4cGFuZCBpdCwgYW5kIHNjcm9sbFxuICAvLyBpdCBpbnRvIHZpZXcgb25jZS4gR3VhcmRlZCBieSBmb2N1c0hhbmRsZWRSZWYgc28gbWFudWFsIGNvbGxhcHNlIGFmdGVyd2FyZHNcbiAgLy8gaXMgcmVzcGVjdGVkLlxuICB1c2VFZmZlY3QoKCkgPT4ge1xuICAgIGlmICghZm9jdXNUYXNrSWQpIHJldHVybjtcbiAgICBpZiAoZm9jdXNIYW5kbGVkUmVmLmN1cnJlbnQgPT09IGZvY3VzVGFza0lkKSByZXR1cm47XG4gICAgY29uc3QgaW5kZXggPSBmaWx0ZXJlZFRhc2tzLmZpbmRJbmRleCgodGFzaykgPT4gdGFzay5pZCA9PT0gZm9jdXNUYXNrSWQpO1xuICAgIGlmIChpbmRleCA8IDApIHJldHVybjsgLy8gbm90IGxvYWRlZCB5ZXQgKG9yIGZpbHRlcmVkIG91dCkg4oCUIHdhaXQgZm9yIHRhc2tzIHRvIGxvYWRcblxuICAgIGZvY3VzSGFuZGxlZFJlZi5jdXJyZW50ID0gZm9jdXNUYXNrSWQ7XG4gICAgaWYgKGluZGV4ID49IHZpc2libGVDb3VudCkge1xuICAgICAgc2V0VmlzaWJsZUNvdW50KGluZGV4ICsgMSk7XG4gICAgfVxuICAgIHNldEV4cGFuZGVkVGFza0lkcygocHJldikgPT4ge1xuICAgICAgY29uc3QgbmV4dCA9IG5ldyBTZXQocHJldik7XG4gICAgICBuZXh0LmFkZChmb2N1c1Rhc2tJZCk7XG4gICAgICByZXR1cm4gbmV4dDtcbiAgICB9KTtcbiAgICB2b2lkIGxvYWRFdmVudHNGb3JUYXNrKGZvY3VzVGFza0lkKTtcbiAgLy8gZXNsaW50LWRpc2FibGUtbmV4dC1saW5lIHJlYWN0LWhvb2tzL2V4aGF1c3RpdmUtZGVwc1xuICB9LCBbZm9jdXNUYXNrSWQsIGZpbHRlcmVkVGFza3NdKTtcblxuICB1c2VFZmZlY3QoKCkgPT4ge1xuICAgIGlmICghZm9jdXNUYXNrSWQgfHwgZm9jdXNIYW5kbGVkUmVmLmN1cnJlbnQgIT09IGZvY3VzVGFza0lkKSByZXR1cm47XG4gICAgY29uc3Qgbm9kZSA9IGZvY3VzZWRDYXJkUmVmLmN1cnJlbnQ7XG4gICAgaWYgKG5vZGUpIHtcbiAgICAgIG5vZGUuc2Nyb2xsSW50b1ZpZXcoeyBiZWhhdmlvcjogJ3Ntb290aCcsIGJsb2NrOiAnY2VudGVyJyB9KTtcbiAgICB9XG4gIH0sIFtmb2N1c1Rhc2tJZCwgdmlzaWJsZUNvdW50LCBleHBhbmRlZFRhc2tJZHNdKTsiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJmb2N1c0hhbmRsZWRSZWYuY3VycmVudCA9IGZvY3VzVGFza0lkOyJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2NvbXBvbmVudHMvUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcudHN4IiwgIm9sZCI6ICIgICAgICA8ZGl2IGNsYXNzTmFtZT1cImhhbmRsaW5nLWhpc3RvcnktdjItZmlsdGVyLWJhclwiIHJvbGU9XCJ0b29sYmFyXCIgYXJpYS1sYWJlbD1cIuaMieaXtumXtOetm+mAieWkhOe9ruiusOW9lVwiPlxuICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cImhhbmRsaW5nLWhpc3RvcnktdjItZmlsdGVyLXByZXNldHNcIj5cbiAgICAgICAgICA8YnV0dG9uIHR5cGU9XCJidXR0b25cIiBvbkNsaWNrPXsoKSA9PiBzZWxlY3RQcmVzZXQoNyl9Pui/kSA3IOWkqTwvYnV0dG9uPlxuICAgICAgICAgIDxidXR0b24gdHlwZT1cImJ1dHRvblwiIG9uQ2xpY2s9eygpID0+IHNlbGVjdFByZXNldCgzMCl9Pui/kSAzMCDlpKk8L2J1dHRvbj5cbiAgICAgICAgICA8YnV0dG9uIHR5cGU9XCJidXR0b25cIiBvbkNsaWNrPXsoKSA9PiBzZWxlY3RQcmVzZXQoOTApfT7ov5EgOTAg5aSpPC9idXR0b24+XG4gICAgICAgICAgPGJ1dHRvbiB0eXBlPVwiYnV0dG9uXCIgb25DbGljaz17KCkgPT4gc2VsZWN0UHJlc2V0KDE4MCl9Pui/kSAxODAg5aSpPC9idXR0b24+XG4gICAgICAgICAgPGJ1dHRvbiB0eXBlPVwiYnV0dG9uXCIgb25DbGljaz17KCkgPT4gc2VsZWN0UHJlc2V0KCdhbGwnKX0+5YWo6YOoPC9idXR0b24+XG4gICAgICAgICAgPGJ1dHRvbiB0eXBlPVwiYnV0dG9uXCIgb25DbGljaz17cmVzZXRSYW5nZX0+6YeN572uPC9idXR0b24+XG4gICAgICAgIDwvZGl2PlxuICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cImhhbmRsaW5nLWhpc3RvcnktdjItZmlsdGVyLXJhbmdlXCI+XG4gICAgICAgICAgPGxhYmVsPlxuICAgICAgICAgICAgPHNwYW4+6LW3PC9zcGFuPlxuICAgICAgICAgICAgPGlucHV0XG4gICAgICAgICAgICAgIHR5cGU9XCJkYXRlXCJcbiAgICAgICAgICAgICAgdmFsdWU9e3N0YXJ0RGF0ZX1cbiAgICAgICAgICAgICAgbWF4PXtlbmREYXRlIHx8IHVuZGVmaW5lZH1cbiAgICAgICAgICAgICAgb25DaGFuZ2U9eyhldmVudCkgPT4gc2V0U3RhcnREYXRlKGV2ZW50LnRhcmdldC52YWx1ZSl9XG4gICAgICAgICAgICAvPlxuICAgICAgICAgIDwvbGFiZWw+XG4gICAgICAgICAgPGxhYmVsPlxuICAgICAgICAgICAgPHNwYW4+5q2iPC9zcGFuPlxuICAgICAgICAgICAgPGlucHV0XG4gICAgICAgICAgICAgIHR5cGU9XCJkYXRlXCJcbiAgICAgICAgICAgICAgdmFsdWU9e2VuZERhdGV9XG4gICAgICAgICAgICAgIG1pbj17c3RhcnREYXRlIHx8IHVuZGVmaW5lZH1cbiAgICAgICAgICAgICAgb25DaGFuZ2U9eyhldmVudCkgPT4gc2V0RW5kRGF0ZShldmVudC50YXJnZXQudmFsdWUpfVxuICAgICAgICAgICAgLz5cbiAgICAgICAgICA8L2xhYmVsPlxuICAgICAgICA8L2Rpdj5cbiAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJoYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1tZXRhXCI+XG4gICAgICAgICAge3BhdGllbnQubmFtZX0gwrcg5YWx5Yy56YWNIHtmaWx0ZXJlZFRhc2tzLmxlbmd0aH0g5p2hIMK3XG4gICAgICAgICAg5bey5bGV56S6IHt2aXNpYmxlVGFza3MubGVuZ3RofVxuICAgICAgICA8L2Rpdj5cbiAgICAgIDwvZGl2PiIsICJuZXciOiAiICAgICAgPGZvcm1cbiAgICAgICAgY2xhc3NOYW1lPVwiZm9sbG93LXVwLWhpc3RvcnktZmlsdGVyXCJcbiAgICAgICAgYXJpYS1sYWJlbD1cIuaMieaXtumXtOetm+mAieWkhOe9ruiusOW9lVwiXG4gICAgICAgIG9uU3VibWl0PXsoZXZlbnQpID0+IHtcbiAgICAgICAgICBldmVudC5wcmV2ZW50RGVmYXVsdCgpO1xuICAgICAgICAgIHNldFZpc2libGVDb3VudChERUZBVUxUX1BBR0VfU0laRSk7XG4gICAgICAgIH19XG4gICAgICA+XG4gICAgICAgIDxsYWJlbD5cbiAgICAgICAgICA8c3Bhbj7liJvlu7rml7bpl7Tku448L3NwYW4+XG4gICAgICAgICAgPGlucHV0XG4gICAgICAgICAgICB0eXBlPVwiZGF0ZVwiXG4gICAgICAgICAgICB2YWx1ZT17c3RhcnREYXRlfVxuICAgICAgICAgICAgbWF4PXtlbmREYXRlIHx8IHVuZGVmaW5lZH1cbiAgICAgICAgICAgIG9uQ2hhbmdlPXsoZXZlbnQpID0+IHNldFN0YXJ0RGF0ZShldmVudC50YXJnZXQudmFsdWUpfVxuICAgICAgICAgIC8+XG4gICAgICAgIDwvbGFiZWw+XG4gICAgICAgIDxsYWJlbD5cbiAgICAgICAgICA8c3Bhbj7liJvlu7rml7bpl7Toh7M8L3NwYW4+XG4gICAgICAgICAgPGlucHV0XG4gICAgICAgICAgICB0eXBlPVwiZGF0ZVwiXG4gICAgICAgICAgICB2YWx1ZT17ZW5kRGF0ZX1cbiAgICAgICAgICAgIG1pbj17c3RhcnREYXRlIHx8IHVuZGVmaW5lZH1cbiAgICAgICAgICAgIG9uQ2hhbmdlPXsoZXZlbnQpID0+IHNldEVuZERhdGUoZXZlbnQudGFyZ2V0LnZhbHVlKX1cbiAgICAgICAgICAvPlxuICAgICAgICA8L2xhYmVsPlxuICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cImZvbGxvdy11cC1maWx0ZXItYWN0aW9uc1wiPlxuICAgICAgICAgIDxidXR0b24gY2xhc3NOYW1lPVwic2Vjb25kYXJ5LWJ1dHRvblwiIHR5cGU9XCJzdWJtaXRcIiBkaXNhYmxlZD17dGFza3NMb2FkaW5nfT7mn6Xor6I8L2J1dHRvbj5cbiAgICAgICAgICA8YnV0dG9uXG4gICAgICAgICAgICBjbGFzc05hbWU9XCJzZWNvbmRhcnktYnV0dG9uIHN1YnRsZVwiXG4gICAgICAgICAgICB0eXBlPVwiYnV0dG9uXCJcbiAgICAgICAgICAgIGRpc2FibGVkPXt0YXNrc0xvYWRpbmd9XG4gICAgICAgICAgICBvbkNsaWNrPXtyZXNldFJhbmdlfVxuICAgICAgICAgID5cbiAgICAgICAgICAgIOmHjee9rlxuICAgICAgICAgIDwvYnV0dG9uPlxuICAgICAgICA8L2Rpdj5cbiAgICAgIDwvZm9ybT5cblxuICAgICAgPGRpdiBjbGFzc05hbWU9XCJoYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1tZXRhXCI+XG4gICAgICAgIHtwYXRpZW50Lm5hbWV9IMK3IOWFseWMuemFjSB7ZmlsdGVyZWRUYXNrcy5sZW5ndGh9IOadoSDCtyDlt7LlsZXnpLoge3Zpc2libGVUYXNrcy5sZW5ndGh9XG4gICAgICA8L2Rpdj4iLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJjbGFzc05hbWU9XCJmb2xsb3ctdXAtaGlzdG9yeS1maWx0ZXJcIiJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2NvbXBvbmVudHMvUGF0aWVudEhhbmRsaW5nSGlzdG9yeVZpZXcudHN4IiwgIm9sZCI6ICIgICAgICAgICAge3Zpc2libGVUYXNrcy5tYXAoKHRhc2spID0+IHtcbiAgICAgICAgICAgIGNvbnN0IGlzRXhwYW5kZWQgPSBleHBhbmRlZFRhc2tJZHMuaGFzKHRhc2suaWQpO1xuICAgICAgICAgICAgY29uc3QgZXZlbnRzID0gZXZlbnRzQnlUYXNrSWRbdGFzay5pZF0gPz8gW107XG4gICAgICAgICAgICBjb25zdCBpc0V2ZW50c0xvYWRpbmcgPSBCb29sZWFuKGV2ZW50c0xvYWRpbmdCeVRhc2tJZFt0YXNrLmlkXSk7XG4gICAgICAgICAgICBjb25zdCBzdGF0dXNDbGFzcyA9IFNUQVRVU19DTEFTU1t0YXNrLnN0YXR1c10gPz8gJ3N0YXR1cy1iYWRnZSc7XG4gICAgICAgICAgICByZXR1cm4gKFxuICAgICAgICAgICAgICA8YXJ0aWNsZVxuICAgICAgICAgICAgICAgIGtleT17dGFzay5pZH1cbiAgICAgICAgICAgICAgICBjbGFzc05hbWU9e2lzRXhwYW5kZWQgPyAnaGFuZGxpbmctaGlzdG9yeS12Mi1jYXJkIGlzLWV4cGFuZGVkJyA6ICdoYW5kbGluZy1oaXN0b3J5LXYyLWNhcmQnfVxuICAgICAgICAgICAgICA+IiwgIm5ldyI6ICIgICAgICAgICAge3Zpc2libGVUYXNrcy5tYXAoKHRhc2spID0+IHtcbiAgICAgICAgICAgIGNvbnN0IGlzRXhwYW5kZWQgPSBleHBhbmRlZFRhc2tJZHMuaGFzKHRhc2suaWQpO1xuICAgICAgICAgICAgY29uc3QgZXZlbnRzID0gZXZlbnRzQnlUYXNrSWRbdGFzay5pZF0gPz8gW107XG4gICAgICAgICAgICBjb25zdCBpc0V2ZW50c0xvYWRpbmcgPSBCb29sZWFuKGV2ZW50c0xvYWRpbmdCeVRhc2tJZFt0YXNrLmlkXSk7XG4gICAgICAgICAgICBjb25zdCBzdGF0dXNDbGFzcyA9IFNUQVRVU19DTEFTU1t0YXNrLnN0YXR1c10gPz8gJ3N0YXR1cy1iYWRnZSc7XG4gICAgICAgICAgICBjb25zdCBpc0ZvY3VzZWQgPSBCb29sZWFuKGZvY3VzVGFza0lkKSAmJiB0YXNrLmlkID09PSBmb2N1c1Rhc2tJZDtcbiAgICAgICAgICAgIHJldHVybiAoXG4gICAgICAgICAgICAgIDxhcnRpY2xlXG4gICAgICAgICAgICAgICAga2V5PXt0YXNrLmlkfVxuICAgICAgICAgICAgICAgIHJlZj17aXNGb2N1c2VkID8gZm9jdXNlZENhcmRSZWYgOiB1bmRlZmluZWR9XG4gICAgICAgICAgICAgICAgY2xhc3NOYW1lPXtcbiAgICAgICAgICAgICAgICAgIGBoYW5kbGluZy1oaXN0b3J5LXYyLWNhcmQke2lzRXhwYW5kZWQgPyAnIGlzLWV4cGFuZGVkJyA6ICcnfSR7aXNGb2N1c2VkID8gJyBpcy1mb2N1c2VkJyA6ICcnfWBcbiAgICAgICAgICAgICAgICB9XG4gICAgICAgICAgICAgID4iLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJyZWY9e2lzRm9jdXNlZCA/IGZvY3VzZWRDYXJkUmVmIDogdW5kZWZpbmVkfSJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2hhbmRsaW5nLWhpc3RvcnktdjIuY3NzIiwgIm9sZCI6ICIgKiAgLSBhIHF1aWNrLXByZXNldCArIGN1c3RvbSBkYXRlLXJhbmdlIGZpbHRlciBiYXIiLCAibmV3IjogIiAqICAtIGEgc3RhcnQvZW5kIGRhdGUtcmFuZ2UgZmlsdGVyIGJhciAobWF0Y2hlcyB0aGUg5Y6G5Y+y55S16K+d5rKf6YCa6K6w5b2VIGZpbHRlcikiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJtYXRjaGVzIHRoZSDljoblj7LnlLXor53msp/pgJrorrDlvZUgZmlsdGVyIn0sIHsiZmlsZSI6ICJhcHBzL3dlYi9zcmMvaGFuZGxpbmctaGlzdG9yeS12Mi5jc3MiLCAib2xkIjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1iYXIge1xuICBkaXNwbGF5OiBncmlkO1xuICBnYXA6IDEwcHggMTRweDtcbiAgZ3JpZC10ZW1wbGF0ZS1jb2x1bW5zOiAxZnI7XG4gIHBhZGRpbmc6IDEycHggMTRweDtcbiAgYm9yZGVyOiAxcHggc29saWQgI2UyZThmMDtcbiAgYm9yZGVyLXJhZGl1czogMTRweDtcbiAgYmFja2dyb3VuZDogbGluZWFyLWdyYWRpZW50KDE4MGRlZywgI2Y4ZmJmZiAwJSwgI2ZmZmZmZiAxMDAlKTtcbn1cblxuQG1lZGlhIChtaW4td2lkdGg6IDkwMHB4KSB7XG4gIC5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1iYXIge1xuICAgIGdyaWQtdGVtcGxhdGUtY29sdW1uczogYXV0byAxZnIgYXV0bztcbiAgICBhbGlnbi1pdGVtczogY2VudGVyO1xuICB9XG59XG5cbi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1wcmVzZXRzIHtcbiAgZGlzcGxheTogaW5saW5lLWZsZXg7XG4gIGZsZXgtd3JhcDogd3JhcDtcbiAgZ2FwOiA2cHg7XG59XG5cbi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1wcmVzZXRzIGJ1dHRvbiB7XG4gIGFwcGVhcmFuY2U6IG5vbmU7XG4gIHBhZGRpbmc6IDVweCAxMnB4O1xuICBib3JkZXI6IDFweCBzb2xpZCAjY2JkNWUxO1xuICBib3JkZXItcmFkaXVzOiA5OTlweDtcbiAgYmFja2dyb3VuZDogI2ZmZmZmZjtcbiAgY29sb3I6ICM0NzU1Njk7XG4gIGZvbnQtc2l6ZTogMTJweDtcbiAgZm9udC13ZWlnaHQ6IDcwMDtcbiAgY3Vyc29yOiBwb2ludGVyO1xuICB0cmFuc2l0aW9uOiBib3JkZXItY29sb3IgMC4xNXMgZWFzZSwgYmFja2dyb3VuZCAwLjE1cyBlYXNlLCBjb2xvciAwLjE1cyBlYXNlO1xufVxuXG4uaGFuZGxpbmctaGlzdG9yeS12Mi1maWx0ZXItcHJlc2V0cyBidXR0b246aG92ZXIge1xuICBib3JkZXItY29sb3I6ICM5NGEzYjg7XG4gIGJhY2tncm91bmQ6ICNmOGZhZmM7XG59XG5cbi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1yYW5nZSB7XG4gIGRpc3BsYXk6IGlubGluZS1mbGV4O1xuICBhbGlnbi1pdGVtczogY2VudGVyO1xuICBmbGV4LXdyYXA6IHdyYXA7XG4gIGdhcDogMTBweDtcbn1cblxuLmhhbmRsaW5nLWhpc3RvcnktdjItZmlsdGVyLXJhbmdlIGxhYmVsIHtcbiAgZGlzcGxheTogaW5saW5lLWZsZXg7XG4gIGFsaWduLWl0ZW1zOiBjZW50ZXI7XG4gIGdhcDogNnB4O1xuICBmb250LXNpemU6IDEycHg7XG4gIGNvbG9yOiAjNDc1NTY5O1xufVxuXG4uaGFuZGxpbmctaGlzdG9yeS12Mi1maWx0ZXItcmFuZ2UgbGFiZWwgPiBzcGFuIHtcbiAgZm9udC13ZWlnaHQ6IDcwMDtcbiAgY29sb3I6ICMwZjE3MmE7XG59XG5cbi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1yYW5nZSBpbnB1dFt0eXBlPSdkYXRlJ10ge1xuICBib3JkZXI6IDFweCBzb2xpZCAjY2JkNWUxO1xuICBib3JkZXItcmFkaXVzOiA4cHg7XG4gIHBhZGRpbmc6IDRweCA4cHg7XG4gIGZvbnQtc2l6ZTogMTJweDtcbiAgY29sb3I6ICMwZjE3MmE7XG4gIGJhY2tncm91bmQ6ICNmZmZmZmY7XG59XG5cbi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1tZXRhIHsiLCAibmV3IjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1tZXRhIHsiLCAia2luZCI6ICJhYnNlbnQiLCAic2lnIjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWZpbHRlci1wcmVzZXRzIn0sIHsiZmlsZSI6ICJhcHBzL3dlYi9zcmMvaGFuZGxpbmctaGlzdG9yeS12Mi5jc3MiLCAib2xkIjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWNhcmQuaXMtZXhwYW5kZWQge1xuICBib3JkZXItY29sb3I6IHJnYmEoMTUsIDExOCwgMTEwLCAwLjMyKTtcbiAgYm94LXNoYWRvdzogMCAxMnB4IDI4cHggcmdiYSgxNSwgMjMsIDQyLCAwLjA4KTtcbn0iLCAibmV3IjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWNhcmQuaXMtZXhwYW5kZWQge1xuICBib3JkZXItY29sb3I6IHJnYmEoMTUsIDExOCwgMTEwLCAwLjMyKTtcbiAgYm94LXNoYWRvdzogMCAxMnB4IDI4cHggcmdiYSgxNSwgMjMsIDQyLCAwLjA4KTtcbn1cblxuLmhhbmRsaW5nLWhpc3RvcnktdjItY2FyZC5pcy1mb2N1c2VkIHtcbiAgYm9yZGVyLWNvbG9yOiAjMjU2M2ViO1xuICBib3gtc2hhZG93OiAwIDAgMCAycHggcmdiYSgzNywgOTksIDIzNSwgMC4yNSksIDAgMTJweCAyOHB4IHJnYmEoMzcsIDk5LCAyMzUsIDAuMTIpO1xufSIsICJraW5kIjogInByZXNlbnQiLCAic2lnIjogIi5oYW5kbGluZy1oaXN0b3J5LXYyLWNhcmQuaXMtZm9jdXNlZCJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL3BhdGllbnQtZGV0YWlsLXRhc2stdXgtcG9saXNoLmNzcyIsICJvbGQiOiAiLnRhc2stcGFuZWwtdGFzay1saXN0IHtcbiAgbWF4LWhlaWdodDogMTg0cHg7XG4gIG92ZXJmbG93OiBhdXRvO1xuICBwYWRkaW5nLXJpZ2h0OiAycHg7XG59XG5cbi50YXNrLXBhbmVsLXRhc2stY2FyZCB7XG4gIGdyaWQtdGVtcGxhdGUtY29sdW1uczogbWlubWF4KDAsIDFmcikgYXV0bztcbiAgcGFkZGluZzogOXB4IDEwcHg7XG4gIGJvcmRlci1yYWRpdXM6IDEycHg7XG59XG5cbi50YXNrLXBhbmVsLXRhc2stY2FyZCBzdHJvbmcge1xuICBmb250LXNpemU6IDEzcHg7XG59IiwgIm5ldyI6ICIudGFzay1wYW5lbC10YXNrLWxpc3Qge1xuICAvKiBXYXMgYSB0aWdodCAxODRweCBzY3JvbGwgYm94IHRoYXQgY2xpcHBlZCB0YXNrIGNhcmRzIChlc3BlY2lhbGx5IHRhbGxlclxuICAgICBub24tcmlzayB0YXNrcyB3aG9zZSBsb25nZXIgdHlwZSBsYWJlbHMgd3JhcCB0aGUgdGl0bGUgb250byB0d28gbGluZXMpLlxuICAgICBUaGUgd2hvbGUgc2lkZSBwYW5lbCBhbHJlYWR5IHNjcm9sbHMsIHNvIGdpdmUgdGhlIHBpY2tlciBnZW5lcm91cyByb29tXG4gICAgIGFuZCBvbmx5IHNjcm9sbCBpbnRlcm5hbGx5IG9uY2UgdGhlIGxpc3QgZ2V0cyB2ZXJ5IGxvbmcuICovXG4gIG1heC1oZWlnaHQ6IGNsYW1wKDI0MHB4LCA0OHZoLCA1NDBweCk7XG4gIG92ZXJmbG93OiBhdXRvO1xuICBwYWRkaW5nLXJpZ2h0OiAycHg7XG59XG5cbi50YXNrLXBhbmVsLXRhc2stY2FyZCB7XG4gIGdyaWQtdGVtcGxhdGUtY29sdW1uczogbWlubWF4KDAsIDFmcikgYXV0bztcbiAgcGFkZGluZzogMTBweCAxMnB4O1xuICBib3JkZXItcmFkaXVzOiAxMnB4O1xuICByb3ctZ2FwOiA2cHg7XG59XG5cbi50YXNrLXBhbmVsLXRhc2stY2FyZCBzdHJvbmcge1xuICBmb250LXNpemU6IDEzcHg7XG4gIGxpbmUtaGVpZ2h0OiAxLjQ7XG59IiwgImtpbmQiOiAicHJlc2VudCIsICJzaWciOiAiY2xhbXAoMjQwcHgsIDQ4dmgsIDU0MHB4KSJ9LCB7ImZpbGUiOiAiYXBwcy93ZWIvc3JjL2NvbXBvbmVudHMvUGF0aWVudEhvc3BpdGFsVmlzaXRUYWIudHN4IiwgIm9sZCI6ICIgICAgICAgIHtoYXNBY3RpdmVWaXNpdFJlbWluZGVyICYmIChcbiAgICAgICAgICA8ZGl2IGNsYXNzTmFtZT1cInZpc2l0LWV4aXN0aW5nLXJlbWluZGVyLWxvY2tcIiByb2xlPVwic3RhdHVzXCI+XG4gICAgICAgICAgICA8c3Ryb25nPuW3suWtmOWcqOacieaViOWIsOmZouaPkOmGkjwvc3Ryb25nPlxuICAgICAgICAgICAgPHNwYW4+5Li66YG/5YWN5oKj6ICF56uv6YeN5aSN5pS25Yiw5Yay56qB5o+Q6YaS77yM6K+35YWI5aSE55CG5oiW5pKk6ZSA5b2T5YmN5o+Q6YaS77yM5YaN5paw5bu65LiL5LiA5p2h44CCPC9zcGFuPlxuICAgICAgICAgIDwvZGl2PlxuICAgICAgICApfSIsICJuZXciOiAiICAgICAgICB7aGFzQWN0aXZlVmlzaXRSZW1pbmRlciAmJiAoKCkgPT4ge1xuICAgICAgICAgIC8vIFVuaWZpZWQgd2l0aCB0aGUgcGhvbmUgZm9sbG93LXVwIFwi5LiL5qyh6ZqP6K6/5pe26Ze0XCIgYmFubmVyIHNvIHRoZVxuICAgICAgICAgIC8vIFwi5bey5a2Y5Zyo5pyJ5pWI5Yiw6Zmi5o+Q6YaSXCIgc3RhdGUgcmVhZHMgdGhlIHNhbWUgYWNyb3NzIGJvdGggdGFicy5cbiAgICAgICAgICBjb25zdCBwcmltYXJ5ID0gYWN0aXZlSG9zcGl0YWxWaXNpdFJlbWluZGVyc1swXTtcbiAgICAgICAgICByZXR1cm4gKFxuICAgICAgICAgICAgPGRpdiBjbGFzc05hbWU9XCJmb2xsb3ctdXAtbmV4dC12aXNpdC1iYW5uZXIgaXMtaW1taW5lbnRcIiByb2xlPVwic3RhdHVzXCI+XG4gICAgICAgICAgICAgIDxkaXYgY2xhc3NOYW1lPVwiZm9sbG93LXVwLW5leHQtdmlzaXQtYmFubmVyLW1haW5cIj5cbiAgICAgICAgICAgICAgICA8c3BhbiBjbGFzc05hbWU9XCJmb2xsb3ctdXAtbmV4dC12aXNpdC1iYW5uZXItbGFiZWxcIj7lvZPliY3liLDpmaLmj5DphpI8L3NwYW4+XG4gICAgICAgICAgICAgICAgPHN0cm9uZyBjbGFzc05hbWU9XCJmb2xsb3ctdXAtbmV4dC12aXNpdC1iYW5uZXItdGltZVwiPuW3suWtmOWcqOacieaViOWIsOmZouaPkOmGkjwvc3Ryb25nPlxuICAgICAgICAgICAgICAgIDxzcGFuIGNsYXNzTmFtZT1cImZvbGxvdy11cC1uZXh0LXZpc2l0LWJhbm5lci1oaW50XCI+XG4gICAgICAgICAgICAgICAgICDkuLrpgb/lhY3mgqPogIXnq6/ph43lpI3mlLbliLDlhrLnqoHmj5DphpLvvIzor7flhYjlpITnkIbmiJbmkqTplIDlvZPliY3mj5DphpLvvIzlho3mlrDlu7rkuIvkuIDmnaHjgIJcbiAgICAgICAgICAgICAgICA8L3NwYW4+XG4gICAgICAgICAgICAgICAge3ByaW1hcnkgJiYgKFxuICAgICAgICAgICAgICAgICAgPHNwYW4gY2xhc3NOYW1lPVwiZm9sbG93LXVwLW5leHQtdmlzaXQtYmFubmVyLXRhc2stYmFkZ2VcIiB0aXRsZT17cHJpbWFyeS5pZH0+XG4gICAgICAgICAgICAgICAgICAgIHthY3RpdmVIb3NwaXRhbFZpc2l0UmVtaW5kZXJzLmxlbmd0aCA+IDFcbiAgICAgICAgICAgICAgICAgICAgICA/IGDlhbEgJHthY3RpdmVIb3NwaXRhbFZpc2l0UmVtaW5kZXJzLmxlbmd0aH0g5p2h5pyJ5pWI5o+Q6YaSIMK3IOacgOi/kemAmuefpSAke2Zvcm1hdFRpbWUocHJpbWFyeS5yZW1pbmRlZEF0KX1gXG4gICAgICAgICAgICAgICAgICAgICAgOiBgJHtsb2NhbGl6ZUJhY2tlbmRUZXh0KHByaW1hcnkucmVhc29uKX0gwrcg5pyA6L+R6YCa55+lICR7Zm9ybWF0VGltZShwcmltYXJ5LnJlbWluZGVkQXQpfWB9XG4gICAgICAgICAgICAgICAgICA8L3NwYW4+XG4gICAgICAgICAgICAgICAgKX1cbiAgICAgICAgICAgICAgPC9kaXY+XG4gICAgICAgICAgICA8L2Rpdj5cbiAgICAgICAgICApO1xuICAgICAgICB9KSgpfSIsICJraW5kIjogInByZXNlbnQiLCAic2lnIjogImZvbGxvdy11cC1uZXh0LXZpc2l0LWJhbm5lciBpcy1pbW1pbmVudCJ9LCB7ImZpbGUiOiAiYXBwcy9hcGkvc3JjL2ZvbGxvdy11cHMvZm9sbG93LXVwcy5zZXJ2aWNlLnRzIiwgIm9sZCI6ICIgIGNvbnN0cnVjdG9yKHByaXZhdGUgcmVhZG9ubHkgcHJpc21hOiBQcmlzbWFTZXJ2aWNlKSB7fVxuXG4gIC8vIC0tLS0tIGhlbHBlcnMgLS0tLS1cblxuICBwcml2YXRlIGFzeW5jIGFzc2VydFBhdGllbnQocGF0aWVudElkOiBzdHJpbmcpIHsiLCAibmV3IjogIiAgY29uc3RydWN0b3IocHJpdmF0ZSByZWFkb25seSBwcmlzbWE6IFByaXNtYVNlcnZpY2UpIHt9XG5cbiAgLy8gLS0tLS0gaGVscGVycyAtLS0tLVxuXG4gIC8qKlxuICAgKiBwaG9uZS1mb2xsb3ctdXAtZGVkdXBlLXYyOiBzZXJpYWxpemUgYWxsIHBob25lLWZvbGxvdy11cCB0YXNrIG11dGF0aW9ucyBmb3IgYVxuICAgKiBzaW5nbGUgcGF0aWVudCB1c2luZyBhIHRyYW5zYWN0aW9uLXNjb3BlZCBQb3N0Z3JlcyBhZHZpc29yeSBsb2NrLlxuICAgKlxuICAgKiBSb290IGNhdXNlIG9mIHRoZSBcIuS4pOS4quS4gOagt+eahOiuoeWIkueUteivnemaj+iuv+S7u+WKoVwiIGJ1Zzogb3BlbmluZyB0aGUgZm9sbG93LXVwIHRhYlxuICAgKiBmaXJlcyBgbG9hZEZvbGxvd1VwSGlzdG9yeWAgYW5kIGBsb2FkQWN0aXZlTmV4dEZvbGxvd1VwYCBhdCB0aGUgc2FtZSB0aW1lLCBhbmRcbiAgICogYm90aCBlbmRwb2ludHMgaW5kZXBlbmRlbnRseSBydW4gYHN5bmNQaG9uZUZvbGxvd1VwU2NoZWR1bGVkVGFza2AuIFdpdGggbm8gbG9ja1xuICAgKiBib3RoIHRyYW5zYWN0aW9ucyByZWFkIFwibm8gb3BlbiB0YXNrXCIgYW5kIGJvdGggY3JlYXRlIG9uZSAtPiB0d28gZHVwbGljYXRlcy5cbiAgICpcbiAgICogYHBnX2Fkdmlzb3J5X3hhY3RfbG9ja2AgcmVsZWFzZXMgYXV0b21hdGljYWxseSB3aGVuIHRoZSB0cmFuc2FjdGlvbiBlbmRzLCBzbyB0aGVcbiAgICogdHdvIHN5bmNzIHJ1biBvbmUtYWZ0ZXItYW5vdGhlciBhbmQgdGhlIGRlZHVwZSBsb2dpYyBhbHdheXMgc2VlcyBhIGNvbnNpc3RlbnRcbiAgICogdmlldy4gV3JhcHBlZCBkZWZlbnNpdmVseSBzbyBhIG5vbi1Qb3N0Z3JlcyBlbmdpbmUgKGUuZy4gdGVzdHMpIGNhbm5vdCBicmVhayB0aGVcbiAgICogbWFpbiBmbG93LlxuICAgKi9cbiAgcHJpdmF0ZSBhc3luYyBsb2NrUGF0aWVudEZvbGxvd1VwKHBhdGllbnRJZDogc3RyaW5nLCBjbGllbnQ6IERiQ2xpZW50KSB7XG4gICAgdHJ5IHtcbiAgICAgIGF3YWl0IGNsaWVudC4kcXVlcnlSYXdgU0VMRUNUIHBnX2Fkdmlzb3J5X3hhY3RfbG9jayhoYXNodGV4dGV4dGVuZGVkKCR7cGF0aWVudElkfSwgMCkpYDtcbiAgICB9IGNhdGNoIChlcnIpIHtcbiAgICAgIGNvbnNvbGUud2FybignQWR2aXNvcnkgbG9jayBmb3IgcGhvbmUgZm9sbG93LXVwIHN5bmMgdW5hdmFpbGFibGUuJywgZXJyKTtcbiAgICB9XG4gIH1cblxuICBwcml2YXRlIGFzeW5jIGFzc2VydFBhdGllbnQocGF0aWVudElkOiBzdHJpbmcpIHsiLCAia2luZCI6ICJwcmVzZW50IiwgInNpZyI6ICJwcml2YXRlIGFzeW5jIGxvY2tQYXRpZW50Rm9sbG93VXAifSwgeyJmaWxlIjogImFwcHMvYXBpL3NyYy9mb2xsb3ctdXBzL2ZvbGxvdy11cHMuc2VydmljZS50cyIsICJvbGQiOiAiICAgIHJldHVybiB0aGlzLnByaXNtYS4kdHJhbnNhY3Rpb24oYXN5bmMgKHR4KSA9PiB7XG4gICAgICBjb25zdCBhY3RpdmUgPSBhd2FpdCB0aGlzLmZpbmRBY3RpdmVTY2hlZHVsZWRSZWNvcmQocGF0aWVudElkLCB0eCk7XG4gICAgICBjb25zdCBhY3RpdmVUaW1lID0gYWN0aXZlPy5uZXh0Rm9sbG93VXBUaW1lID8/IG51bGw7IiwgIm5ldyI6ICIgICAgcmV0dXJuIHRoaXMucHJpc21hLiR0cmFuc2FjdGlvbihhc3luYyAodHgpID0+IHtcbiAgICAgIC8vIFNlcmlhbGl6ZSBjb25jdXJyZW50IHN5bmNzIGZvciB0aGlzIHBhdGllbnQgKHNlZSBsb2NrUGF0aWVudEZvbGxvd1VwKS5cbiAgICAgIGF3YWl0IHRoaXMubG9ja1BhdGllbnRGb2xsb3dVcChwYXRpZW50SWQsIHR4KTtcblxuICAgICAgY29uc3QgYWN0aXZlID0gYXdhaXQgdGhpcy5maW5kQWN0aXZlU2NoZWR1bGVkUmVjb3JkKHBhdGllbnRJZCwgdHgpO1xuICAgICAgY29uc3QgYWN0aXZlVGltZSA9IGFjdGl2ZT8ubmV4dEZvbGxvd1VwVGltZSA/PyBudWxsOyIsICJraW5kIjogInByZXNlbnQiLCAic2lnIjogIlNlcmlhbGl6ZSBjb25jdXJyZW50IHN5bmNzIGZvciB0aGlzIHBhdGllbnQifSwgeyJmaWxlIjogImFwcHMvYXBpL3NyYy9mb2xsb3ctdXBzL2ZvbGxvdy11cHMuc2VydmljZS50cyIsICJvbGQiOiAiICAgIHJldHVybiB0aGlzLnByaXNtYS4kdHJhbnNhY3Rpb24oYXN5bmMgKHR4KSA9PiB7XG4gICAgICAvLyBDYXB0dXJlIHRoZSBwcmV2aW91c2x5IGFjdGl2ZSBzY2hlZHVsZWQgdGltZSBzbyB0aGUgY2xpZW50IGNhbiBzaG93IGFcbiAgICAgIC8vIFwieW91ciBwcmV2aW91cyBuZXh0LWZvbGxvdy11cCB3YXMgb3ZlcndyaXR0ZW5cIiBub3RpY2UuXG4gICAgICBjb25zdCBwcmV2aW91c0FjdGl2ZSA9IGF3YWl0IHRoaXMuZmluZEFjdGl2ZVNjaGVkdWxlZFJlY29yZChwYXRpZW50SWQsIHR4KTsiLCAibmV3IjogIiAgICByZXR1cm4gdGhpcy5wcmlzbWEuJHRyYW5zYWN0aW9uKGFzeW5jICh0eCkgPT4ge1xuICAgICAgLy8gU2VyaWFsaXplIGNvbmN1cnJlbnQgcGhvbmUtZm9sbG93LXVwIHRhc2sgbXV0YXRpb25zIGZvciB0aGlzIHBhdGllbnQuXG4gICAgICBhd2FpdCB0aGlzLmxvY2tQYXRpZW50Rm9sbG93VXAocGF0aWVudElkLCB0eCk7XG5cbiAgICAgIC8vIENhcHR1cmUgdGhlIHByZXZpb3VzbHkgYWN0aXZlIHNjaGVkdWxlZCB0aW1lIHNvIHRoZSBjbGllbnQgY2FuIHNob3cgYVxuICAgICAgLy8gXCJ5b3VyIHByZXZpb3VzIG5leHQtZm9sbG93LXVwIHdhcyBvdmVyd3JpdHRlblwiIG5vdGljZS5cbiAgICAgIGNvbnN0IHByZXZpb3VzQWN0aXZlID0gYXdhaXQgdGhpcy5maW5kQWN0aXZlU2NoZWR1bGVkUmVjb3JkKHBhdGllbnRJZCwgdHgpOyIsICJraW5kIjogInByZXNlbnQiLCAic2lnIjogIlNlcmlhbGl6ZSBjb25jdXJyZW50IHBob25lLWZvbGxvdy11cCB0YXNrIG11dGF0aW9ucyBmb3IgdGhpcyBwYXRpZW50In1d").decode("utf-8"))
+
+# Group edits per file, preserving order.
+by_file = OrderedDict()
+for e in EDITS:
+    by_file.setdefault(e["file"], []).append(e)
+
+# Existence check first (clear message if run from the wrong directory).
+missing = [rel for rel in by_file if not (root / rel).exists()]
+if missing:
+    raise SystemExit(
+        "找不到以下文件，请在项目根目录（包含 apps/ 的目录）运行本脚本：\n  "
+        + "\n  ".join(missing)
+    )
+
+
+def apply_one(text, edit, label):
+    """Return (text, applied?). Idempotent via per-edit signal; aborts on drift."""
+    sig, kind = edit["sig"], edit["kind"]
+    already = (sig in text) if kind == "present" else (sig not in text)
+    if already:
+        return text, False          # this edit is already applied
+    if edit["old"] in text:
+        return text.replace(edit["old"], edit["new"], 1), True
+    raise SystemExit(
+        f"[{label}] 未找到预期代码，且补丁内容也不存在。\n"
+        f"该文件可能已与基线不同，未修改任何文件。请人工核对后再试。"
+    )
+
+
+# Pass 1: compute all results in memory; abort before writing if anything fails.
+results = OrderedDict()
+report = OrderedDict()
+for rel, edits in by_file.items():
+    path = root / rel
+    text = path.read_text(encoding="utf-8")
+    applied = skipped = 0
+    for i, e in enumerate(edits, 1):
+        text, did = apply_one(text, e, f"{rel} #{i}")
+        applied += int(did)
+        skipped += int(not did)
+    results[rel] = text
+    report[rel] = (applied, skipped)
+
+# Pass 2: write everything (only reached if every edit succeeded/was idempotent).
+for rel, text in results.items():
+    (root / rel).write_text(text, encoding="utf-8")
+
+print("补丁已应用（已应用 / 已存在）：")
+for rel, (a, s) in report.items():
+    print(f"  {rel}: {a} applied, {s} already present")
+print("\n完成。请按常规方式重新构建前端 / 后端进行验证。")
+
+
 ### FILE: scripts/apply_followup_contact_card_match_visit.py
 #!/usr/bin/env python3
 """Make the phone follow-up tab patient contact card match the hospital-visit tab card.
@@ -52432,6 +53769,729 @@ print(f"- Updated {page_path}")
 print(f"- Updated {css_path}")
 print(f"- Patient status strip removed: {'yes' if status_removed else 'already absent / not matched'}")
 print("- Hospital visit reminder banner moved to the top of the patient detail page.")
+
+
+### FILE: scripts/apply_phase3_cleanup_and_followup_banner_patch.py
+#!/usr/bin/env python3
+"""Phase-3 cleanup patch: explanatory-text sweep, sidebar/timeline coherence,
+restored 下次随访时间 banner, duplicate phone-follow-up task fix, and the new
+PatientHandlingHistoryView wiring.
+
+Run from the repo root (the directory that contains apps/, scripts/):
+
+    python3 scripts/apply_phase3_cleanup_and_followup_banner_patch.py "$PWD"
+
+Idempotent: re-runs print "No additional edits were needed".
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# entrypoint
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd().resolve()
+    web_src = root / "apps" / "web" / "src"
+    api_src = root / "apps" / "api" / "src"
+
+    required = [
+        web_src / "pages" / "PatientDetailPage.tsx",
+        web_src / "pages" / "NurseDashboardPage.tsx",
+        web_src / "components" / "PatientTaskSidePanel.tsx",
+        web_src / "components" / "PatientHandlingHistoryView.tsx",
+        web_src / "handling-history-v2.css",
+        api_src / "follow-ups" / "follow-ups.service.ts",
+    ]
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise SystemExit(
+            "Missing required file(s):\n  - "
+            + "\n  - ".join(missing)
+            + "\n\nRun this script from the repo root (the directory that\n"
+              "contains apps/, scripts/, etc.) and make sure the patch zip\n"
+              "was rsynced first so that PatientHandlingHistoryView.tsx and\n"
+              "handling-history-v2.css already exist on disk."
+        )
+
+    edits: list[str] = []
+
+    edits += patch_patient_detail_page(web_src / "pages" / "PatientDetailPage.tsx")
+    edits += patch_nurse_dashboard_page(web_src / "pages" / "NurseDashboardPage.tsx")
+    edits += patch_task_side_panel(web_src / "components" / "PatientTaskSidePanel.tsx")
+    edits += patch_follow_ups_service(api_src / "follow-ups" / "follow-ups.service.ts")
+
+    print()
+    if edits:
+        print("Applied edits:")
+        for e in edits:
+            print(f"  - {e}")
+    else:
+        print("No additional edits were needed (idempotent re-run).")
+
+    print(
+        "\nFollow-up:\n"
+        "  1. Restart the API and the Vite dev server.\n"
+        "  2. Smoke check:\n"
+        "     - 护士工作台: 4 区域的解释性 <p> 文字消失。\n"
+        "     - 患者详情页各 tab: 解释性 section-hint 已移除。\n"
+        "     - 电话随访 tab: 顶部恢复『下次随访时间』banner（编辑/取消/\n"
+        "       覆盖通知/已生成任务徽章）。\n"
+        "     - 全部记录里的 PENDING 任务节点: 只有『处理当前任务』按钮。\n"
+        "     - 任务侧边栏与全部记录一致显示 PENDING/IN_PROGRESS 任务。\n"
+        "     - 处置记录 tab: 出现时间筛选 + 懒加载任务卡片，展开看到处理\n"
+        "       流程图。\n"
+        "     - 不再出现两个相同的『电话随访』计划任务。\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def ensure_import_line(text: str, *, import_line: str, after_anchor: str) -> tuple[str, bool]:
+    if import_line in text:
+        return text, False
+    if after_anchor not in text:
+        return text, False
+    return text.replace(after_anchor, after_anchor + "\n" + import_line, 1), True
+
+
+# ---------------------------------------------------------------------------
+# PatientDetailPage.tsx
+# ---------------------------------------------------------------------------
+
+PATIENT_DETAIL_EXPLANATORY_BLOCKS = [
+    (
+        "actions/risk-disposal section-hint",
+        '\n                <p className="section-hint">先选择需要处置的风险预警，再勾选处置方式。提交处置后，该风险预警会自动标记为已处理。普通待办任务和风险随访任务在患者详情页内分区处理。</p>',
+    ),
+    (
+        "actions/risk-disposal click-hint section-hint",
+        '\n                    <p className="section-hint">处置方式不会通过单击卡片直接提交；必须勾选处置方式、填写电子签名后提交。</p>',
+    ),
+    (
+        "disease/慢病档案 section-hint",
+        '\n                <p className="section-hint">先查看已有诊断和风险分层；需要补录时再展开新增表单。</p>',
+    ),
+    (
+        "monitoring/vital-form section-hint",
+        '\n                <p className="section-hint">系统会按阈值自动判定异常并生成风险预警，通常无需手动勾选异常。</p>',
+    ),
+    (
+        "monitoring/plan section-hint",
+        '\n              <p className="section-hint">指标打卡计划由医院端维护。患者端只按计划录入，系统显示下一次打卡时间。</p>',
+    ),
+    (
+        "medication/list section-hint",
+        '\n                <p className="section-hint">先查看患者已有用药计划；新增或修改时再展开表单。</p>',
+    ),
+    (
+        "medication/new-plan section-hint",
+        '\n                <p className="section-hint">用药计划应由医生/护士或 HIS/药房处方接口维护；患者小程序只负责查看和打卡。</p>',
+    ),
+    (
+        "care/follow-up section-hint",
+        '\n                <p className="section-hint">普通待办任务在患者详情页内闭环；电话随访进入独立 tab，到院提醒进入“到院提醒”tab，结案进入右侧面板。</p>',
+    ),
+    (
+        "follow-up/sub-header section-hint",
+        '\n              <p className="section-hint">默认展示历史沟通记录，按记录创建时间倒序加载。需要记录新沟通时，再点击右侧按钮展开表单。</p>',
+    ),
+    (
+        "handling-history section-hint (legacy)",
+        '\n              <p className="section-hint">聚合电话随访、任务状态变更和风险处置结果。医护处理任务时可在右侧面板操作，完整病历和趋势仍保留在左侧患者档案。</p>',
+    ),
+    (
+        "timeline/全流程 section-hint",
+        '\n            <p className="section-hint">将全流程记录拆分为记录明细、指标趋势和处置闭环，避免所有信息直接堆在同一屏。</p>',
+    ),
+    (
+        "timeline/closed-loop section-hint",
+        '\n              <p className="section-hint">将相关的预警、任务、处置和随访结果合并为完整流程；该区块只在“处置闭环”二级页签下展示。</p>',
+    ),
+    (
+        "vitals/近期健康指标 muted small",
+        '\n                  <p className="muted small">院内录入、患者小程序和 LIS 同步的指标统一进入这里。</p>',
+    ),
+    (
+        "vital-monitoring/打卡计划 muted small",
+        '\n                  <p className="muted small">这些计划会同步到患者小程序，用于提醒和漏测判断。</p>',
+    ),
+    (
+        "medication/打卡同步 muted small",
+        '\n                  <p className="muted small">这些计划会同步到患者微信小程序，患者只能按计划打卡或反馈漏服。</p>',
+    ),
+    (
+        "tasks/dead 'care' tab muted small",
+        '\n                  <p className="muted small">电话随访记录在“电话随访”tab 内维护；任务结案在右侧处置面板内完成。</p>',
+    ),
+    (
+        "alerts panel muted small",
+        '\n                  <p className="muted small">可以选中预警快速完成处置；如需电话沟通，请进入“电话随访”tab。</p>',
+    ),
+    (
+        "follow-up form muted small",
+        '\n                  <p className="muted small">该记录直接归入患者档案，不再绑定具体任务；任务结案仍在右侧处置面板完成。</p>',
+    ),
+    (
+        "follow-up history muted small (lazy loading)",
+        '\n                <p className="muted small">Lazy loading 分页加载；默认按记录创建时间从新到旧排序。</p>',
+    ),
+]
+
+
+NEXT_FOLLOW_UP_BANNER_PLACEHOLDER = (
+    "\n          {/* next-follow-up-banner-removed-v1: 下次随访时间 banner intentionally removed from patient detail page. */}\n"
+)
+
+NEXT_FOLLOW_UP_BANNER_BLOCK = """
+          {/* phone-follow-up-next-visit-patch:banner */}
+          {overwrittenNextFollowUpNotice && (
+            <div className="follow-up-next-visit-overwrite-notice" role="status">
+              <strong>下次随访时间已被覆盖：</strong>
+              原计划 {formatTime(overwrittenNextFollowUpNotice.previous)}
+              → 现在 {formatTime(overwrittenNextFollowUpNotice.next)}。
+              系统将基于新的时间生成电话随访提醒任务。
+              <button
+                type="button"
+                className="dismiss"
+                onClick={() => setOverwrittenNextFollowUpNotice(null)}
+              >
+                我知道了
+              </button>
+            </div>
+          )}
+          {(() => {
+            if (activeNextFollowUpLoading && !activeNextFollowUp) {
+              return (
+                <div className="follow-up-next-visit-banner is-empty" role="status">
+                  <div className="follow-up-next-visit-banner-main">
+                    <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                    <strong className="follow-up-next-visit-banner-time placeholder">加载中…</strong>
+                  </div>
+                </div>
+              );
+            }
+            if (!activeNextFollowUp) {
+              return (
+                <div className="follow-up-next-visit-banner is-empty" role="note">
+                  <div className="follow-up-next-visit-banner-main">
+                    <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                    <strong className="follow-up-next-visit-banner-time placeholder">尚未设置</strong>
+                    <span className="follow-up-next-visit-banner-hint">在新建电话沟通记录时填写「下次随访时间」即可启用。系统会在到期前 2 天自动生成「电话随访」提醒任务。</span>
+                  </div>
+                </div>
+              );
+            }
+            const nextMs = new Date(activeNextFollowUp.nextFollowUpTime).getTime();
+            const now = Date.now();
+            const isOverdue = Number.isFinite(nextMs) && nextMs < now;
+            const isImminent = Number.isFinite(nextMs) && !isOverdue && (nextMs - now) <= 2 * 24 * 60 * 60 * 1000;
+            const bannerClass = isOverdue
+              ? 'follow-up-next-visit-banner is-overdue'
+              : isImminent
+                ? 'follow-up-next-visit-banner is-imminent'
+                : 'follow-up-next-visit-banner';
+            return (
+              <div className={bannerClass} role="status">
+                <div className="follow-up-next-visit-banner-main">
+                  <span className="follow-up-next-visit-banner-label">下次随访时间</span>
+                  <strong className="follow-up-next-visit-banner-time">{formatTime(activeNextFollowUp.nextFollowUpTime)}</strong>
+                  <span className="follow-up-next-visit-banner-hint">
+                    {isOverdue
+                      ? '该时间已过期，请尽快与患者确认随访或重新安排时间。'
+                      : isImminent
+                        ? '距离下次随访不足 2 天，系统已自动生成「电话随访」提醒任务。'
+                        : '距离下次随访 ≥ 2 天，到期前 2 天系统会自动生成提醒任务。'}
+                  </span>
+                  {activeNextFollowUpTask && (
+                    <span className="follow-up-next-visit-banner-task-badge" title={activeNextFollowUpTask.id}>
+                      已生成任务：{activeNextFollowUpTask.title}（{activeNextFollowUpTask.status}）
+                    </span>
+                  )}
+                </div>
+                <div className="follow-up-next-visit-banner-actions">
+                  {editingNextFollowUp ? (
+                    <div className="follow-up-next-visit-banner-edit">
+                      <input
+                        type="datetime-local"
+                        value={nextFollowUpEditDraft}
+                        onChange={(event) => setNextFollowUpEditDraft(event.target.value)}
+                        disabled={savingNextFollowUp}
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={saveEditedNextFollowUp}
+                        disabled={savingNextFollowUp}
+                      >
+                        {savingNextFollowUp ? '保存中…' : '保存'}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={cancelEditNextFollowUp}
+                        disabled={savingNextFollowUp}
+                      >
+                        放弃
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={beginEditNextFollowUp}
+                        disabled={savingNextFollowUp || activeNextFollowUpLoading}
+                      >
+                        编辑时间
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={cancelActiveNextFollowUp}
+                        disabled={savingNextFollowUp || activeNextFollowUpLoading}
+                      >
+                        取消计划
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+"""
+
+
+def patch_patient_detail_page(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    # 1. Imports
+    text, added = ensure_import_line(
+        text,
+        import_line="import { PatientHandlingHistoryView } from '../components/PatientHandlingHistoryView';",
+        after_anchor="import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';",
+    )
+    if added:
+        edits.append(f"{path.name}: imported PatientHandlingHistoryView")
+
+    text, added = ensure_import_line(
+        text,
+        import_line="import '../handling-history-v2.css';",
+        after_anchor="import '../patient-detail-task-ux-polish.css';",
+    )
+    if added:
+        edits.append(f"{path.name}: imported handling-history-v2.css")
+
+    # 2. Restore 下次随访时间 banner
+    marker = "phone-follow-up-next-visit-patch:banner"
+    if marker not in text and NEXT_FOLLOW_UP_BANNER_PLACEHOLDER in text:
+        text = text.replace(
+            NEXT_FOLLOW_UP_BANNER_PLACEHOLDER,
+            NEXT_FOLLOW_UP_BANNER_BLOCK,
+            1,
+        )
+        edits.append(f"{path.name}: restored 下次随访时间 banner block")
+
+    # 3. Explanatory paragraph sweep
+    sweep_removed: list[str] = []
+    for label, needle in PATIENT_DETAIL_EXPLANATORY_BLOCKS:
+        if needle in text:
+            text = text.replace(needle, "", 1)
+            sweep_removed.append(label)
+    if sweep_removed:
+        edits.append(
+            f"{path.name}: removed {len(sweep_removed)} explanatory blocks"
+        )
+
+    # 4. Timeline TASK PENDING action simplification
+    old_pending_block = (
+        "                  {item.type === 'TASK' &&\n"
+        "                    item.data?.status === 'PENDING' && (\n"
+        "                      <div className=\"timeline-actions\">\n"
+        "                        <button className=\"timeline-action-button primary\" type=\"button\" onClick={() => item.data?.id && openFollowUpTab(item.data.id)}>\n"
+        "                          记录电话随访\n"
+        "                        </button>\n"
+        "                        <button className=\"timeline-action-button\" type=\"button\" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>\n"
+        "                          打开处置面板\n"
+        "                        </button>\n"
+        "                        {item.data?.relatedAlertId && (\n"
+        "                          <span className=\"timeline-action-hint\">关联风险已合并到该任务详情中</span>\n"
+        "                        )}\n"
+        "                        <span className=\"timeline-action-hint\">待办任务请在患者档案内闭环</span>\n"
+        "                      </div>\n"
+        "                    )}\n"
+    )
+    new_pending_block = (
+        "                  {item.type === 'TASK' &&\n"
+        "                    item.data?.status === 'PENDING' && (\n"
+        "                      <div className=\"timeline-actions\">\n"
+        "                        {/* timeline-task-actions-v3: 只保留单一处理入口 */}\n"
+        "                        <button className=\"timeline-action-button primary\" type=\"button\" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>\n"
+        "                          处理当前任务\n"
+        "                        </button>\n"
+        "                      </div>\n"
+        "                    )}\n"
+    )
+    if "timeline-task-actions-v3" not in text and old_pending_block in text:
+        text = text.replace(old_pending_block, new_pending_block, 1)
+        edits.append(f"{path.name}: simplified timeline TASK PENDING action buttons")
+
+    # 5. Replace handling-history workspace with new component
+    old_handling_history_section = (
+        "      {activeWorkspace === 'handling-history' && (\n"
+        "        <section className=\"panel patient-handling-history-panel collapsible-workspace-panel\">\n"
+        "          <div className=\"hospital-section-header\">\n"
+        "            <div>\n"
+        "              <span>最近处理历史</span>\n"
+        "              <h2>处置记录与任务闭环</h2>\n"
+        "            </div>\n"
+        "            {firstOpenTask?.data?.id && (\n"
+        "              <button className=\"button\" type=\"button\" onClick={() => openInlineTaskPanel(firstOpenTask.data.id, 'close')}>\n"
+        "                打开当前任务结案面板\n"
+        "              </button>\n"
+        "            )}\n"
+        "          </div>\n"
+        "\n"
+        "          {handlingHistoryTimeline.length === 0 ? (\n"
+        "            <div className=\"empty-state\">当前患者暂无处理历史。</div>\n"
+        "          ) : (\n"
+        "            <div className=\"handling-history-list\">\n"
+        "              {handlingHistoryTimeline.slice(0, 30).map((item, index) => (\n"
+        "                <article className=\"handling-history-card\" key={`${item.type}-${item.time}-${item.data?.id ?? index}`}>\n"
+        "                  <div className=\"handling-history-time\">\n"
+        "                    <strong>{timelineTypeLabelMap[item.type] ?? item.type}</strong>\n"
+        "                    <span>{formatTime(item.time)}</span>\n"
+        "                  </div>\n"
+        "                  <div>\n"
+        "                    <h3>{localizeBackendText(item.title)}</h3>\n"
+        "                    <p>{localizeBackendText(item.description)}</p>\n"
+        "                    <div className=\"handling-history-meta\">\n"
+        "                      {item.data?.status && <span>状态：{statusLabelMap[item.data.status] ?? item.data.status}</span>}\n"
+        "                      {item.data?.followUpType && <span>方式：{followUpTypeLabelMap[item.data.followUpType] ?? item.data.followUpType}</span>}\n"
+        "                      {item.data?.operatorId && <span>记录人：{item.data.operatorId}</span>}\n"
+        "                      {item.data?.handledBy && <span>处理人：{item.data.handledBy}</span>}\n"
+        "                    </div>\n"
+        "                  </div>\n"
+        "                </article>\n"
+        "              ))}\n"
+        "            </div>\n"
+        "          )}\n"
+        "        </section>\n"
+        "      )}\n"
+    )
+    new_handling_history_section = (
+        "      {activeWorkspace === 'handling-history' && (\n"
+        "        /* handling-history-v2: lazy-loaded task list + flow chart */\n"
+        "        <PatientHandlingHistoryView\n"
+        "          patientId={patientId ?? ''}\n"
+        "          patient={data.patient}\n"
+        "          formatTime={formatTime}\n"
+        "          localizeBackendText={localizeBackendText}\n"
+        "        />\n"
+        "      )}\n"
+    )
+    if "<PatientHandlingHistoryView" not in text and old_handling_history_section in text:
+        text = text.replace(old_handling_history_section, new_handling_history_section, 1)
+        edits.append(f"{path.name}: wired PatientHandlingHistoryView into handling-history workspace")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+# ---------------------------------------------------------------------------
+# NurseDashboardPage.tsx
+# ---------------------------------------------------------------------------
+
+NURSE_DASHBOARD_PARAGRAPHS = [
+    (
+        "workItems heading paragraph",
+        '\n                  <p>任务、预警、风险随访合并展示。所有任务回到患者详情页处理；电话随访在独立 tab 记录，到院与结案在右侧面板完成。</p>',
+    ),
+    (
+        "vitals heading paragraph",
+        '<p>指标异常作为风险来源线索；处理入口会落到患者详情页内的电话随访 tab 与处置面板。</p>',
+    ),
+    (
+        "patients heading paragraph",
+        '<p>当前护士负责患者清单。复杂筛选请进入“患者档案”的主索引页面。</p>',
+    ),
+    (
+        "completed heading paragraph",
+        '<p>显示最近完成任务，更多历史记录请在患者详情页时间线查看。</p>',
+    ),
+]
+
+
+def patch_nurse_dashboard_page(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    removed: list[str] = []
+    for label, needle in NURSE_DASHBOARD_PARAGRAPHS:
+        if needle in text:
+            text = text.replace(needle, "", 1)
+            removed.append(label)
+    if removed:
+        edits.append(f"{path.name}: removed {len(removed)} heading paragraph(s)")
+
+    action_hint_pattern = re.compile(
+        r"\s*<span className=\"work-item-action-hint\">\s*\{item\.itemType === 'RISK_FOLLOW_UP_TASK'[\s\S]*?\}\s*</span>",
+    )
+    new_text, n = action_hint_pattern.subn("", text, count=1)
+    if n > 0:
+        text = new_text
+        edits.append(f"{path.name}: removed per-item .work-item-action-hint explanatory span")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+# ---------------------------------------------------------------------------
+# PatientTaskSidePanel.tsx
+# ---------------------------------------------------------------------------
+
+def patch_task_side_panel(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    marker = "isActionableTask-orphan-fix-v1"
+    if marker in text:
+        return edits
+
+    old_block = (
+        "function isActionableTask(task: TimelineEvent, timeline: TimelineEvent[]) {\n"
+        "  if (!isOpenTask(task)) return false;\n"
+        "\n"
+        "  const relatedAlert = getRelatedAlertForTask(task, timeline);\n"
+        "  if (!relatedAlert) return true;\n"
+        "\n"
+        "  return !isClosedAlertStatus(relatedAlert.data?.status);\n"
+        "}"
+    )
+    new_block = (
+        "// " + marker + ": a PENDING/IN_PROGRESS task is always actionable, even\n"
+        "// if its related alert has already been resolved/dismissed. Hiding such\n"
+        "// tasks was the root cause of the \"sidebar 空 but 全部记录 still shows\n"
+        "// 待办任务\" inconsistency reported by clinical users.\n"
+        "function isActionableTask(task: TimelineEvent, _timeline: TimelineEvent[]) {\n"
+        "  return isOpenTask(task);\n"
+        "}"
+    )
+    if old_block in text:
+        text = text.replace(old_block, new_block, 1)
+        edits.append(f"{path.name}: dropped closed-alert filter from isActionableTask")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+# ---------------------------------------------------------------------------
+# follow-ups.service.ts (backend)
+# ---------------------------------------------------------------------------
+
+def patch_follow_ups_service(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    marker = "phone-follow-up-dedupe-v1"
+    if marker in text:
+        return edits
+
+    old_sync = (
+        "  async syncPhoneFollowUpScheduledTask(patientId: string) {\n"
+        "    return this.prisma.$transaction(async (tx) => {\n"
+        "      const active = await this.findActiveScheduledRecord(patientId, tx);\n"
+        "      const activeTime = active?.nextFollowUpTime ?? null;\n"
+        "      const existingTask = await this.findOpenPhoneFollowUpTask(patientId, tx);\n"
+        "\n"
+        "      if (!activeTime) {\n"
+        "        if (existingTask) {\n"
+        "          await this.cancelOpenPhoneFollowUpScheduledTasks(\n"
+        "            patientId,\n"
+        "            '当前没有有效的下次随访时间，原电话随访提醒任务被取消。',\n"
+        "            tx,\n"
+        "          );\n"
+        "        }\n"
+        "        return { task: null };\n"
+        "      }\n"
+        "\n"
+        "      // If existing task already targets the active time (within 1 minute), keep it.\n"
+        "      if (\n"
+        "        existingTask &&\n"
+        "        existingTask.dueAt &&\n"
+        "        Math.abs(existingTask.dueAt.getTime() - activeTime.getTime()) < 60_000\n"
+        "      ) {\n"
+        "        return { task: existingTask };\n"
+        "      }\n"
+        "\n"
+        "      if (existingTask) {\n"
+        "        await this.cancelOpenPhoneFollowUpScheduledTasks(\n"
+        "          patientId,\n"
+        "          '下次随访时间已更新，原电话随访提醒任务被取消，将根据最新时间重新生成。',\n"
+        "          tx,\n"
+        "        );\n"
+        "      }\n"
+        "\n"
+        "      const task = await this.createPhoneFollowUpTaskIfDue(patientId, activeTime, tx);\n"
+        "      return { task };\n"
+        "    });\n"
+        "  }"
+    )
+
+    new_sync = (
+        "  async syncPhoneFollowUpScheduledTask(patientId: string) {\n"
+        "    // " + marker + ": the previous version used findFirst() which silently\n"
+        "    // left a second duplicate '电话随访' task untouched when the first\n"
+        "    // matched activeTime. We now iterate over EVERY open scheduled task,\n"
+        "    // keep at most one matching active time, and cancel the rest.\n"
+        "    return this.prisma.$transaction(async (tx) => {\n"
+        "      const active = await this.findActiveScheduledRecord(patientId, tx);\n"
+        "      const activeTime = active?.nextFollowUpTime ?? null;\n"
+        "\n"
+        "      const existingTasks = await tx.task.findMany({\n"
+        "        where: {\n"
+        "          patientId,\n"
+        "          type: PHONE_FOLLOW_UP_TASK_TYPE,\n"
+        "          status: { in: OPEN_TASK_STATUSES },\n"
+        "        },\n"
+        "        orderBy: { createdAt: 'desc' },\n"
+        "      });\n"
+        "\n"
+        "      if (!activeTime) {\n"
+        "        if (existingTasks.length > 0) {\n"
+        "          await this.cancelOpenPhoneFollowUpScheduledTasks(\n"
+        "            patientId,\n"
+        "            '当前没有有效的下次随访时间，原电话随访提醒任务被取消。',\n"
+        "            tx,\n"
+        "          );\n"
+        "        }\n"
+        "        return { task: null };\n"
+        "      }\n"
+        "\n"
+        "      // Prefer the most recent task whose dueAt matches active time within 1 min.\n"
+        "      const matchingTask = existingTasks.find(\n"
+        "        (item) =>\n"
+        "          item.dueAt && Math.abs(item.dueAt.getTime() - activeTime.getTime()) < 60_000,\n"
+        "      );\n"
+        "\n"
+        "      if (matchingTask) {\n"
+        "        const duplicateIds = existingTasks\n"
+        "          .filter((item) => item.id !== matchingTask.id)\n"
+        "          .map((item) => item.id);\n"
+        "        if (duplicateIds.length > 0) {\n"
+        "          await tx.task.updateMany({\n"
+        "            where: { id: { in: duplicateIds } },\n"
+        "            data: { status: TaskStatus.CANCELED },\n"
+        "          });\n"
+        "          await Promise.all(\n"
+        "            duplicateIds.map((taskId) =>\n"
+        "              tx.taskProcessingEvent\n"
+        "                .create({\n"
+        "                  data: {\n"
+        "                    taskId,\n"
+        "                    patientId,\n"
+        "                    eventType: 'CANCEL_PROCESSING',\n"
+        "                    title: '重复的电话随访提醒任务被取消',\n"
+        "                    description: '同一患者存在多条电话随访提醒任务，系统保留最匹配下次随访时间的一条，其余自动取消。',\n"
+        "                  },\n"
+        "                })\n"
+        "                .catch(() => null),\n"
+        "            ),\n"
+        "          );\n"
+        "        }\n"
+        "        return { task: matchingTask };\n"
+        "      }\n"
+        "\n"
+        "      if (existingTasks.length > 0) {\n"
+        "        await this.cancelOpenPhoneFollowUpScheduledTasks(\n"
+        "          patientId,\n"
+        "          '下次随访时间已更新，原电话随访提醒任务被取消，将根据最新时间重新生成。',\n"
+        "          tx,\n"
+        "        );\n"
+        "      }\n"
+        "\n"
+        "      const task = await this.createPhoneFollowUpTaskIfDue(patientId, activeTime, tx);\n"
+        "      return { task };\n"
+        "    });\n"
+        "  }"
+    )
+    if old_sync in text:
+        text = text.replace(old_sync, new_sync, 1)
+        edits.append(f"{path.name}: syncPhoneFollowUpScheduledTask now deduplicates open tasks")
+
+    old_create_if_due = (
+        "  private async createPhoneFollowUpTaskIfDue(\n"
+        "    patientId: string,\n"
+        "    nextFollowUpTime: Date,\n"
+        "    client: DbClient = this.prisma,\n"
+        "  ) {\n"
+        "    const now = Date.now();\n"
+        "    const target = nextFollowUpTime.getTime();\n"
+        "    const timeUntil = target - now;\n"
+        "\n"
+        "    // Only generate when the appointment is reachable within the lead window AND not\n"
+        "    // far in the past (a stale 30-day-old \"nextFollowUpTime\" should not auto-generate\n"
+        "    // a new reminder task).\n"
+        "    if (timeUntil > REMINDER_LEAD_TIME_MS) return null;\n"
+        "    if (timeUntil < -REMINDER_LEAD_TIME_MS) return null;\n"
+        "\n"
+        "    const existing = await this.findOpenPhoneFollowUpTask(patientId, client);\n"
+        "    if (existing) return existing;\n"
+    )
+    new_create_if_due = (
+        "  private async createPhoneFollowUpTaskIfDue(\n"
+        "    patientId: string,\n"
+        "    nextFollowUpTime: Date,\n"
+        "    client: DbClient = this.prisma,\n"
+        "  ) {\n"
+        "    const now = Date.now();\n"
+        "    const target = nextFollowUpTime.getTime();\n"
+        "    const timeUntil = target - now;\n"
+        "\n"
+        "    // Only generate when the appointment is reachable within the lead window AND not\n"
+        "    // far in the past (a stale 30-day-old \"nextFollowUpTime\" should not auto-generate\n"
+        "    // a new reminder task).\n"
+        "    if (timeUntil > REMINDER_LEAD_TIME_MS) return null;\n"
+        "    if (timeUntil < -REMINDER_LEAD_TIME_MS) return null;\n"
+        "\n"
+        "    // " + marker + ": collapse stale duplicates left over from a previous\n"
+        "    // buggy build into a single open reminder task.\n"
+        "    const existingTasks = await client.task.findMany({\n"
+        "      where: {\n"
+        "        patientId,\n"
+        "        type: PHONE_FOLLOW_UP_TASK_TYPE,\n"
+        "        status: { in: OPEN_TASK_STATUSES },\n"
+        "      },\n"
+        "      orderBy: { createdAt: 'desc' },\n"
+        "    });\n"
+        "    if (existingTasks.length > 0) {\n"
+        "      const [keep, ...duplicates] = existingTasks;\n"
+        "      if (duplicates.length > 0) {\n"
+        "        await client.task.updateMany({\n"
+        "          where: { id: { in: duplicates.map((t) => t.id) } },\n"
+        "          data: { status: TaskStatus.CANCELED },\n"
+        "        });\n"
+        "      }\n"
+        "      return keep;\n"
+        "    }\n"
+    )
+    if old_create_if_due in text:
+        text = text.replace(old_create_if_due, new_create_if_due, 1)
+        edits.append(f"{path.name}: createPhoneFollowUpTaskIfDue now deduplicates open tasks")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+if __name__ == "__main__":
+    main()
 
 
 ### FILE: scripts/apply_phone_followup_next_visit_patch.py
@@ -54014,6 +56074,535 @@ if missing:
     print("Skipped missing files:")
     for item in missing:
         print(f"- {item}")
+
+
+### FILE: scripts/apply_trend_chart_unify_followup_and_prestart_patch.py
+#!/usr/bin/env python3
+"""Apply the trend-chart-unify / cancel-next-follow-up / task-flow-overlap /
+pre-start-task-selection patch.
+
+This script is idempotent: re-running it after a successful first run prints
+"No additional edits were needed".
+
+Run from the repo root (the directory that contains apps/, scripts/, etc.):
+
+    python3 scripts/apply_trend_chart_unify_followup_and_prestart_patch.py "$PWD"
+
+What this patch does:
+
+  1. PatientDetailPage.tsx
+     - Imports `TrendRangeFilterBar`, `filterVitalsByTrendRange`,
+       `describeTrendRange`, and `DEFAULT_TREND_RANGE` from VitalTrendChart.
+     - Imports the new `trend-chart-unified-v1.css`.
+     - Adds a single shared `vitalTrendRange` state.
+     - Renders <TrendRangeFilterBar /> above the metric-trend-stack and
+       threads the filtered vitals + rangeLabel into each chart.
+     - Removes the "下次随访时间" banner block (and its "已被覆盖" notice)
+       from the follow-up workspace tab.
+
+  2. PatientTaskSidePanel.tsx
+     - Adds a task selection list to the pre-start gate, so the nurse can
+       switch between待处理 tasks before clicking "开始处理".
+
+  3. patient-task-side-panel.css (no edit; the pre-start CSS lives in the
+     new trend-chart-unified-v1.css so we can keep this script's footprint
+     small.)
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# entrypoint
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd().resolve()
+    web_src = root / "apps" / "web" / "src"
+
+    required = [
+        web_src / "components" / "VitalTrendChart.tsx",
+        web_src / "components" / "PatientTaskSidePanel.tsx",
+        web_src / "pages" / "PatientDetailPage.tsx",
+        web_src / "trend-chart-unified-v1.css",
+    ]
+    missing = [str(p) for p in required if not p.exists()]
+    if missing:
+        raise SystemExit(
+            "Missing required file(s):\n  - "
+            + "\n  - ".join(missing)
+            + "\n\nRun this script from the repo root (the directory that\n"
+              "contains apps/, scripts/, etc.) — NOT from inside apps/api or\n"
+              "apps/web. Make sure the patch zip was rsynced first so that\n"
+              "the new VitalTrendChart.tsx and trend-chart-unified-v1.css\n"
+              "are already on disk."
+        )
+
+    edits: list[str] = []
+
+    edits += patch_patient_detail_page(web_src / "pages" / "PatientDetailPage.tsx")
+    edits += patch_patient_task_side_panel(web_src / "components" / "PatientTaskSidePanel.tsx")
+
+    print()
+    if edits:
+        print("Applied edits:")
+        for e in edits:
+            print(f"  - {e}")
+    else:
+        print("No additional edits were needed (idempotent re-run).")
+
+    print(
+        "\nFollow-up:\n"
+        "  1. Restart Vite dev server (npm --prefix apps/web run dev) so the\n"
+        "     new CSS file is picked up.\n"
+        "  2. Smoke check:\n"
+        "     - 患者详情页 -> 指标监测 Tab: 趋势图上方出现『时间范围』\n"
+        "       过滤条；切换『近 7 天』/『自定义』后所有趋势图同步更新；\n"
+        "       legend 中的色卡颜色与图内线条 / 阈值虚线一致；图上只剩\n"
+        "       『风险预警生成』的标注。\n"
+        "     - 患者详情页 -> 电话随访 Tab: 顶部不再有『下次随访时间』\n"
+        "       banner；新建电话沟通记录功能保持原状。\n"
+        "     - 任务流程图：长描述节点不再相互重叠。\n"
+        "     - 任务未开始时，右侧侧边栏只展示『任务选择』+『关联风险\n"
+        "       预警』+『开始处理按钮』。"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PatientDetailPage.tsx
+# ---------------------------------------------------------------------------
+
+def patch_patient_detail_page(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    # 1. import TrendRangeFilterBar / filterVitalsByTrendRange / describeTrendRange / DEFAULT_TREND_RANGE
+    text, added = upgrade_vital_trend_chart_import(text)
+    if added:
+        edits.append(f"{path.name}: extended VitalTrendChart import")
+
+    # 2. import the new trend-chart-unified-v1.css
+    text, added = ensure_css_import(
+        text,
+        css_module="../trend-chart-unified-v1.css",
+        after_anchor="import '../patient-detail-task-ux-polish.css';",
+    )
+    if added:
+        edits.append(f"{path.name}: imported trend-chart-unified-v1.css")
+
+    # 3. add shared `vitalTrendRange` state right after vitalEventMarkers useMemo
+    text, added = insert_vital_trend_range_state(text)
+    if added:
+        edits.append(f"{path.name}: added vitalTrendRange state (default 90 days)")
+
+    # 4. wrap the trend stack with the filter bar + filtered vitals
+    text, added = wrap_trend_stack_with_range_filter(text)
+    if added:
+        edits.append(f"{path.name}: wrapped trend stack with TrendRangeFilterBar + per-chart filtering")
+
+    # 5. remove the "下次随访时间" banner block (and the overwritten notice)
+    text, added = remove_next_follow_up_banner_block(text)
+    if added:
+        edits.append(f"{path.name}: removed 下次随访时间 banner + overwritten notice")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+def upgrade_vital_trend_chart_import(text: str) -> tuple[str, bool]:
+    marker = "trend-range-filter-import-v1"
+    if marker in text:
+        return text, False
+
+    pattern = re.compile(
+        r"import \{([^}]*)\} from '\.\./components/VitalTrendChart';"
+    )
+    m = pattern.search(text)
+    if not m:
+        return text, False
+
+    existing = [s.strip() for s in m.group(1).split(",") if s.strip()]
+    additions = [
+        "TrendRangeFilterBar",
+        "filterVitalsByTrendRange",
+        "describeTrendRange",
+        "DEFAULT_TREND_RANGE",
+    ]
+    for name in additions:
+        if name not in existing:
+            existing.append(name)
+
+    new_import = (
+        f"// {marker}\n"
+        f"import {{ {', '.join(existing)} }} from '../components/VitalTrendChart';"
+    )
+    return text[: m.start()] + new_import + text[m.end():], True
+
+
+def ensure_css_import(text: str, *, css_module: str, after_anchor: str) -> tuple[str, bool]:
+    new_import_line = f"import '{css_module}';"
+    if new_import_line in text:
+        return text, False
+    if after_anchor not in text:
+        return text, False
+    return text.replace(after_anchor, after_anchor + "\n" + new_import_line, 1), True
+
+
+def insert_vital_trend_range_state(text: str) -> tuple[str, bool]:
+    marker = "vital-trend-range-state-v1"
+    if marker in text:
+        return text, False
+
+    anchor = (
+        "  // 指标趋势图的事件标注\n"
+        "  const vitalEventMarkers = useMemo(() => {"
+    )
+    if anchor not in text:
+        return text, False
+
+    new_state_block = (
+        "  // " + marker + ": shared time-range filter for every trend chart on this page.\n"
+        "  const [vitalTrendRange, setVitalTrendRange] = useState(DEFAULT_TREND_RANGE);\n\n"
+        + anchor
+    )
+    return text.replace(anchor, new_state_block, 1), True
+
+
+def wrap_trend_stack_with_range_filter(text: str) -> tuple[str, bool]:
+    marker = "trend-range-filter-wrap-v1"
+    if marker in text:
+        return text, False
+
+    # The target block is the IIFE that builds systolic/diastolic/glucose/...
+    # vital arrays and returns a <div className="metric-trend-stack">.
+    # Replace its first lines (the `const systolicVitals = ...` block) so
+    # every series is filtered through `filterVitalsByTrendRange`, and inject
+    # the <TrendRangeFilterBar /> + range label rendering above the stack.
+    old_block = (
+        "              ) : (() => {\n"
+        "                const systolicVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'SYSTOLIC_BP');\n"
+        "                const diastolicVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'DIASTOLIC_BP');\n"
+        "                const glucoseVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'BLOOD_GLUCOSE');\n"
+        "                const weightVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'WEIGHT');\n"
+        "                const heartRateVitals = vitalRecordTimeline.filter((item) => item.data?.type === 'HEART_RATE');\n"
+        "                const spo2Vitals = vitalRecordTimeline.filter((item) => item.data?.type === 'SPO2');\n"
+        "                return (\n"
+        "                  <div className=\"metric-trend-stack\">\n"
+    )
+    if old_block not in text:
+        return text, False
+
+    new_block = (
+        "              ) : (() => {\n"
+        "                // " + marker + ": share one time-range across every trend chart on this tab.\n"
+        "                const rangeLabel = describeTrendRange(vitalTrendRange);\n"
+        "                const systolicVitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'SYSTOLIC_BP'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                const diastolicVitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'DIASTOLIC_BP'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                const glucoseVitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'BLOOD_GLUCOSE'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                const weightVitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'WEIGHT'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                const heartRateVitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'HEART_RATE'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                const spo2Vitals = filterVitalsByTrendRange(\n"
+        "                  vitalRecordTimeline.filter((item) => item.data?.type === 'SPO2'),\n"
+        "                  vitalTrendRange,\n"
+        "                );\n"
+        "                return (\n"
+        "                  <div className=\"metric-trend-stack\">\n"
+        "                    <TrendRangeFilterBar value={vitalTrendRange} onChange={setVitalTrendRange} />\n"
+    )
+    text = text.replace(old_block, new_block, 1)
+
+    # Now thread `rangeLabel` into each chart instance so the chart subtitle
+    # reflects the selected window. We add the prop right before
+    # `formatTime={formatTime}` on each chart in this block.
+    chart_props_targets = [
+        # blood pressure
+        (
+            "                      <BloodPressureTrendChart\n"
+            "                        systolicVitals={systolicVitals}\n"
+            "                        diastolicVitals={diastolicVitals}\n"
+            "                        unit=\"mmHg\"\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+            "                      <BloodPressureTrendChart\n"
+            "                        systolicVitals={systolicVitals}\n"
+            "                        diastolicVitals={diastolicVitals}\n"
+            "                        unit=\"mmHg\"\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        rangeLabel={rangeLabel}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+        ),
+        # glucose
+        (
+            "                      <VitalTrendChart\n"
+            "                        vitals={glucoseVitals}\n"
+            "                        vitalType=\"BLOOD_GLUCOSE\"\n"
+            "                        vitalTypeName=\"血糖\"\n"
+            "                        unit=\"mmol/L\"\n"
+            "                        thresholdHigh={10}\n"
+            "                        thresholdLow={3.9}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+            "                      <VitalTrendChart\n"
+            "                        vitals={glucoseVitals}\n"
+            "                        vitalType=\"BLOOD_GLUCOSE\"\n"
+            "                        vitalTypeName=\"血糖\"\n"
+            "                        unit=\"mmol/L\"\n"
+            "                        thresholdHigh={10}\n"
+            "                        thresholdLow={3.9}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        rangeLabel={rangeLabel}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+        ),
+        # weight
+        (
+            "                      <VitalTrendChart\n"
+            "                        vitals={weightVitals}\n"
+            "                        vitalType=\"WEIGHT\"\n"
+            "                        vitalTypeName=\"体重\"\n"
+            "                        unit=\"kg\"\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+            "                      <VitalTrendChart\n"
+            "                        vitals={weightVitals}\n"
+            "                        vitalType=\"WEIGHT\"\n"
+            "                        vitalTypeName=\"体重\"\n"
+            "                        unit=\"kg\"\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        rangeLabel={rangeLabel}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+        ),
+        # heart rate
+        (
+            "                      <VitalTrendChart\n"
+            "                        vitals={heartRateVitals}\n"
+            "                        vitalType=\"HEART_RATE\"\n"
+            "                        vitalTypeName=\"心率\"\n"
+            "                        unit=\"bpm\"\n"
+            "                        thresholdHigh={120}\n"
+            "                        thresholdLow={50}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+            "                      <VitalTrendChart\n"
+            "                        vitals={heartRateVitals}\n"
+            "                        vitalType=\"HEART_RATE\"\n"
+            "                        vitalTypeName=\"心率\"\n"
+            "                        unit=\"bpm\"\n"
+            "                        thresholdHigh={120}\n"
+            "                        thresholdLow={50}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        rangeLabel={rangeLabel}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+        ),
+        # spo2
+        (
+            "                      <VitalTrendChart\n"
+            "                        vitals={spo2Vitals}\n"
+            "                        vitalType=\"SPO2\"\n"
+            "                        vitalTypeName=\"血氧\"\n"
+            "                        unit=\"%\"\n"
+            "                        thresholdLow={95}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+            "                      <VitalTrendChart\n"
+            "                        vitals={spo2Vitals}\n"
+            "                        vitalType=\"SPO2\"\n"
+            "                        vitalTypeName=\"血氧\"\n"
+            "                        unit=\"%\"\n"
+            "                        thresholdLow={95}\n"
+            "                        eventMarkers={vitalEventMarkers}\n"
+            "                        rangeLabel={rangeLabel}\n"
+            "                        formatTime={formatTime}\n"
+            "                      />",
+        ),
+    ]
+    for old, new in chart_props_targets:
+        if old in text:
+            text = text.replace(old, new, 1)
+
+    return text, True
+
+
+def remove_next_follow_up_banner_block(text: str) -> tuple[str, bool]:
+    """Remove both the "下次随访时间" main banner IIFE and the "已被覆盖"
+    overwrite-notice that sits right above it. We anchor the deletion on the
+    unique `phone-follow-up-next-visit-patch:banner` marker comment and the
+    closing `})()}` of the IIFE."""
+    marker = "next-follow-up-banner-removed-v1"
+    if marker in text:
+        return text, False
+
+    # The overwrite-notice block + the IIFE block both live between the
+    # marker comment and the closing `})()}` that immediately precedes
+    # `<section className="visit-patient-detail-card"`.
+    pattern = re.compile(
+        r"\s*\{/\* phone-follow-up-next-visit-patch:banner \*/\}"
+        r"[\s\S]*?"
+        r"\}\)\(\)\}\n",
+        re.MULTILINE,
+    )
+    new_text, n = pattern.subn(
+        "\n          {/* " + marker + ": 下次随访时间 banner intentionally removed from patient detail page. */}\n",
+        text,
+        count=1,
+    )
+    if n == 0:
+        return text, False
+    return new_text, True
+
+
+# ---------------------------------------------------------------------------
+# PatientTaskSidePanel.tsx
+# ---------------------------------------------------------------------------
+
+def patch_patient_task_side_panel(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    edits: list[str] = []
+
+    text, added = add_prestart_task_list(text)
+    if added:
+        edits.append(f"{path.name}: added task selection list to pre-start gate")
+
+    path.write_text(text, encoding="utf-8")
+    return edits
+
+
+def add_prestart_task_list(text: str) -> tuple[str, bool]:
+    marker = "prestart-task-list-v1"
+    if marker in text:
+        return text, False
+
+    old_block = (
+        "  if (shouldShowPreStartOnly) {\n"
+        "    return (\n"
+        "      <aside className=\"patient-task-side-panel\" aria-label=\"患者任务处置面板\">\n"
+        "        {renderPanelHeader()}\n"
+        "        {renderPanelNotices()}\n"
+        "\n"
+        "        <section className=\"task-panel-section task-panel-prestart-gate\">\n"
+        "          {relatedAlert ? (\n"
+        "            renderRelatedAlertCard('prestart-related-alert')\n"
+        "          ) : (\n"
+        "            <div className=\"task-panel-current-task prestart-current-task\">\n"
+        "              <div className=\"task-panel-current-task-topline\">\n"
+        "                <span className=\"badge\">{taskTypeLabelMap[getTaskType(selectedTask)] ?? getTaskType(selectedTask)}</span>\n"
+        "                <em className={getStatusClass(selectedTaskStatus)}>{statusLabelMap[selectedTaskStatus] ?? selectedTaskStatus}</em>\n"
+        "              </div>\n"
+        "              <h3>{localizeBackendText(selectedTask.title)}</h3>\n"
+        "              <p>截止：{formatTime(getTaskDueAt(selectedTask))}</p>\n"
+        "            </div>\n"
+        "          )}\n"
+        "\n"
+        "          <button\n"
+        "            className=\"button task-panel-start-primary-button\"\n"
+        "            type=\"button\"\n"
+        "            onClick={startProcessing}\n"
+        "            disabled={submittingMode === 'START'}\n"
+        "          >\n"
+        "            {submittingMode === 'START' ? '正在开始处理...' : '开始处理'}\n"
+        "          </button>\n"
+        "        </section>\n"
+        "      </aside>\n"
+        "    );\n"
+        "  }\n"
+    )
+    if old_block not in text:
+        return text, False
+
+    new_block = (
+        "  if (shouldShowPreStartOnly) {\n"
+        "    // " + marker + ": before the task is started, show task selection + related risk alert + start button only.\n"
+        "    return (\n"
+        "      <aside className=\"patient-task-side-panel\" aria-label=\"患者任务处置面板\">\n"
+        "        {renderPanelHeader()}\n"
+        "        {renderPanelNotices()}\n"
+        "\n"
+        "        <section className=\"task-panel-section task-panel-queue-section task-panel-prestart-task-list\">\n"
+        "          <div className=\"task-panel-section-title task-panel-prestart-task-list-title\">\n"
+        "            <span>选择任务</span>\n"
+        "            <strong>{openTasks.length} 条待处理</strong>\n"
+        "          </div>\n"
+        "          <div className=\"task-panel-task-list\">\n"
+        "            {sortedTasks.map((task) => {\n"
+        "              const taskId = getTaskId(task);\n"
+        "              const selected = taskId === selectedTaskStableId;\n"
+        "              const status = getTaskStatus(task);\n"
+        "              return (\n"
+        "                <button\n"
+        "                  key={taskId || `${task.time}-${task.title}`}\n"
+        "                  type=\"button\"\n"
+        "                  className={selected ? 'task-panel-task-card active' : 'task-panel-task-card'}\n"
+        "                  onClick={() => onSelectTask(taskId, 'close')}\n"
+        "                >\n"
+        "                  <span>{taskTypeLabelMap[getTaskType(task)] ?? getTaskType(task)}</span>\n"
+        "                  <strong>{localizeBackendText(task.title)}</strong>\n"
+        "                  <small>截止：{formatTime(getTaskDueAt(task))}</small>\n"
+        "                  <em className={getStatusClass(status)}>{statusLabelMap[status] ?? status}</em>\n"
+        "                </button>\n"
+        "              );\n"
+        "            })}\n"
+        "          </div>\n"
+        "        </section>\n"
+        "\n"
+        "        <section className=\"task-panel-section task-panel-prestart-gate\">\n"
+        "          {relatedAlert ? (\n"
+        "            renderRelatedAlertCard('prestart-related-alert')\n"
+        "          ) : (\n"
+        "            <div className=\"task-panel-current-task prestart-current-task\">\n"
+        "              <div className=\"task-panel-current-task-topline\">\n"
+        "                <span className=\"badge\">{taskTypeLabelMap[getTaskType(selectedTask)] ?? getTaskType(selectedTask)}</span>\n"
+        "                <em className={getStatusClass(selectedTaskStatus)}>{statusLabelMap[selectedTaskStatus] ?? selectedTaskStatus}</em>\n"
+        "              </div>\n"
+        "              <h3>{localizeBackendText(selectedTask.title)}</h3>\n"
+        "              <p>截止：{formatTime(getTaskDueAt(selectedTask))}</p>\n"
+        "            </div>\n"
+        "          )}\n"
+        "\n"
+        "          <button\n"
+        "            className=\"button task-panel-start-primary-button\"\n"
+        "            type=\"button\"\n"
+        "            onClick={startProcessing}\n"
+        "            disabled={submittingMode === 'START'}\n"
+        "          >\n"
+        "            {submittingMode === 'START' ? '正在开始处理...' : '开始处理'}\n"
+        "          </button>\n"
+        "        </section>\n"
+        "      </aside>\n"
+        "    );\n"
+        "  }\n"
+    )
+
+    return text.replace(old_block, new_block, 1), True
+
+
+if __name__ == "__main__":
+    main()
 
 
 ### FILE: scripts/apply_visit_reminder_patient_detail_fix.py
