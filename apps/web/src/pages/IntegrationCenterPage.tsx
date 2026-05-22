@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { getRoleLabel, type CurrentUser } from './LoginPage';
+import { useFeedbackInferredBridge } from '../utils/feedbackMessage';
 
 type IntegrationSource = {
   id: string;
@@ -127,6 +128,9 @@ export function IntegrationCenterPage({ user }: { user: CurrentUser }) {
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+
+  // prominent-feedback-bridge-v1
+  useFeedbackInferredBridge(message);
   const [runningAction, setRunningAction] = useState('');
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, string>>({});
 
@@ -240,8 +244,6 @@ export function IntegrationCenterPage({ user }: { user: CurrentUser }) {
           </button>
         </div>
       </section>
-
-      {message && <div className="integration-message">{message}</div>}
       {!isAdmin && (
         <div className="integration-readonly-banner">
           管理者账号可只读查看接口来源、同步批次和异常日志；模拟同步和字段映射编辑仅管理员可执行。

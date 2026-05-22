@@ -12,11 +12,13 @@ type PatientSummary = {
   responsibleNurseId?: string | null;
 };
 
+const HOSPITAL_VISIT_TASK_TYPE = 'HOSPITAL_VISIT_FOLLOW_UP';
+
 type WorkItem = {
   id: string;
-  itemType: 'FOLLOW_UP_TASK' | 'RISK_FOLLOW_UP_TASK' | 'RISK_ALERT_ONLY';
-  sourceType: 'TASK' | 'RISK_ALERT';
-  taskId?: string;
+  itemType: 'FOLLOW_UP_TASK' | 'RISK_FOLLOW_UP_TASK' | 'HOSPITAL_VISIT_TASK';
+  sourceType: 'TASK';
+  taskId: string;
   alertId?: string;
   title: string;
   description?: string | null;
@@ -34,17 +36,14 @@ type WorkItem = {
 };
 
 const OPEN_TASK_STATUSES: TaskStatus[] = [TaskStatus.PENDING, TaskStatus.IN_PROGRESS];
-const OPEN_ALERT_STATUSES: AlertStatus[] = [AlertStatus.OPEN, AlertStatus.IN_PROGRESS];
-
-const riskPriority: Record<RiskLevel, number> = {
-  VERY_HIGH: 1,
-  HIGH: 2,
-  MEDIUM: 3,
-  LOW: 4,
-};
+const CLOSED_ALERT_STATUSES: AlertStatus[] = [AlertStatus.RESOLVED, AlertStatus.DISMISSED];
 
 function isOpenTaskStatus(status: TaskStatus) {
   return OPEN_TASK_STATUSES.includes(status);
+}
+
+function isClosedAlertStatus(status?: AlertStatus | null) {
+  return Boolean(status && CLOSED_ALERT_STATUSES.includes(status));
 }
 
 function taskPriority(task: { dueAt?: Date | null; relatedAlertId?: string | null }) {
@@ -64,14 +63,6 @@ function patientSummary(patient?: PatientSummary | null): PatientSummary | null 
   };
 }
 
-function getAlertDueAt(alert: { riskLevel: RiskLevel; createdAt: Date }) {
-  const dueAt = new Date(alert.createdAt);
-  if (alert.riskLevel === RiskLevel.VERY_HIGH) dueAt.setHours(dueAt.getHours() + 4);
-  else if (alert.riskLevel === RiskLevel.HIGH) dueAt.setHours(dueAt.getHours() + 24);
-  else dueAt.setHours(dueAt.getHours() + 72);
-  return dueAt;
-}
-
 @Injectable()
 export class WorkItemsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -85,24 +76,11 @@ export class WorkItemsService {
       ...(includeClosed ? {} : { status: { in: OPEN_TASK_STATUSES } }),
     };
 
-    const alertWhere: Prisma.RiskAlertWhereInput = {
-      ...(query.patientId ? { patientId: query.patientId } : {}),
-      ...(query.nurseId ? { patient: { responsibleNurseId: query.nurseId } } : {}),
-      ...(includeClosed ? {} : { status: { in: OPEN_ALERT_STATUSES } }),
-    };
-
-    const [tasks, alerts] = await Promise.all([
-      this.prisma.task.findMany({
-        where: taskWhere,
-        include: { patient: true },
-        orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
-      }),
-      this.prisma.riskAlert.findMany({
-        where: alertWhere,
-        include: { patient: true },
-        orderBy: [{ createdAt: 'desc' }],
-      }),
-    ]);
+    const tasks = await this.prisma.task.findMany({
+      where: taskWhere,
+      include: { patient: true },
+      orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
+    });
 
     const alertIds = Array.from(
       new Set(tasks.map((task) => task.relatedAlertId).filter(Boolean) as string[]),
@@ -116,72 +94,61 @@ export class WorkItemsService {
       : [];
 
     const alertById = new Map(relatedAlerts.map((alert) => [alert.id, alert]));
-    const activeTaskAlertIds = new Set(
-      tasks
-        .filter((task) => isOpenTaskStatus(task.status))
-        .map((task) => task.relatedAlertId)
-        .filter(Boolean) as string[],
-    );
 
-    const taskItems: WorkItem[] = tasks.map((task) => {
-      const relatedAlert = task.relatedAlertId ? alertById.get(task.relatedAlertId) : null;
-      const isRiskTask = Boolean(task.relatedAlertId);
-      const patient = patientSummary(task.patient);
+    const items: WorkItem[] = tasks
+      .filter((task) => {
+        if (includeClosed) return true;
+        if (!isOpenTaskStatus(task.status)) return false;
 
-      return {
-        id: `task:${task.id}`,
-        itemType: isRiskTask ? 'RISK_FOLLOW_UP_TASK' : 'FOLLOW_UP_TASK',
-        sourceType: 'TASK',
-        taskId: task.id,
-        alertId: task.relatedAlertId ?? undefined,
-        title: isRiskTask ? `风险随访任务：${task.title}` : task.title,
-        description: relatedAlert?.description ?? null,
-        status: task.status === TaskStatus.IN_PROGRESS ? TaskStatus.PENDING : task.status,
-        priority: taskPriority(task),
-        riskLevel: relatedAlert?.riskLevel,
-        dueAt: task.dueAt,
-        createdAt: task.createdAt,
-        patient,
-        task,
-        alert: relatedAlert,
-        triggerRule: relatedAlert?.triggerRule,
-        actionUrl: patient ? `/patients/${patient.id}/task-processing?taskId=${task.id}&mode=phone` : '/nurse-dashboard',
-        actionText: isRiskTask ? '进入任务处理页' : '进入任务处理页',
-      };
-    });
+        const relatedAlert = task.relatedAlertId ? alertById.get(task.relatedAlertId) : null;
+        return !relatedAlert || !isClosedAlertStatus(relatedAlert.status);
+      })
+      .map((task): WorkItem => {
+        const relatedAlert = task.relatedAlertId ? alertById.get(task.relatedAlertId) : null;
+        const isHospitalVisitTask = task.type === HOSPITAL_VISIT_TASK_TYPE;
+        const isRiskTask = Boolean(task.relatedAlertId);
+        const patient = patientSummary(task.patient);
 
-    const alertOnlyItems: WorkItem[] = alerts
-      .filter((alert) => !activeTaskAlertIds.has(alert.id))
-      .map((alert) => {
-        const patient = patientSummary(alert.patient);
-        const dueAt = getAlertDueAt(alert);
         return {
-          id: `alert:${alert.id}`,
-          itemType: 'RISK_ALERT_ONLY',
-          sourceType: 'RISK_ALERT',
-          alertId: alert.id,
-          title: `风险预警：${alert.title}`,
-          description: alert.description,
-          status: alert.status === AlertStatus.IN_PROGRESS ? AlertStatus.OPEN : alert.status,
-          priority: riskPriority[alert.riskLevel] ?? 5,
-          riskLevel: alert.riskLevel,
-          dueAt,
-          createdAt: alert.createdAt,
+          id: `task:${task.id}`,
+          itemType: isHospitalVisitTask
+            ? 'HOSPITAL_VISIT_TASK'
+            : isRiskTask
+              ? 'RISK_FOLLOW_UP_TASK'
+              : 'FOLLOW_UP_TASK',
+          sourceType: 'TASK',
+          taskId: task.id,
+          alertId: task.relatedAlertId ?? undefined,
+          title: isHospitalVisitTask
+            ? `到院提醒任务：${task.title}`
+            : isRiskTask
+              ? `风险随访任务：${task.title}`
+              : task.title,
+          description: relatedAlert?.description ?? null,
+          status: task.status === TaskStatus.IN_PROGRESS ? TaskStatus.PENDING : task.status,
+          priority: taskPriority(task),
+          riskLevel: relatedAlert?.riskLevel,
+          dueAt: task.dueAt,
+          createdAt: task.createdAt,
           patient,
-          alert,
-          triggerRule: alert.triggerRule,
-          actionUrl: patient ? `/patients/${patient.id}` : '/nurse-dashboard',
-          actionText: '生成随访任务并处理',
+          task,
+          alert: relatedAlert,
+          triggerRule: relatedAlert?.triggerRule,
+          actionUrl: patient
+            ? isHospitalVisitTask
+              ? `/patients/${patient.id}/task-processing?taskId=${task.id}`
+              : `/patients/${patient.id}/task-processing?taskId=${task.id}&mode=phone`
+            : '/nurse-dashboard',
+          actionText: isHospitalVisitTask ? '处理到院提醒' : '进入任务处理页',
         };
+      })
+      .sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        const aDue = a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        const bDue = b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        if (aDue !== bDue) return aDue - bDue;
+        return b.createdAt.getTime() - a.createdAt.getTime();
       });
-
-    const items = [...taskItems, ...alertOnlyItems].sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority - b.priority;
-      const aDue = a.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      const bDue = b.dueAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      if (aDue !== bDue) return aDue - bDue;
-      return b.createdAt.getTime() - a.createdAt.getTime();
-    });
 
     return {
       summary: {
@@ -189,11 +156,15 @@ export class WorkItemsService {
           (item) => !['DONE', 'CANCELED', 'RESOLVED', 'DISMISSED'].includes(item.status),
         ).length,
         regularTaskCount: items.filter((item) => item.itemType === 'FOLLOW_UP_TASK').length,
-        riskTaskCount: items.filter((item) => item.itemType === 'RISK_FOLLOW_UP_TASK').length,
-        alertOnlyCount: items.filter((item) => item.itemType === 'RISK_ALERT_ONLY').length,
+        riskTaskCount: items.filter(
+          (item) => item.itemType === 'RISK_FOLLOW_UP_TASK' || item.itemType === 'HOSPITAL_VISIT_TASK',
+        ).length,
+        alertOnlyCount: 0,
         overdueCount: items.filter((item) => item.dueAt && item.dueAt.getTime() < Date.now()).length,
       },
       items,
     };
   }
 }
+
+

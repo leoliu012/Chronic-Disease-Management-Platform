@@ -1,0 +1,158 @@
+/* Active scheduled "下次随访时间" banner on the phone follow-up tab.
+ *
+ * The banner sits at the top of the follow-up workspace and shows the
+ * currently active scheduled next-follow-up time, with inline edit/cancel
+ * controls. When the scheduled time enters the 2-day lead window, the
+ * backend automatically generates a "电话随访" task; that task is shown
+ * here as a small badge so the nurse knows the reminder is live.
+ */
+
+.follow-up-next-visit-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  margin: 0 0 12px;
+  border: 1px solid #bfdbfe;
+  border-left: 5px solid #2563eb;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f5f9ff 0%, #ffffff 100%);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.08);
+}
+
+.follow-up-next-visit-banner.is-empty {
+  border-left-color: #94a3b8;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  box-shadow: none;
+}
+
+.follow-up-next-visit-banner.is-overdue {
+  border-left-color: #dc2626;
+  background: linear-gradient(180deg, #fff5f5 0%, #ffffff 100%);
+}
+
+.follow-up-next-visit-banner.is-imminent {
+  border-left-color: #d97706;
+  background: linear-gradient(180deg, #fff8eb 0%, #ffffff 100%);
+}
+
+.follow-up-next-visit-banner-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  flex: 1 1 320px;
+}
+
+.follow-up-next-visit-banner-label {
+  font-size: 12px;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+
+.follow-up-next-visit-banner-time {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.follow-up-next-visit-banner-time.placeholder {
+  color: #94a3b8;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.follow-up-next-visit-banner-hint {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.follow-up-next-visit-banner-task-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  margin-top: 4px;
+  align-self: flex-start;
+  border-radius: 999px;
+  background: #ecfeff;
+  border: 1px solid #67e8f9;
+  color: #0e7490;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.follow-up-next-visit-banner-task-badge::before {
+  content: '•';
+  font-size: 14px;
+  line-height: 1;
+}
+
+.follow-up-next-visit-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.follow-up-next-visit-banner-actions .secondary-button,
+.follow-up-next-visit-banner-actions .button,
+.follow-up-next-visit-banner-actions button.subtle {
+  font-size: 13px;
+  padding: 6px 14px;
+  height: auto;
+}
+
+.follow-up-next-visit-banner-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.follow-up-next-visit-banner-edit input[type='datetime-local'] {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.follow-up-next-visit-overwrite-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid #fde68a;
+  border-left: 5px solid #d97706;
+  border-radius: 10px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.follow-up-next-visit-overwrite-notice strong {
+  color: #b45309;
+}
+
+.follow-up-next-visit-overwrite-notice button.dismiss {
+  margin-left: 8px;
+  border: none;
+  background: transparent;
+  color: #b45309;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .follow-up-next-visit-banner {
+    padding: 12px;
+  }
+  .follow-up-next-visit-banner-time {
+    font-size: 18px;
+  }
+}

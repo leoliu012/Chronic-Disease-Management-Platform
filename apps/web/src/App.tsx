@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import { OverviewPage } from './pages/OverviewPage';
 import { PatientsPage } from './pages/PatientsPage';
@@ -18,6 +18,8 @@ import {
   type UserRole,
 } from './pages/LoginPage';
 import { AUTH_TOKEN_STORAGE_KEY, AUTH_USER_STORAGE_KEY } from './api/client';
+import { manualLogout, SESSION_EXPIRED_EVENT } from './api/auth-session';
+import { OperationToastHost } from './components/OperationToastHost';
 
 type NavItem = {
   to: string;
@@ -291,9 +293,31 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
 function AppContent() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStoredUser());
 
+  // Bridge from the axios layer to React state.
+  //
+  // The axios 401 interceptor in `api/client.ts` calls
+  // `clearSession()` (in `api/auth-session.ts`), which dispatches
+  // this window event. We translate it into a React state update so
+  // the existing `if (!currentUser)` branch below kicks in and renders
+  // the login routes. The matching `<Route path="*" element={<Navigate
+  // to="/login" replace />} />` then updates the URL without a full
+  // page reload, preserving in-memory state in unrelated components.
+  useEffect(() => {
+    function handle() {
+      setCurrentUser(null);
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handle);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handle);
+    };
+  }, []);
+
   function logout() {
-    localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-    localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+    // `manualLogout` clears localStorage + dispatches SESSION_EXPIRED.
+    // The listener above will set currentUser to null. Calling
+    // setCurrentUser(null) directly here too is harmless and keeps the
+    // logout button feeling synchronous.
+    manualLogout();
     setCurrentUser(null);
   }
 
@@ -313,8 +337,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <AppContent />
+      <OperationToastHost />
     </BrowserRouter>
   );
 }
-
-

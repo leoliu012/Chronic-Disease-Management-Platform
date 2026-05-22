@@ -1,7 +1,7 @@
 const typeLabels = {
   BLOOD_PRESSURE: '血压（收缩压/舒张压）',
-  SYSTOLIC_BP: '收缩压',
-  DIASTOLIC_BP: '舒张压',
+  SYSTOLIC_BP: '血压（收缩压）',
+  DIASTOLIC_BP: '血压（舒张压）',
   BLOOD_GLUCOSE: '血糖',
   WEIGHT: '体重',
   HEART_RATE: '心率',
@@ -57,3 +57,5 @@ module.exports = {
   formatDateTime,
   statusClass
 };
+
+

@@ -5,6 +5,8 @@ import { CreateRiskAlertDto } from './dto/create-risk-alert.dto';
 import { HandleRiskAlertDto } from './dto/handle-risk-alert.dto';
 import { QueryRiskAlertsDto } from './dto/query-risk-alerts.dto';
 
+const HOSPITAL_VISIT_TASK_TYPE = 'HOSPITAL_VISIT_FOLLOW_UP';
+
 @Injectable()
 export class RiskAlertsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -129,6 +131,7 @@ export class RiskAlertsService {
         await tx.task.updateMany({
           where: {
             relatedAlertId: id,
+            type: { not: HOSPITAL_VISIT_TASK_TYPE },
             status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
           },
           data: {
@@ -159,6 +162,7 @@ export class RiskAlertsService {
         await tx.task.updateMany({
           where: {
             relatedAlertId: id,
+            type: { not: HOSPITAL_VISIT_TASK_TYPE },
             status: { in: [TaskStatus.PENDING, TaskStatus.IN_PROGRESS] },
           },
           data: {
@@ -171,6 +175,8 @@ export class RiskAlertsService {
     });
   }
 }
+
+
 
 
 

@@ -774,3 +774,63 @@
     min-width: 0;
   }
 }
+
+
+
+/* Patch: patient master index and intake share one visible master-index workspace shell. */
+.patient-master-index-shell {
+  padding: 18px 20px !important;
+}
+
+.patient-master-index-shell .patient-master-workspace-tabs {
+  margin-top: 12px;
+}
+
+.patient-index-section-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+}
+
+.hospital-reminder-highlight-row td {
+  background: #fff7ed !important;
+  box-shadow: inset 3px 0 0 #ea580c !important;
+}
+
+@media (max-width: 760px) {
+  .patient-index-section-actions,
+  .hospital-visit-workbench-banner,
+  .patient-hospital-visit-banner,
+  .hospital-reminder-banner-page {
+    align-items: flex-start !important;
+    flex-direction: column !important;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

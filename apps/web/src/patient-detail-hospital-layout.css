@@ -286,3 +286,120 @@
     grid-template-columns: 1fr;
   }
 }
+
+
+
+.timeline-subsection-panel {
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+.timeline-subsection-header {
+  margin-bottom: 14px;
+}
+
+.timeline-subsection-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.timeline-subsection-tab {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title count"
+    "desc count";
+  gap: 4px 10px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.timeline-subsection-tab:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.09);
+  transform: translateY(-1px);
+}
+
+.timeline-subsection-tab.active {
+  border-color: #2563eb;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08), 0 10px 22px rgba(37, 99, 235, 0.12);
+}
+
+.timeline-subsection-tab strong {
+  grid-area: title;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.timeline-subsection-tab small {
+  grid-area: desc;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.timeline-subsection-tab em {
+  grid-area: count;
+  min-width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.timeline-subsection-tab.active em {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.timeline-closed-loop-subsection {
+  border-color: #dbe7f3;
+}
+
+@media (max-width: 1100px) {
+  .timeline-subsection-tabs {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

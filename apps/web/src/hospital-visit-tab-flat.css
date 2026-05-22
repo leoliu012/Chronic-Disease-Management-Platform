@@ -1,0 +1,420 @@
+/* Flat hospital-visit tab: avoids nested card-in-card layouts and opens one action form at a time. */
+.visit-flat-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.visit-flat-header {
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.visit-patient-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #eff6ff;
+  color: #334155;
+  font-size: 13px;
+}
+
+.visit-patient-strip strong {
+  color: #0f172a;
+}
+
+.visit-patient-strip a {
+  margin-left: 6px;
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.visit-flat-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.visit-create-form {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: linear-gradient(180deg, #f0fdfa, #fff 82px);
+}
+
+.visit-action-expanded-form {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  border-color: rgba(37, 99, 235, 0.22);
+  background: linear-gradient(180deg, #eff6ff, #fff 88px);
+}
+
+.visit-form-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visit-form-title-row strong {
+  display: block;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.visit-form-title-row p {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.visit-inline-risk-row,
+.visit-risk-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #475569;
+  font-size: 12px;
+}
+
+.visit-inline-risk-row strong,
+.visit-risk-line strong {
+  color: #0f172a;
+}
+
+.visit-inline-risk-row p,
+.visit-risk-line small {
+  flex: 1 1 260px;
+  margin: 0;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.visit-flat-list-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0 0;
+}
+
+.visit-flat-list-header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.visit-flat-list-header p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.visit-flat-list-header strong {
+  color: #0f766e;
+  font-size: 14px;
+}
+
+.visit-reminder-table {
+  display: grid;
+  gap: 10px;
+}
+
+.visit-reminder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.visit-reminder-title-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.visit-reminder-title-line strong {
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.visit-reminder-title-line em {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.visit-reminder-main > p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.visit-reminder-note {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.visit-action-card-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.visit-action-card {
+  min-height: 62px;
+  padding: 9px 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 13px;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.visit-action-card span,
+.visit-action-card small {
+  display: block;
+}
+
+.visit-action-card span {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.visit-action-card small {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.visit-action-card:hover:not(:disabled),
+.visit-action-card.active {
+  border-color: #0f766e;
+  background: #f0fdfa;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.08);
+}
+
+.visit-action-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  background: #f8fafc;
+}
+
+.visit-flat-empty {
+  margin-top: 0;
+}
+
+@media (max-width: 1180px) {
+  .visit-action-card-row {
+    grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .visit-flat-header,
+  .visit-form-title-row,
+  .visit-flat-list-header,
+  .visit-reminder-title-line {
+    display: block;
+  }
+
+  .visit-action-card-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* More detailed, patient-friendly information card in the hospital-visit tab. */
+.visit-patient-detail-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #eff6ff, #fff 120px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.visit-patient-detail-identity {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visit-patient-detail-identity span {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.visit-patient-detail-identity h3 {
+  margin: 3px 0 2px;
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.visit-patient-detail-identity p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.visit-active-count {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.visit-active-count.active {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.visit-patient-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.visit-patient-detail-item {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.visit-patient-detail-item span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.visit-patient-detail-item strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.visit-patient-detail-item small,
+.visit-patient-detail-item a {
+  display: inline-block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.visit-patient-detail-item a {
+  color: #0f766e;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.visit-patient-detail-item.primary-contact {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #f0fdfa;
+}
+
+.visit-patient-detail-item.address-item {
+  grid-column: span 2;
+}
+
+.visit-existing-reminder-lock {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 9px 11px;
+  border: 1px solid #fed7aa;
+  border-radius: 12px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 12px;
+}
+
+.visit-existing-reminder-lock strong {
+  color: #c2410c;
+}
+
+.disabled-button:disabled,
+.visit-flat-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+@media (max-width: 760px) {
+  .visit-patient-detail-identity {
+    display: block;
+  }
+
+  .visit-active-count {
+    display: inline-block;
+    margin-top: 8px;
+  }
+
+  .visit-patient-detail-item.address-item {
+    grid-column: auto;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

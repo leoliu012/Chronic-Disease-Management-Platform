@@ -1,4 +1,5 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import { buildAutoTaskProcessingEventPayload, rememberClinicalEntitySnapshotsFromResponse } from '../utils/taskProcessingContext';
 
 export const AUTH_TOKEN_STORAGE_KEY = 'chronic_care_access_token';
 export const AUTH_USER_STORAGE_KEY = 'chronic_care_current_user';
@@ -125,6 +126,8 @@ function inferOperationSuccessMessage(config?: InternalAxiosRequestConfig) {
   if (url.includes('/risk-alerts/') && url.includes('/resolve')) return '风险预警已标记为已处理。';
   if (url.includes('/risk-alerts/') && url.includes('/dismiss')) return '风险预警已忽略，并已记录操作。';
   if (url.includes('/risk-alerts/') && url.includes('/in-progress')) return '风险预警已进入处理中。';
+  if (url.includes('/tasks/') && url.includes('/complete-processing')) return '任务处理完成已提交，处理流程已保存。';
+  if (url.includes('/tasks/') && url.includes('/start-processing')) return '任务已进入处理中。';
   if (url.includes('/tasks/') && url.includes('/status')) return '待办任务状态已更新。';
   if (url.includes('/vital-records')) return '健康指标已保存，系统已完成异常规则检查。';
   if (url.includes('/disease-profiles')) return '慢病档案已保存。';
@@ -138,6 +141,100 @@ function inferOperationSuccessMessage(config?: InternalAxiosRequestConfig) {
   if (url.includes('/patients')) return '患者档案已保存。';
   if (method === 'DELETE') return '删除/停用操作已完成，并保留必要审计记录。';
   return '操作已成功提交。';
+}
+
+function normalizeRequestPath(url?: string) {
+  return String(url || '').split('?')[0] || '';
+}
+
+function getSnapshotPrefetchUrl(config: InternalAxiosRequestConfig) {
+  const method = String(config.method || 'GET').toUpperCase();
+  if (!['PATCH', 'PUT', 'DELETE'].includes(method)) return null;
+  if (config.headers?.['X-Suppress-Clinical-Snapshot-Prefetch']) return null;
+
+  const path = normalizeRequestPath(String(config.url || ''));
+  if (!path) return null;
+  if (
+    path.includes('/processing-events') ||
+    path.includes('/start-processing') ||
+    path.includes('/complete-processing') ||
+    path.includes('/status') ||
+    path.includes('/resolve') ||
+    path.includes('/dismiss') ||
+    path.includes('/in-progress') ||
+    path.includes('/arrived') ||
+    path.includes('/no-show') ||
+    path.includes('/refused') ||
+    path.includes('/remind-again')
+  ) {
+    return null;
+  }
+
+  const directResourcePattern = /(?:^|\/)(medications|vital-monitoring-plans|follow-ups|disease-profiles|questionnaire-results|vital-records)\/[^/]+$/;
+  const patientPattern = /(?:^|\/)patients\/[^/]+$/;
+  if (!directResourcePattern.test(path) && !patientPattern.test(path)) return null;
+
+  return String(config.url || '');
+}
+
+async function prefetchClinicalSnapshotForMutation(config: InternalAxiosRequestConfig, token?: string | null) {
+  const url = getSnapshotPrefetchUrl(config);
+  if (!url) return;
+
+  try {
+    const response = await axios.request({
+      baseURL: API_BASE_URL,
+      url,
+      method: 'GET',
+      timeout: 5000,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    rememberClinicalEntitySnapshotsFromResponse(url, response.data);
+  } catch (error) {
+    // Snapshot prefetch is a best-effort UX enhancement. The actual mutation should still proceed.
+    console.warn('Clinical snapshot prefetch failed', error);
+  }
+}
+
+function enqueueAutoTaskProcessingEvent(config?: InternalAxiosRequestConfig, responseData?: unknown) {
+  if (typeof window === 'undefined' || !config || !isMutation(config)) return;
+  if (config.headers?.['X-Suppress-Task-Processing-Event']) return;
+
+  const payload = buildAutoTaskProcessingEventPayload(
+    String(config.method || 'GET').toUpperCase(),
+    String(config.url || ''),
+    config.data,
+    responseData,
+  );
+
+  if (!payload) return;
+
+  window.setTimeout(() => {
+    api.post(
+      `/tasks/${payload.taskId}/processing-events`,
+      {
+        eventType: payload.eventType,
+        title: payload.title,
+        description: payload.description,
+        sourceType: payload.sourceType,
+        sourceId: payload.sourceId,
+      },
+      {
+        headers: {
+          'X-Suppress-Operation-Notice': '1',
+          'X-Suppress-Task-Processing-Event': '1',
+        },
+      },
+    )
+      .then(() => {
+        window.dispatchEvent(new CustomEvent('task-processing-events-updated', {
+          detail: { taskId: payload.taskId, patientId: payload.patientId },
+        }));
+      })
+      .catch((error) => {
+        console.warn('Auto task processing event association failed', error);
+      });
+  }, 0);
 }
 
 const inFlightMutations = new Map<string, Promise<unknown>>();
@@ -177,11 +274,13 @@ api.defaults.adapter = async (config) => {
   return requestPromise as Promise<any>;
 };
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
   const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  await prefetchClinicalSnapshotForMutation(config, token);
   return config;
 });
 
@@ -199,13 +298,17 @@ api.interceptors.response.use(
       });
     }
 
+    enqueueAutoTaskProcessingEvent(response.config, response.data);
+    rememberClinicalEntitySnapshotsFromResponse(String(response.config?.url || ''), response.data);
+
     return response;
   },
   (error) => {
     emitApiConnectionError(error);
 
     const axiosError = error as AxiosError;
-    if (axiosError.response?.status && axiosError.response.status !== 401) {
+    const suppressNotice = axiosError.config?.headers?.['X-Suppress-Operation-Notice'];
+    if (!suppressNotice && axiosError.response?.status && axiosError.response.status !== 401) {
       emitOperationNotice({
         type: 'error',
         title: '操作失败',
@@ -223,3 +326,7 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+
+
+

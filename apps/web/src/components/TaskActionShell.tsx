@@ -73,6 +73,12 @@ type Props = {
   /** 从 review 切到 edit。 */
   onContinueEdit?: () => void;
 
+  /** review 状态下除提交摘要外的自定义只读内容。 */
+  reviewContent?: ReactNode;
+
+  /** review 状态下进入编辑/新增的按钮文案。 */
+  continueEditText?: string;
+
   /**
    * 强制锁死本模块，不允许再提交（例如任务已结案后的 CLOSE 模块）。
    * 此时即便 view !== 'idle'，也只渲染锁定提示，不渲染 children/review。
@@ -136,6 +142,8 @@ export function TaskActionShell(props: Props) {
     onExpand,
     onCollapse,
     onContinueEdit,
+    reviewContent,
+    continueEditText = '继续补充记录',
     locked,
     lockedNotice,
     children,
@@ -206,7 +214,7 @@ export function TaskActionShell(props: Props) {
   }
 
   // 复审态：显示已提交摘要 + 继续补充按钮
-  if (view === 'review' && result) {
+  if (view === 'review' && (result || reviewContent)) {
     return (
       <section
         className="action-shell review-state panel"
@@ -216,11 +224,12 @@ export function TaskActionShell(props: Props) {
           <div>
             <span className="action-shell-kicker">{kicker}</span>
             <h2>{title}</h2>
-            <p className="section-hint">本次提交结果已锁定。如需更新请明确选择"继续补充记录"。</p>
+            <p className="section-hint">已有记录默认只读展示；需要改动时请先点击对应记录的编辑按钮。</p>
           </div>
           <StatusBadge label={statusLabel} tone={statusTone} />
         </header>
-        <ReviewBody result={result} />
+        {result && <ReviewBody result={result} />}
+        {reviewContent}
         <div className="action-shell-footer">
           {onContinueEdit && (
             <button
@@ -228,7 +237,7 @@ export function TaskActionShell(props: Props) {
               className="secondary-button compact-link-btn"
               onClick={onContinueEdit}
             >
-              继续补充记录
+              {continueEditText}
             </button>
           )}
           <button

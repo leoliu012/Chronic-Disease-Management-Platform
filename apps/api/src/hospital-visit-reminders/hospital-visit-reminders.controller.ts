@@ -78,6 +78,17 @@ export class HospitalVisitRemindersController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Patch('hospital-visit-reminders/:id/remind-again')
+  remindAgain(
+    @Param('id') id: string,
+    @Body() dto: UpdateHospitalVisitReminderDto,
+    @CurrentUser() user: RequestUser,
+    @Req() req: IpRequest,
+  ) {
+    return this.remindersService.remindAgain(id, dto, user, getIpAddress(req));
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   @Patch('hospital-visit-reminders/:id/revoke')
   revoke(
     @Param('id') id: string,
@@ -88,3 +99,5 @@ export class HospitalVisitRemindersController {
     return this.remindersService.revoke(id, dto, user, getIpAddress(req));
   }
 }
+
+

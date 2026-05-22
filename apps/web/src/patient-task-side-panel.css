@@ -1,0 +1,1429 @@
+/* Patient detail split workspace + in-chart/task processing panel */
+.patient-detail-split-shell {
+  display: grid;
+  align-items: stretch;
+  gap: 0;
+  min-height: 680px;
+  width: 100%;
+}
+
+.patient-detail-split-shell:not(.task-panel-open) {
+  display: block;
+}
+
+.patient-detail-record-pane {
+  min-width: 0;
+}
+
+.patient-detail-task-resizer {
+  width: 10px;
+  border: 0;
+  padding: 0;
+  margin: 0 10px;
+  border-radius: 999px;
+  cursor: col-resize;
+  background: linear-gradient(180deg, transparent, rgba(15, 118, 110, 0.28), transparent);
+  position: relative;
+}
+
+.patient-detail-task-resizer::after {
+  content: '';
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  width: 3px;
+  height: 64px;
+  transform: translate(-50%, -50%);
+  border-left: 1px solid rgba(15, 118, 110, 0.45);
+  border-right: 1px solid rgba(15, 118, 110, 0.45);
+}
+
+.patient-detail-task-resizer:hover,
+.patient-detail-task-resizer:focus-visible {
+  background: rgba(15, 118, 110, 0.14);
+  outline: 2px solid rgba(15, 118, 110, 0.22);
+}
+
+.patient-task-side-panel {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.92), rgba(255, 255, 255, 0.98) 180px),
+    #fff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
+}
+
+.patient-task-side-panel.empty {
+  padding: 18px;
+}
+
+.patient-task-panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid rgba(15, 118, 110, 0.14);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.patient-task-panel-header span,
+.task-panel-section-title span,
+.task-panel-mode-hint strong {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.patient-task-panel-header h2 {
+  margin: 3px 0 4px;
+  color: #0f172a;
+  font-size: 20px;
+}
+
+.patient-task-panel-header p,
+.task-panel-mode-hint p,
+.task-panel-current-task p,
+.task-panel-related-alert p,
+.task-panel-visit-reminder-summary p,
+.task-panel-visit-reminder-summary small {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.task-panel-section {
+  margin: 14px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.task-panel-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.task-panel-section-title strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.task-panel-task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-panel-task-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-panel-task-card:hover,
+.task-panel-task-card.active {
+  border-color: rgba(15, 118, 110, 0.38);
+  background: #f0fdfa;
+  box-shadow: 0 8px 20px rgba(15, 118, 110, 0.08);
+}
+
+.task-panel-task-card span,
+.task-panel-task-card small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-panel-task-card strong {
+  grid-column: 1 / -1;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.task-panel-task-card em {
+  justify-self: end;
+  font-style: normal;
+}
+
+.task-panel-current-task {
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.task-panel-current-task h3 {
+  margin: 8px 0 6px;
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.task-panel-related-alert,
+.task-panel-visit-reminder-summary {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+
+.task-panel-visit-reminder-summary {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.task-panel-related-alert strong,
+.task-panel-visit-reminder-summary strong {
+  display: block;
+  margin: 6px 0 4px;
+  color: #0f172a;
+}
+
+.task-panel-related-alert small {
+  display: block;
+  color: #9a3412;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-panel-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.task-panel-mode-tabs button {
+  border: 1px solid #dbe3ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #475569;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.task-panel-mode-tabs button.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+
+.task-panel-mode-body {
+  border-top: 1px dashed #dbe3ea;
+  padding-top: 12px;
+}
+
+.task-panel-mode-hint {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.task-panel-form {
+  display: grid;
+  gap: 12px;
+}
+
+.task-panel-form .form-row label,
+.task-panel-form label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.task-panel-form textarea,
+.task-panel-form input,
+.task-panel-form select {
+  width: 100%;
+}
+
+.task-panel-notice {
+  margin: 12px 14px 0;
+}
+
+.task-panel-existing-records {
+  margin-bottom: 10px;
+}
+
+.task-panel-existing-records .existing-action-record-card {
+  margin-top: 8px;
+}
+
+.task-panel-session-history ol {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-panel-session-history li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.task-panel-session-history li > span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.task-panel-session-history strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.task-panel-session-history p {
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.patient-handling-history-panel .handling-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.handling-history-card {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.handling-history-time {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.handling-history-card h3 {
+  margin: 0 0 6px;
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.handling-history-card p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.handling-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.handling-history-meta span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+}
+
+@media (max-width: 1180px) {
+  .patient-detail-split-shell.task-panel-open {
+    display: block;
+  }
+
+  .patient-detail-task-resizer {
+    display: none;
+  }
+
+  .patient-task-side-panel {
+    position: static;
+    max-height: none;
+    margin-top: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .patient-task-panel-header,
+  .task-panel-section-title,
+  .handling-history-card {
+    display: block;
+  }
+
+  .task-panel-task-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Patient detail phone follow-up tab */
+.task-panel-followup-routing-note {
+  margin-top: 8px !important;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #ecfeff;
+  color: #0e7490 !important;
+  font-size: 12px !important;
+}
+
+.follow-up-header-actions,
+.task-row-action-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.patient-follow-up-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.patient-follow-up-form-card,
+.patient-follow-up-history-card {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+}
+
+.follow-up-linked-task-card {
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: 14px;
+  background: #f0fdfa;
+}
+
+.follow-up-linked-task-card span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.follow-up-linked-task-card strong {
+  display: block;
+  margin: 4px 0;
+  color: #0f172a;
+}
+
+.follow-up-linked-task-card p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.follow-up-history-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.follow-up-history-card {
+  padding: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 15px;
+  background: #f8fafc;
+}
+
+.follow-up-history-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.follow-up-history-card header strong {
+  display: block;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.follow-up-history-card header span,
+.follow-up-history-card header em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.follow-up-history-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.follow-up-history-card dl div {
+  display: grid;
+  gap: 3px;
+}
+
+.follow-up-history-card dt {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.follow-up-history-card dd {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1180px) {
+  .patient-follow-up-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .follow-up-header-actions,
+  .task-row-action-stack {
+    justify-content: flex-start;
+  }
+}
+
+/* Task processing session: start -> automatic association -> flow -> completion signature. */
+.task-panel-current-task-topline,
+.task-processing-session-actions,
+.task-processing-flow-header,
+.task-flow-node-topline,
+.task-flow-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-panel-current-task-topline,
+.task-processing-flow-header,
+.task-flow-node-topline {
+  justify-content: space-between;
+}
+
+.task-processing-session-actions {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.start-processing-button {
+  min-height: 36px;
+  padding-inline: 14px;
+  box-shadow: 0 10px 20px rgba(15, 118, 110, 0.16);
+}
+
+.processing-session-active-chip,
+.processing-session-closed-chip {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.processing-session-active-chip {
+  border: 1px solid #bbf7d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.processing-session-active-chip strong {
+  font-size: 13px;
+}
+
+.processing-session-active-chip span,
+.processing-session-closed-chip {
+  color: #475569;
+}
+
+.processing-session-closed-chip {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.task-processing-flow-card {
+  display: grid;
+  gap: 10px;
+}
+
+.task-processing-flow-header span {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.task-processing-flow-header strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.task-processing-flow-header em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.task-processing-flow-rail {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-processing-flow-rail li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  padding: 0 0 12px;
+}
+
+.task-processing-flow-rail li::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 28px;
+  bottom: 0;
+  width: 2px;
+  background: #dbeafe;
+}
+
+.task-processing-flow-rail li:last-child {
+  padding-bottom: 0;
+}
+
+.task-processing-flow-rail li:last-child::before {
+  display: none;
+}
+
+.task-flow-node-index {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.task-flow-node-body {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.task-flow-node-topline strong {
+  color: #0f766e;
+  font-size: 12px;
+}
+
+.task-flow-node-topline span {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.task-flow-node-body h4 {
+  margin: 4px 0 3px;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.task-flow-node-body p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.task-flow-node-meta {
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+
+.task-flow-node-meta span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.task-flow-node-start-processing .task-flow-node-index,
+.task-flow-node-complete-processing .task-flow-node-index {
+  border-color: #99f6e4;
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.task-flow-node-visit-reminder-sent .task-flow-node-index,
+.task-flow-node-visit-remind-again .task-flow-node-index,
+.task-flow-node-visit-arrived .task-flow-node-index {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.task-flow-node-auto-patient-action .task-flow-node-index {
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.task-start-guidance-card {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.task-start-guidance-card strong,
+.task-complete-flow-reminder strong {
+  display: block;
+  color: #1e3a8a;
+  font-size: 14px;
+}
+
+.task-start-guidance-card p,
+.task-complete-flow-reminder p {
+  margin: 5px 0 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.task-complete-flow-reminder {
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+.notice-info {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+/* Structured task-flow detail rows for readable clinical change summaries. */
+.task-flow-node-description {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.task-flow-node-summary {
+  margin: 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.task-flow-node-summary strong {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.task-flow-node-detail-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.task-flow-node-detail-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.34fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.task-flow-node-detail-label {
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+.task-flow-node-detail-value {
+  min-width: 0;
+  margin: 0;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.task-flow-node-detail-value strong {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.task-flow-node-detail-raw {
+  grid-column: 1 / -1;
+  color: #334155;
+}
+
+.task-flow-node-change {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.task-flow-node-before,
+.task-flow-node-after {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 7px;
+}
+
+.task-flow-node-before {
+  background: #f1f5f9;
+  color: #64748b;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.task-flow-node-arrow {
+  color: #94a3b8;
+  font-weight: 800;
+}
+
+.task-flow-node-after {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+@media (max-width: 760px) {
+  .task-flow-node-detail-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .task-flow-node-detail-label {
+    white-space: normal;
+  }
+}
+
+
+
+/* Empty processing flow state: matches existing hospital-style notice cards. */
+.task-processing-flow-empty {
+  padding: 10px 12px;
+  border: 1px dashed #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+
+/* Patient detail hospital-visit tab: keep visit workflow separate from task processing panel. */
+.patient-hospital-visit-tab-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.patient-hospital-visit-header {
+  align-items: center;
+}
+
+.patient-hospital-visit-contact-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.patient-hospital-visit-contact-grid > div {
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.patient-hospital-visit-contact-grid span,
+.patient-hospital-visit-contact-grid small,
+.patient-hospital-visit-risk-card p,
+.patient-hospital-visit-reminder-card header p,
+.patient-hospital-visit-note {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.patient-hospital-visit-contact-grid strong,
+.patient-hospital-visit-risk-card strong,
+.patient-hospital-visit-reminder-card h3 {
+  display: block;
+  margin: 3px 0;
+  color: #0f172a;
+}
+
+.patient-hospital-visit-create-form,
+.patient-hospital-visit-list-card,
+.patient-hospital-visit-reminder-card {
+  padding: 15px;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.patient-hospital-visit-risk-card {
+  padding: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 14px;
+  background: #fff7ed;
+}
+
+.patient-hospital-visit-risk-card.compact {
+  margin-top: 10px;
+  padding: 10px 12px;
+}
+
+.patient-hospital-visit-reminder-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.patient-hospital-visit-reminder-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-hospital-visit-reminder-card header span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.patient-hospital-visit-reminder-card header em {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.patient-hospital-visit-action-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #dbe3ea;
+}
+
+.patient-hospital-visit-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-complete-locked-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.task-complete-locked-card strong {
+  color: #0f172a;
+}
+
+.task-complete-locked-card p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.task-complete-locked-card .button:disabled {
+  background: #e2e8f0;
+  color: #94a3b8;
+  border-color: #cbd5e1;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.task-complete-locked-card.completed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+@media (max-width: 1180px) {
+  .patient-hospital-visit-contact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .patient-hospital-visit-contact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-hospital-visit-reminder-card header {
+    display: block;
+  }
+}
+
+/* responsive-task-cards-patch-v1 */
+/*
+ * Responsive card grids for narrow split-pane layouts.
+ * The patient detail page can shrink the right task panel substantially when the
+ * split handle is dragged. Use auto-fit grids and container queries so action
+ * cards wrap into one or more rows instead of overflowing or disappearing.
+ */
+.patient-task-side-panel,
+.patient-hospital-visit-tab-panel,
+.visit-flat-panel {
+  container-type: inline-size;
+}
+
+.patient-task-side-panel *,
+.patient-hospital-visit-tab-panel *,
+.visit-flat-panel * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Task picker: adapt from multi-column cards to a single-column list in narrow panes. */
+.patient-task-side-panel .task-panel-task-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 188px), 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.patient-task-side-panel .task-panel-task-card {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  overflow: hidden;
+}
+
+.patient-task-side-panel .task-panel-task-card strong,
+.patient-task-side-panel .task-panel-task-card small,
+.patient-task-side-panel .task-panel-task-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.patient-task-side-panel .task-panel-task-card em {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+/* Action tabs inside the task panel should wrap, not squeeze off-screen. */
+.patient-task-side-panel .task-panel-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.patient-task-side-panel .task-panel-mode-tabs button {
+  width: 100%;
+  min-height: 36px;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: center;
+}
+
+/* Hospital-visit tab action cards: auto-wrap based on actual container width. */
+.visit-action-card-row,
+.patient-hospital-visit-tab-panel .visit-action-card-row,
+.visit-flat-panel .visit-action-card-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.visit-action-card,
+.patient-hospital-visit-tab-panel .visit-action-card,
+.visit-flat-panel .visit-action-card {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  overflow: hidden;
+}
+
+.visit-action-card span,
+.visit-action-card small,
+.patient-hospital-visit-tab-panel .visit-action-card span,
+.patient-hospital-visit-tab-panel .visit-action-card small,
+.visit-flat-panel .visit-action-card span,
+.visit-flat-panel .visit-action-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Expanded action forms should stay inside the tab/panel width. */
+.visit-action-expanded-form,
+.patient-hospital-visit-tab-panel .visit-action-expanded-form,
+.visit-flat-panel .visit-action-expanded-form {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.visit-action-expanded-form textarea,
+.visit-action-expanded-form input,
+.visit-action-expanded-form select,
+.patient-hospital-visit-tab-panel textarea,
+.patient-hospital-visit-tab-panel input,
+.patient-hospital-visit-tab-panel select,
+.patient-task-side-panel textarea,
+.patient-task-side-panel input,
+.patient-task-side-panel select {
+  max-width: 100%;
+}
+
+/* Compact rows should wrap cleanly when side panel is narrow. */
+.visit-reminder-row,
+.visit-reminder-main,
+.visit-reminder-title-line,
+.patient-hospital-visit-tab-panel .visit-reminder-row,
+.patient-hospital-visit-tab-panel .visit-reminder-main,
+.patient-hospital-visit-tab-panel .visit-reminder-title-line {
+  min-width: 0;
+}
+
+.visit-reminder-title-line,
+.patient-hospital-visit-tab-panel .visit-reminder-title-line {
+  flex-wrap: wrap;
+}
+
+@container (max-width: 520px) {
+  .patient-task-side-panel .task-panel-task-list,
+  .visit-action-card-row,
+  .patient-hospital-visit-tab-panel .visit-action-card-row,
+  .visit-flat-panel .visit-action-card-row {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-task-side-panel .task-panel-task-card {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-task-side-panel .task-panel-task-card em {
+    justify-self: start;
+  }
+
+  .patient-task-side-panel .task-panel-mode-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 360px) {
+  .patient-task-side-panel .task-panel-mode-tabs {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+/* Phone follow-up patient contact card: aligned with the hospital-visit tab detail card. */
+.patient-follow-up-ledger-panel .follow-up-patient-contact-card.visit-patient-detail-card {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #eff6ff, #fff 120px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-identity {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-identity span {
+  display: block;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-identity h3 {
+  margin: 3px 0 2px;
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-identity p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.patient-follow-up-ledger-panel .visit-active-count.follow-up-contact-badge {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item small,
+.patient-follow-up-ledger-panel .visit-patient-detail-item a {
+  display: inline-block;
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item a {
+  color: #0f766e;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item.primary-contact {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #f0fdfa;
+}
+
+.patient-follow-up-ledger-panel .visit-patient-detail-item.address-item {
+  grid-column: span 2;
+}
+
+@media (max-width: 760px) {
+  .patient-follow-up-ledger-panel .visit-patient-detail-identity {
+    display: block;
+  }
+
+  .patient-follow-up-ledger-panel .visit-active-count.follow-up-contact-badge {
+    display: inline-block;
+    margin-top: 8px;
+  }
+
+  .patient-follow-up-ledger-panel .visit-patient-detail-item.address-item {
+    grid-column: auto;
+  }
+}
+
+
+
+
+/* Prevent task-processing flow details from overflowing the sidebar. */
+.task-panel-processing-flow-section,
+.task-processing-flow-card,
+.task-processing-flow-rail,
+.task-processing-flow-rail li,
+.task-flow-node-body,
+.task-flow-node-description,
+.task-flow-node-detail-list,
+.task-flow-node-detail-row,
+.task-flow-node-detail-value,
+.task-flow-node-change {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-flow-node-body {
+  overflow: hidden;
+}
+
+.task-flow-node-topline {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.task-flow-node-topline strong,
+.task-flow-node-body h4,
+.task-flow-node-body p,
+.task-flow-node-summary,
+.task-flow-node-detail-value,
+.task-flow-node-detail-value strong,
+.task-flow-node-detail-raw,
+.task-flow-node-before,
+.task-flow-node-after {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.task-flow-node-topline span {
+  white-space: nowrap;
+}
+
+.task-flow-node-detail-list {
+  overflow: hidden;
+}
+
+
+/* Pre-start task gate: before a task is started, keep the sidebar focused on risk confirmation + start action only. */
+.task-panel-prestart-gate {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-color: rgba(15, 118, 110, 0.26);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 250, 0.98), rgba(255, 255, 255, 0.98));
+}
+
+.task-panel-prestart-gate .task-panel-related-alert,
+.prestart-current-task {
+  margin-top: 0;
+}
+
+.prestart-related-alert {
+  padding: 16px;
+  border-width: 1.5px;
+  box-shadow: 0 12px 28px rgba(194, 65, 12, 0.08);
+}
+
+.prestart-related-alert strong {
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.prestart-related-alert p,
+.prestart-related-alert small {
+  font-size: 13px;
+}
+
+.task-panel-start-primary-button {
+  width: 100%;
+  min-height: 54px;
+  justify-content: center;
+  border-radius: 16px;
+  font-size: 17px;
+  font-weight: 900;
+  box-shadow: 0 16px 34px rgba(15, 118, 110, 0.22);
+}
+
+.task-panel-start-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+  box-shadow: none;
+}

@@ -1,35 +1,37 @@
 /* Operation UX safety layer: duplicate-submit prevention feedback, strong success/error notices, hospital-style interaction states. */
 .operation-toast-host {
   position: fixed;
-  top: 76px;
-  right: 22px;
+  top: 50%;
+  left: 50%;
+  right: auto;
   z-index: 9999;
   display: flex;
-  width: min(420px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
+  transform: translate(-50%, -50%);
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   pointer-events: none;
 }
 
 .operation-toast {
   display: grid;
-  grid-template-columns: 34px 1fr 28px;
-  gap: 10px;
+  grid-template-columns: 42px 1fr 30px;
+  gap: 12px;
   align-items: start;
   border: 1px solid #cbd5e1;
-  border-left-width: 5px;
-  border-radius: 12px;
+  border-top-width: 5px;
+  border-radius: 18px;
   background: #fff;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
-  padding: 12px 12px 12px 10px;
+  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.26);
+  padding: 16px 16px 16px 14px;
   pointer-events: auto;
   animation: operation-toast-in 0.18s ease-out;
 }
 
-.operation-toast-success { border-left-color: #059669; }
-.operation-toast-warning { border-left-color: #d97706; }
-.operation-toast-error { border-left-color: #dc2626; }
-.operation-toast-info { border-left-color: #2563eb; }
+.operation-toast-success { border-top-color: #059669; }
+.operation-toast-warning { border-top-color: #d97706; }
+.operation-toast-error { border-top-color: #dc2626; }
+.operation-toast-info { border-top-color: #2563eb; }
 
 .operation-toast-icon {
   display: inline-flex;
@@ -81,8 +83,8 @@
 }
 
 @keyframes operation-toast-in {
-  from { opacity: 0; transform: translateY(-8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .status-message,
@@ -167,9 +169,171 @@ form[aria-busy='true']::after,
 
 @media (max-width: 760px) {
   .operation-toast-host {
-    top: 12px;
-    right: 12px;
+    top: 50%;
     left: 12px;
+    right: 12px;
     width: auto;
+    transform: translateY(-50%);
   }
+}
+
+
+
+/* Prominent modal-style feedback for task-side-panel operations. */
+.task-panel-feedback-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.34);
+  backdrop-filter: blur(4px);
+}
+
+.task-panel-feedback-dialog {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 14px;
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid #dbe3ea;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.26);
+}
+
+.task-panel-feedback-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  font-size: 24px;
+  font-weight: 900;
+}
+
+.task-panel-feedback-content h3 {
+  margin: 0 0 6px;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.task-panel-feedback-content p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.task-panel-feedback-content small {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.task-panel-feedback-confirm {
+  grid-column: 2;
+  justify-self: end;
+  min-width: 96px;
+}
+
+.task-panel-feedback-success { border-color: #99f6e4; }
+.task-panel-feedback-success .task-panel-feedback-icon { background: #ccfbf1; color: #0f766e; }
+.task-panel-feedback-error { border-color: #fecaca; }
+.task-panel-feedback-error .task-panel-feedback-icon { background: #fee2e2; color: #dc2626; }
+.task-panel-feedback-warning { border-color: #fed7aa; }
+.task-panel-feedback-warning .task-panel-feedback-icon { background: #fff7ed; color: #c2410c; }
+.task-panel-feedback-info { border-color: #bfdbfe; }
+.task-panel-feedback-info .task-panel-feedback-icon { background: #eff6ff; color: #1d4ed8; }
+
+@media (max-width: 520px) {
+  .task-panel-feedback-dialog {
+    grid-template-columns: 1fr;
+  }
+
+  .task-panel-feedback-confirm {
+    grid-column: 1;
+    justify-self: stretch;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}
+/* prominent-feedback-message-box-v1 */
+/*
+ * Visually upgrade the centered toast into a prominent message box, and
+ * make warnings/errors persistent until the user clicks close.
+ * The host (.operation-toast-host) is already centered horizontally and
+ * vertically by the rules above; these overrides only adjust appearance.
+ */
+.operation-toast {
+  border: 1.5px solid #cbd5e1;
+  border-top-width: 6px;
+  border-radius: 18px;
+  padding: 18px 18px 18px 16px;
+  box-shadow: 0 32px 80px rgba(15, 23, 42, 0.32), 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.operation-toast-body strong {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.operation-toast-body span {
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.operation-toast-body em {
+  display: block;
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12.5px;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.operation-toast-persistent {
+  box-shadow:
+    0 40px 90px rgba(220, 38, 38, 0.22),
+    0 0 0 1px rgba(220, 38, 38, 0.12);
+}
+
+.operation-toast-persistent.operation-toast-warning {
+  box-shadow:
+    0 40px 90px rgba(217, 119, 6, 0.18),
+    0 0 0 1px rgba(217, 119, 6, 0.12);
+}
+
+.operation-toast-close {
+  width: 28px;
+  height: 28px;
+  font-size: 22px;
 }

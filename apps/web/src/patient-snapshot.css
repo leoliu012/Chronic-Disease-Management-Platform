@@ -1,0 +1,334 @@
+/* 患者驾驶舱 Patient Snapshot - 中国医院风格 */
+
+/* 患者状态条 - 顶部信息栏 */
+.patient-status-bar {
+  border: 1px solid #d1dce6;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+.patient-status-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.patient-status-bar-row + .patient-status-bar-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e8eef5;
+}
+
+.patient-status-primary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.patient-status-primary strong {
+  font-size: 18px;
+  color: #1e40af;
+}
+
+.patient-status-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #475569;
+}
+
+.patient-status-item strong {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.patient-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.patient-status-badge.status-followup {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.patient-status-badge.status-inactive {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+/* 患者驾驶舱网格 - 4个关键指标卡片 */
+.patient-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.patient-snapshot-card {
+  position: relative;
+  border: 2px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 18px 16px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+  transition: all 0.2s ease;
+}
+
+.patient-snapshot-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+/* 卡片顶部标签 */
+.patient-snapshot-card-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.patient-snapshot-card-label::before {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: #94a3b8;
+}
+
+/* 卡片主要数值 */
+.patient-snapshot-card-value {
+  display: block;
+  margin-bottom: 8px;
+  color: #0f172a;
+  font-size: 32px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.patient-snapshot-card-value.value-normal {
+  color: #059669;
+}
+
+.patient-snapshot-card-value.value-warning {
+  color: #d97706;
+}
+
+.patient-snapshot-card-value.value-danger {
+  color: #dc2626;
+}
+
+/* 卡片描述文本 */
+.patient-snapshot-card-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.patient-snapshot-card-desc strong {
+  color: #334155;
+  font-weight: 700;
+}
+
+/* 卡片底部补充信息 */
+.patient-snapshot-card-footer {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f1f5f9;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* 特定卡片样式 */
+.patient-snapshot-card.card-risk {
+  border-color: #fecaca;
+  background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%);
+}
+
+.patient-snapshot-card.card-risk .patient-snapshot-card-label::before {
+  background: #dc2626;
+}
+
+.patient-snapshot-card.card-task {
+  border-color: #fed7aa;
+  background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);
+}
+
+.patient-snapshot-card.card-task .patient-snapshot-card-label::before {
+  background: #d97706;
+}
+
+.patient-snapshot-card.card-vital {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+}
+
+.patient-snapshot-card.card-vital .patient-snapshot-card-label::before {
+  background: #2563eb;
+}
+
+.patient-snapshot-card.card-medication {
+  border-color: #a7f3d0;
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+.patient-snapshot-card.card-medication .patient-snapshot-card-label::before {
+  background: #059669;
+}
+
+/* 空状态 */
+.patient-snapshot-card-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: #94a3b8;
+  font-size: 13px;
+  text-align: center;
+}
+
+.patient-snapshot-card-empty-icon {
+  margin-bottom: 8px;
+  font-size: 32px;
+  opacity: 0.3;
+}
+
+/* 响应式布局 */
+@media (max-width: 1200px) {
+  .patient-snapshot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .patient-snapshot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-status-bar-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
+/* 指标趋势小图标 */
+.snapshot-trend-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.snapshot-trend-indicator.trend-up {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.snapshot-trend-indicator.trend-down {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.snapshot-trend-indicator.trend-stable {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+/* 快捷操作按钮 */
+.patient-snapshot-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.patient-snapshot-action-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.patient-snapshot-action-btn:hover {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.patient-snapshot-action-btn:active {
+  transform: scale(0.98);
+}
+
+/* 时间戳 */
+.patient-snapshot-timestamp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.patient-snapshot-timestamp::before {
+  content: '🕐';
+  font-size: 14px;
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

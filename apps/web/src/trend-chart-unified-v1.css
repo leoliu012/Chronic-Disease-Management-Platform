@@ -1,0 +1,262 @@
+/*
+ * trend-chart-unified-v1
+ *
+ * Unifies trend chart presentation across the patient detail page:
+ *   1. Legend swatches use the exact color of the line / dashed threshold /
+ *      alert marker rendered in SVG, so the legend can never lie.
+ *   2. Adds a shared "时间范围" filter bar above the trend stack.
+ *   3. Adds pre-start gate styling for the task selection list shown before
+ *      a task is started (used by PatientTaskSidePanel).
+ *   4. Hardens task-flow node layout to prevent overlap of the timestamp,
+ *      title, and detail rows when descriptions are long.
+ */
+
+/* ---------- 1. Unified legend swatches ---------- */
+
+.vital-trend-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  row-gap: 6px;
+  max-width: 60%;
+  justify-content: flex-end;
+}
+
+.vital-trend-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+/*
+ * Solid line swatch for series colors (matches the SVG `.vital-trend-line`
+ * stroke-width / line-cap so the eye reads it as the same line).
+ */
+.vital-trend-legend-line {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+/*
+ * Dashed swatch for threshold / alert markers (matches the SVG `stroke-dasharray`).
+ */
+.vital-trend-legend-dash {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px dashed;
+}
+
+/* The legacy `.dot` swatches stay for backward-compat with the older charts,
+   but the canonical legend uses these line/dash classes. */
+
+.legend-color-value { background: #2563eb; }                 /* matches .vital-trend-line */
+.legend-color-systolic { background: #2563eb; }              /* matches .bp-systolic-line */
+.legend-color-diastolic { background: #7c3aed; }             /* matches .bp-diastolic-line */
+.legend-color-threshold { border-top-color: #dc2626; }       /* matches .threshold-high */
+.legend-color-diastolic-threshold { border-top-color: #7c3aed; } /* matches .threshold-diastolic-high */
+.legend-color-alert { border-top-color: #dc2626; }           /* matches marker-alert */
+
+/* ---------- 2. Shared time-range filter bar ---------- */
+
+.trend-range-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.trend-range-filter-label {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
+}
+
+.trend-range-filter-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trend-range-preset-btn {
+  appearance: none;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.trend-range-preset-btn:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.trend-range-preset-btn.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.18);
+}
+
+.trend-range-filter-custom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.trend-range-filter-custom label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.trend-range-filter-custom label > span {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.trend-range-filter-custom input[type='date'] {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .trend-range-filter-bar {
+    padding: 10px;
+  }
+
+  .trend-range-preset-btn {
+    padding: 4px 10px;
+  }
+}
+
+/* ---------- 3. Pre-start gate: include task selection list ---------- */
+
+.task-panel-prestart-task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-panel-prestart-task-list-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-panel-prestart-task-list-title > span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.task-panel-prestart-task-list-title > strong {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.task-panel-prestart-task-list .task-panel-task-card {
+  /* Reuse the existing task card visuals but tighten spacing when shown
+     in the prestart gate (no surrounding queue section). */
+  width: 100%;
+}
+
+/* ---------- 4. Task-flow node anti-overlap hardening ---------- */
+
+/*
+ * The task-flow-node-topline used to render the event-type label and timestamp
+ * on the same baseline; for long event-type labels (e.g. "建议到院 / 再次提醒")
+ * this caused the timestamp text to overlap with the label. We force a column
+ * fallback below a min-content threshold and keep the timestamp on its own row.
+ */
+.task-flow-node-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+  row-gap: 4px;
+}
+
+.task-flow-node-topline strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-flow-node-topline span {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* When the description includes a "before → after" change pair, force the
+   arrow + tokens to wrap as a single block instead of overlapping the label
+   column to its right. */
+.task-flow-node-detail-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.34fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.task-flow-node-change {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.task-flow-node-before,
+.task-flow-node-after {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Some descriptions include long ISO timestamps inside the "新值" cell;
+   keep them from pushing the layout wider than the card. */
+.task-flow-node-detail-value,
+.task-flow-node-detail-value strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Tablet / narrow-sidebar: stack label above value. */
+@media (max-width: 880px) {
+  .task-flow-node-detail-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .task-flow-node-detail-label {
+    white-space: normal;
+  }
+}

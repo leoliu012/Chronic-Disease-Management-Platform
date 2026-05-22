@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, AUTH_USER_STORAGE_KEY, getApiErrorMessage } from '../api/client';
 import type { CurrentUser } from './LoginPage';
+import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
 type DiseaseProfile = {
   diseaseType: string;
@@ -172,6 +173,9 @@ export function PatientsPage() {
   const [form, setForm] = useState<PatientForm>(emptyForm);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  // prominent-feedback-bridge-v1
+  useFeedbackMessageBridge(message, error);
 
   const currentUser = useMemo(() => {
     const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY);
@@ -459,64 +463,52 @@ export function PatientsPage() {
 
   return (
     <div className="patient-index-clean">
-      <div className="page-header clean-page-header">
-        <div>
-          <div className="page-kicker">患者主索引</div>
-          <h1>患者档案</h1>
-          <p className="page-subtitle">主索引、建档入口和 HIS 预留导入分区管理，避免筛选、录入和导出挤在同一屏。</p>
-        </div>
-        <div className="header-action-row">
-          {canExportPatients && activeWorkspace === 'index' && (
-            <button className="secondary-btn" onClick={exportPatientsForHis} disabled={exporting}>
-              {exporting ? '导出中...' : '导出给 HIS'}
-            </button>
-          )}
-          {canEditPatients && (
-            <button
-              className={activeWorkspace === 'intake' ? 'primary-btn' : 'secondary-btn'}
-              onClick={() => {
-                setActiveWorkspace('intake');
-                setError('');
-                setMessage('');
-              }}
-            >
-              建档 / HIS 导入
-            </button>
-          )}
-        </div>
-      </div>
 
-      {message && <div className="status-message operation-inline-success" role="status">{message}</div>}
-      {error && <div className="status-error operation-inline-error" role="alert">{error}</div>}
+      <section className="panel patient-master-index-shell">
+        <div className="section-title-row patient-master-index-shell-heading">
+          <div>
+            <h2>患者主索引</h2>
+            <p className="muted">检索、筛选、进入档案；建档入口、扫码查询、HIS 草稿和手工建档统一放在本区，避免入口分散。</p>
+          </div>
+          <span className="type-badge">MASTER INDEX</span>
+        </div>
 
-      <section className="workspace-tabs-card">
-        <button
-          type="button"
-          className={activeWorkspace === 'index' ? 'workspace-tab active' : 'workspace-tab'}
-          onClick={() => setActiveWorkspace('index')}
-        >
-          <strong>患者主索引</strong>
-          <span>检索、筛选、进入档案</span>
-        </button>
-        <button
-          type="button"
-          className={activeWorkspace === 'intake' ? 'workspace-tab active' : 'workspace-tab'}
-          onClick={() => setActiveWorkspace('intake')}
-          disabled={!canEditPatients}
-        >
-          <strong>建档入口</strong>
-          <span>扫码、HIS 草稿、手工建档</span>
-        </button>
+        <section className="workspace-tabs-card patient-master-workspace-tabs" aria-label="患者主索引工作区">
+          <button
+            type="button"
+            className={activeWorkspace === 'index' ? 'workspace-tab active' : 'workspace-tab'}
+            onClick={() => setActiveWorkspace('index')}
+          >
+            <strong>患者主索引</strong>
+            <span>检索、筛选、进入档案</span>
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'intake' ? 'workspace-tab active' : 'workspace-tab'}
+            onClick={() => setActiveWorkspace('intake')}
+            disabled={!canEditPatients}
+          >
+            <strong>建档入口</strong>
+            <span>扫码、HIS 草稿、手工建档</span>
+          </button>
+        </section>
       </section>
 
       {activeWorkspace === 'index' && (
         <section className="panel patient-master-index-panel">
           <div className="section-title-row">
             <div>
-              <h2>患者主索引</h2>
+              <h2>检索、筛选、进入档案</h2>
               <p className="muted">共 {patients.length} 名患者，当前显示 {filteredPatients.length} 名。列表默认脱敏，查看详情会写入审计日志。</p>
             </div>
-            <span className="type-badge">MASTER INDEX</span>
+            <div className="patient-index-section-actions">
+              <span className="type-badge">索引区</span>
+              {canExportPatients && (
+                <button className="secondary-btn compact-link-btn" onClick={exportPatientsForHis} disabled={exporting} type="button">
+                  {exporting ? '导出中...' : '导出给 HIS'}
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="index-filter-card">
@@ -645,20 +637,20 @@ export function PatientsPage() {
         <section className="panel patient-intake-panel">
           <div className="section-title-row">
             <div>
-              <h2>建档入口 / HIS 接口预留</h2>
-              <p className="muted">建档和导入独立放在这里，不与患者主索引混在一起。</p>
+              <h2>建档入口</h2>
+              <p className="muted">扫码、HIS 草稿、手工建档集中在同一个 section 内；保存后回到主索引进入患者档案。</p>
             </div>
             <button className="ghost-btn" type="button" onClick={() => setActiveWorkspace('index')}>
               返回主索引
             </button>
           </div>
 
-          <div className="security-chip">患者列表已默认脱敏；查看单个患者详情会写入审计日志。</div>
+          <div className="security-chip">建档入口已并入患者主索引工作区；患者列表默认脱敏，查看单个患者详情会写入审计日志。</div>
 
           <div className="intake-layout-grid">
             <section className="intake-card">
               <div className="intake-card-header">
-                <h3>扫码 / HIS 草稿</h3>
+                <h3>扫码、HIS 草稿、手工建档</h3>
                 <p>扫描枪通常会把条形码当作键盘输入并自动回车；此处按 Enter 自动查询 HIS 预留接口。</p>
               </div>
 
@@ -719,7 +711,7 @@ export function PatientsPage() {
               <div className="section-title-row compact">
                 <div>
                   <h3>新增患者建档</h3>
-                  <p className="muted">表单仅在建档工作区展开，避免影响患者主索引使用。</p>
+                  <p className="muted">表单仅在建档入口展开，避免影响主索引检索和筛选。</p>
                 </div>
                 <button className="ghost-btn" type="button" onClick={() => setShowCreateForm(false)}>
                   收起表单
@@ -793,5 +785,7 @@ export function PatientsPage() {
     </div>
   );
 }
+
+
 
 

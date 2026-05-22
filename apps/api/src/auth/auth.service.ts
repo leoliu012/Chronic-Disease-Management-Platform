@@ -2,7 +2,7 @@ import { Injectable, ServiceUnavailableException, UnauthorizedException } from '
 import { UserRole, type User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
-import { signToken, verifyPassword, verifyToken } from './auth.util';
+import { signToken, TokenExpiredError, InvalidTokenError, verifyPassword, verifyToken } from './auth.util';
 
 export type AuthenticatedUser = {
   id: string;
@@ -17,6 +17,23 @@ export class AuthService {
 
   private failIfDatabaseIsNotReady(error: unknown): never {
     const prismaError = error as { code?: string; meta?: { table?: string; modelName?: string } };
+
+    // Connection-level failures: server unreachable, timed out, lost, etc.
+    // These all mean "infra problem" rather than "client problem", and should
+    // surface as 503 with a clear hint instead of a 500 with a Prisma stack.
+    if (
+      prismaError?.code === 'P1001' ||
+      prismaError?.code === 'P1002' ||
+      prismaError?.code === 'P1008' ||
+      prismaError?.code === 'P1017'
+    ) {
+      throw new ServiceUnavailableException({
+        message:
+          '数据库连接失败，请确认 Postgres 是否在运行。可在 apps/api 目录执行 docker compose up -d 启动数据库，然后重试。',
+        code: 'DATABASE_UNAVAILABLE',
+        prismaCode: prismaError.code,
+      });
+    }
 
     if (prismaError?.code === 'P2021' || prismaError?.code === 'P2022') {
       throw new ServiceUnavailableException({
@@ -84,7 +101,31 @@ export class AuthService {
   }
 
   async verifyAccessToken(token: string): Promise<AuthenticatedUser> {
-    const payload = verifyToken(token);
+    let payload;
+    try {
+      payload = verifyToken(token);
+    } catch (error) {
+      // Token-level failures must surface as 401, not 500. Distinguish expired
+      // vs malformed/tampered so the frontend can decide whether to silently
+      // refresh (future) or just send the user back to /login (today).
+      if (error instanceof TokenExpiredError) {
+        throw new UnauthorizedException({
+          message: '登录已过期，请重新登录。',
+          code: 'TOKEN_EXPIRED',
+        });
+      }
+      if (error instanceof InvalidTokenError) {
+        throw new UnauthorizedException({
+          message: '登录凭据无效，请重新登录。',
+          code: 'INVALID_TOKEN',
+        });
+      }
+      throw new UnauthorizedException({
+        message: '登录凭据验证失败，请重新登录。',
+        code: 'TOKEN_VERIFICATION_FAILED',
+      });
+    }
+
     let user: User | null;
     try {
       user = await this.prisma.user.findUnique({
@@ -106,4 +147,3 @@ export class AuthService {
     };
   }
 }
-

@@ -1,0 +1,445 @@
+/* Task Clinical Context Panel */
+.clinical-context-panel {
+  background: white;
+  border: 1px solid #d8e3ef;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.clinical-context-panel.compact {
+  width: 320px;
+  padding: 20px;
+  gap: 16px;
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.clinical-context-panel.expanded {
+  width: 100%;
+  padding: 24px;
+  gap: 20px;
+}
+
+.context-loading {
+  padding: 40px 20px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+}
+
+/* Header */
+.context-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #d8e3ef;
+}
+
+.context-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.context-link {
+  font-size: 13px;
+  color: #0f766e;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.context-link:hover {
+  text-decoration: underline;
+  color: #14532d;
+}
+
+.context-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.collapse-btn {
+  padding: 6px 12px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.collapse-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+/* Context Cards (Compact View) */
+.context-card {
+  background: #f8fafc;
+  border: 1px solid #d8e3ef;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.card-value {
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.card-highlight {
+  font-size: 15px;
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.card-detail {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.card-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Disease Tags */
+.disease-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.disease-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Risk Badge */
+.risk-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.risk-badge.risk-low {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.risk-badge.risk-medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.risk-badge.risk-high {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.risk-badge.risk-very_high {
+  background: #fecaca;
+  color: #7f1d1d;
+}
+
+/* History Items */
+.history-item {
+  display: flex;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.history-date {
+  color: #64748b;
+  font-weight: 500;
+  min-width: 40px;
+  flex-shrink: 0;
+}
+
+.history-type {
+  color: #475569;
+  font-weight: 500;
+}
+
+.history-desc {
+  color: #64748b;
+  flex: 1;
+}
+
+/* Medication Items */
+.medication-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.med-name {
+  font-size: 14px;
+  color: #0f172a;
+  font-weight: 500;
+}
+
+.med-adherence {
+  font-size: 12px;
+  color: #64748b;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.med-missed {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+/* Mini Trend */
+.mini-trend {
+  margin-top: 8px;
+  height: 60px;
+}
+
+/* Expand Button */
+.expand-context-btn {
+  width: 100%;
+  padding: 10px;
+  background: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.expand-context-btn:hover {
+  background: #15803d;
+}
+
+/* Tabs (Expanded View) */
+.context-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid #d8e3ef;
+  overflow-x: auto;
+}
+
+.context-tab {
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
+  white-space: nowrap;
+  transition: all 0.2s;
+  margin-bottom: -2px;
+}
+
+.context-tab:hover {
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.context-tab.active {
+  color: #0f766e;
+  border-bottom-color: #0f766e;
+}
+
+/* Tab Content */
+.context-tab-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.tab-panel {
+  padding: 20px 0;
+}
+
+.panel-hint {
+  padding: 12px;
+  background: #f0fdf4;
+  border-left: 3px solid #16a34a;
+  color: #14532d;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+  border-radius: 4px;
+}
+
+/* Data Sections in Tabs */
+.relevant-data-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.data-section {
+  border: 1px solid #d8e3ef;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #d8e3ef;
+}
+
+/* Alerts Timeline */
+.alerts-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Follow-ups List */
+.followups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Medications Section */
+.medications-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Task Processing Layout Integration */
+.task-processing-layout.task-workbench-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+.task-processing-clinical-context {
+  grid-column: 3;
+}
+
+/* Responsive */
+@media (max-width: 1600px) {
+  .task-processing-layout.task-workbench-layout {
+    grid-template-columns: 280px 1fr 300px;
+  }
+
+  .clinical-context-panel.compact {
+    width: 300px;
+  }
+}
+
+@media (max-width: 1400px) {
+  .task-processing-layout.task-workbench-layout {
+    grid-template-columns: 260px 1fr;
+  }
+
+  .task-processing-clinical-context {
+    display: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .task-processing-layout.task-workbench-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .clinical-context-panel.compact {
+    width: 100%;
+    position: static;
+    max-height: none;
+  }
+}
+
+
+
+
+.clinical-trend-summary {
+  margin-bottom: 12px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.clinical-trend-chart-section {
+  background: #f8fafc;
+  border: 1px solid #d8e3ef;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.clinical-trend-chart-section .vital-trend-chart-container {
+  margin-bottom: 0;
+  border-width: 1px;
+}
+
+.clinical-trend-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 18px;
+  text-align: center;
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

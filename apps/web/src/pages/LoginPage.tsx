@@ -1,11 +1,18 @@
 import type { FormEvent } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 import {
   api,
   AUTH_TOKEN_STORAGE_KEY,
   AUTH_USER_STORAGE_KEY,
   getApiErrorMessage,
 } from '../api/client';
+import {
+  consumeExpiryReason,
+  consumeReturnPath,
+  type SessionExpiryDetail,
+} from '../api/auth-session';
+import '../auth-security-v2.css';
 
 export type UserRole = 'ADMIN' | 'DOCTOR' | 'NURSE' | 'MANAGER';
 
@@ -72,6 +79,22 @@ export function LoginPage({ onLogin }: LoginPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // prominent-feedback-bridge-v1
+  useFeedbackMessageBridge(undefined, error);
+  const [expiryReason, setExpiryReason] = useState<SessionExpiryDetail | null>(null);
+
+  // If the user arrived at /login because their previous session
+  // expired (rather than by clicking 退出登录 or by opening the app
+  // fresh), pull the reason out of sessionStorage and show a banner.
+  // `consumeExpiryReason` clears the entry so a deliberate refresh
+  // of the login page doesn't keep showing the banner.
+  useEffect(() => {
+    const reason = consumeExpiryReason();
+    if (reason) {
+      setExpiryReason(reason);
+    }
+  }, []);
+
   async function login(event?: FormEvent) {
     event?.preventDefault();
     setLoading(true);
@@ -90,6 +113,22 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
       localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, res.data.accessToken);
       localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(normalizedUser));
+
+      // If we know where the user was when their session expired,
+      // restore that URL BEFORE calling onLogin. AuthenticatedShell's
+      // Routes will match against the restored pathname on its first
+      // render. `replaceState` (not pushState) keeps the back button
+      // sensible — the user can't "Back" their way to the login page.
+      const returnPath = consumeReturnPath();
+      if (returnPath) {
+        try {
+          window.history.replaceState(window.history.state, '', returnPath);
+        } catch {
+          // Older browsers / sandboxed iframes: fall through, user
+          // just lands on the role's default page instead.
+        }
+      }
+
       onLogin(normalizedUser);
     } catch (error) {
       setError(
@@ -135,6 +174,13 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           </div>
         </div>
 
+        {expiryReason && (
+          <div className="login-session-expired-banner" role="status" aria-live="polite">
+            <strong>会话已结束</strong>
+            <span>{expiryReason.message}</span>
+          </div>
+        )}
+
         <form className="form" onSubmit={login}>
           <label>
             用户名
@@ -149,8 +195,6 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-
-          {error && <div className="status-error">{error}</div>}
 
           <button className="primary-btn login-submit" type="submit" disabled={loading}>
             {loading ? '登录中...' : '登录系统'}
@@ -178,4 +222,3 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     </div>
   );
 }
-

@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsNumber,
   IsOptional,
+  ValidateIf,
   IsString,
 } from 'class-validator';
 import { DataSource } from '@prisma/client';
@@ -12,8 +13,17 @@ export class CreateVitalRecordDto {
   @IsString()
   type!: string;
 
+  @ValidateIf((dto) => dto.type !== 'BLOOD_PRESSURE')
   @IsNumber()
-  value!: number;
+  value?: number;
+
+  @ValidateIf((dto) => dto.type === 'BLOOD_PRESSURE')
+  @IsNumber()
+  systolicValue?: number;
+
+  @ValidateIf((dto) => dto.type === 'BLOOD_PRESSURE')
+  @IsNumber()
+  diastolicValue?: number;
 
   @IsString()
   unit!: string;
@@ -41,3 +51,5 @@ export class CreateVitalRecordDto {
   @IsString()
   note?: string;
 }
+
+

@@ -29,8 +29,8 @@ const dataSourceLabelMap: Record<string, string> = {
 
 const vitalTypeLabelMap: Record<string, string> = {
   BLOOD_PRESSURE: '血压',
-  SYSTOLIC_BP: '收缩压',
-  DIASTOLIC_BP: '舒张压',
+  SYSTOLIC_BP: '血压（收缩压/舒张压）',
+  DIASTOLIC_BP: '血压（收缩压/舒张压）',
   BLOOD_GLUCOSE: '血糖',
   WEIGHT: '体重',
   HEART_RATE: '心率',
@@ -48,6 +48,7 @@ const taskTypeLabelMap: Record<string, string> = {
   VITAL_MEASUREMENT_MISSED: '指标漏测复核',
   QUESTIONNAIRE_REVIEW: '问卷复核',
   LAB_TEST_REMINDER: '检查提醒',
+  HOSPITAL_VISIT_FOLLOW_UP: '到院提醒任务',
 };
 
 const followUpTypeLabelMap: Record<string, string> = {
@@ -76,9 +77,37 @@ const questionnaireTypeLabelMap: Record<string, string> = {
   OBESITY_LIFESTYLE: '体重管理生活方式问卷',
 };
 
+const encounterTypeLabelMap: Record<string, string> = {
+  OUTPATIENT: '门诊',
+  INPATIENT: '住院',
+  EMERGENCY: '急诊',
+  CHECKUP: '体检',
+};
+
+const medicalRecordTypeLabelMap: Record<string, string> = {
+  OUTPATIENT_NOTE: '门诊病历',
+  INPATIENT_RECORD: '住院病历',
+  DISCHARGE_SUMMARY: '出院小结',
+  PROGRESS_NOTE: '病程记录',
+  CONSULTATION_NOTE: '会诊记录',
+};
+
 function label(map: Record<string, string>, value?: string | null) {
   if (!value) return '-';
   return map[value] ?? value;
+}
+
+function isBloodPressureComponent(type?: string | null) {
+  return type === 'SYSTOLIC_BP' || type === 'DIASTOLIC_BP' || type === 'BLOOD_PRESSURE';
+}
+
+function getVitalRecordTitle(type?: string | null) {
+  return isBloodPressureComponent(type) ? '健康指标：血压' : `健康指标：${label(vitalTypeLabelMap, type)}`;
+}
+
+function getVitalRecordDescription(item: { type?: string | null; value: number; unit: string; isAbnormal: boolean }) {
+  const component = item.type === 'SYSTOLIC_BP' ? '收缩压 ' : item.type === 'DIASTOLIC_BP' ? '舒张压 ' : '';
+  return `${component}${item.value} ${item.unit}${item.isAbnormal ? '，异常' : '，正常'}`;
 }
 
 function formatDate(value?: Date | null) {
@@ -114,6 +143,10 @@ export class PatientTimelineService {
       medicationCheckIns,
       questionnaireResults,
       vitalMonitoringPlans,
+      encounterRecords,
+      medicalRecordSummaries,
+      examReports,
+      hospitalMedications,
     ] = await Promise.all([
       this.prisma.diseaseProfile.findMany({
         where: { patientId },
@@ -160,6 +193,26 @@ export class PatientTimelineService {
         where: { patientId },
         orderBy: { createdAt: 'desc' },
       }),
+
+      this.prisma.encounterRecord.findMany({
+        where: { patientId },
+        orderBy: { visitTime: 'desc' },
+      }),
+
+      this.prisma.medicalRecordSummary.findMany({
+        where: { patientId },
+        orderBy: { recordTime: 'desc' },
+      }),
+
+      this.prisma.examReportRecord.findMany({
+        where: { patientId },
+        orderBy: { examTime: 'desc' },
+      }),
+
+      this.prisma.hospitalMedicationOrder.findMany({
+        where: { patientId },
+        orderBy: { prescribedAt: 'desc' },
+      }),
     ]);
 
     const diseaseEvents = diseaseProfiles.map((item) => ({
@@ -175,8 +228,8 @@ export class PatientTimelineService {
     const vitalEvents = vitalRecords.map((item) => ({
       type: 'VITAL_RECORD',
       time: item.measuredAt,
-      title: `健康指标：${label(vitalTypeLabelMap, item.type)}`,
-      description: `${item.value} ${item.unit}${item.isAbnormal ? '，异常' : '，正常'}`,
+      title: getVitalRecordTitle(item.type),
+      description: getVitalRecordDescription(item),
       data: item,
     }));
 
@@ -242,6 +295,46 @@ export class PatientTimelineService {
       data: item,
     }));
 
+    const encounterEvents = encounterRecords.map((item) => ({
+      type: 'ENCOUNTER_RECORD',
+      time: item.visitTime,
+      title: `就诊记录：${label(encounterTypeLabelMap, item.visitType)}`,
+      description: `${item.departmentName ? `科室：${item.departmentName}` : ''}${
+        item.doctorName ? `；医生：${item.doctorName}` : ''
+      }${item.diagnosisSummary ? `；诊断：${item.diagnosisSummary}` : ''}`,
+      data: item,
+    }));
+
+    const medicalRecordEvents = medicalRecordSummaries.map((item) => ({
+      type: 'MEDICAL_RECORD_SUMMARY',
+      time: item.recordTime,
+      title: `病历摘要：${label(medicalRecordTypeLabelMap, item.recordType)}`,
+      description: `${item.title}${item.diagnosisText ? `；诊断：${item.diagnosisText}` : ''}${
+        item.departmentName ? `；科室：${item.departmentName}` : ''
+      }`,
+      data: item,
+    }));
+
+    const examReportEvents = examReports.map((item) => ({
+      type: 'EXAM_REPORT',
+      time: item.examTime,
+      title: `检查报告：${item.examName}`,
+      description: `${item.examType}${item.conclusion ? `；结论：${item.conclusion}` : ''}${
+        item.departmentName ? `；科室：${item.departmentName}` : ''
+      }`,
+      data: item,
+    }));
+
+    const hospitalMedicationEvents = hospitalMedications.map((item) => ({
+      type: 'HOSPITAL_MEDICATION',
+      time: item.prescribedAt,
+      title: `院内处方：${item.medicationName}`,
+      description: `剂量：${item.dosage}；频次：${item.frequency}${
+        item.route ? `；途径：${item.route}` : ''
+      }${item.prescribedBy ? `；开方医生：${item.prescribedBy}` : ''}`,
+      data: item,
+    }));
+
     const timeline = [
       ...diseaseEvents,
       ...vitalEvents,
@@ -252,6 +345,10 @@ export class PatientTimelineService {
       ...medicationEvents,
       ...medicationCheckInEvents,
       ...questionnaireEvents,
+      ...encounterEvents,
+      ...medicalRecordEvents,
+      ...examReportEvents,
+      ...hospitalMedicationEvents,
     ].sort((a, b) => {
       return new Date(b.time).getTime() - new Date(a.time).getTime();
     });
@@ -262,3 +359,5 @@ export class PatientTimelineService {
     };
   }
 }
+
+

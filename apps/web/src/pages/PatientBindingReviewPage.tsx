@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
+import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
 type BindingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -46,6 +47,9 @@ export function PatientBindingReviewPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  // prominent-feedback-bridge-v1
+  useFeedbackMessageBridge(message, error);
 
   const filteredRequests = useMemo(() => {
     if (statusFilter === 'ALL') return requests;
@@ -111,19 +115,6 @@ export function PatientBindingReviewPage() {
 
   return (
     <div className="patient-binding-page">
-      <section className="page-header-card binding-hero-card">
-        <div>
-          <div className="eyebrow">患者端可信入口</div>
-          <h1>患者绑定审核</h1>
-          <p>
-            患者小程序提交手机号 + 院内号 / 身份证后四位后，护士在这里审核。通过后患者端会签发 patient token，后续只能访问本人慢病档案。
-          </p>
-        </div>
-        <button className="secondary-btn" onClick={() => loadRequests()} disabled={loading}>
-          {loading ? '刷新中...' : '刷新申请'}
-        </button>
-      </section>
-
       <section className="toolbar-card binding-toolbar-card">
         <div className="filter-group">
           {(['PENDING', 'APPROVED', 'REJECTED', 'ALL'] as const).map((item) => (
@@ -136,11 +127,13 @@ export function PatientBindingReviewPage() {
             </button>
           ))}
         </div>
-        <div className="muted">当前显示 {filteredRequests.length} 条绑定申请</div>
+        <div className="binding-toolbar-actions">
+          <div className="muted">当前显示 {filteredRequests.length} 条绑定申请</div>
+          <button className="secondary-btn" onClick={() => loadRequests()} disabled={loading}>
+            {loading ? '刷新中...' : '刷新申请'}
+          </button>
+        </div>
       </section>
-
-      {message && <div className="status-success">{message}</div>}
-      {error && <div className="status-error">{error}</div>}
 
       <section className="table-card binding-review-card">
         <table className="data-table">
@@ -212,3 +205,5 @@ export function PatientBindingReviewPage() {
     </div>
   );
 }
+
+

@@ -25,6 +25,10 @@ import { ClinicalRulesModule } from './clinical-rules/clinical-rules.module';
 import { IntegrationsModule } from './integrations/integrations.module';
 import { WorkItemsModule } from './work-items/work-items.module';
 import { HospitalVisitRemindersModule } from './hospital-visit-reminders/hospital-visit-reminders.module';
+import { EncounterRecordsModule } from './encounter-records/encounter-records.module';
+import { MedicalRecordSummariesModule } from './medical-record-summaries/medical-record-summaries.module';
+import { ExamReportsModule } from './exam-reports/exam-reports.module';
+import { HospitalMedicationsModule } from './hospital-medications/hospital-medications.module';
 
 const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
@@ -38,6 +42,10 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
     IntegrationsModule,
     WorkItemsModule,
     HospitalVisitRemindersModule,
+    EncounterRecordsModule,
+    MedicalRecordSummariesModule,
+    ExamReportsModule,
+    HospitalMedicationsModule,
     PatientsModule,
     DiseaseProfilesModule,
     VitalRecordsModule,

@@ -1,0 +1,71 @@
+/* ============================================================
+   auth-security-v2.css
+   ------------------------------------------------------------
+   Visual treatment for the "session expired, please log in
+   again" banner that appears on the login page when the user
+   was kicked out by a 401 from the API. The banner is rendered
+   by LoginPage when `consumeExpiryReason()` returns a value.
+   ============================================================ */
+
+.login-session-expired-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-left: 4px solid #f97316;
+  color: #7c2d12;
+  line-height: 1.5;
+  animation: login-session-expired-fade-in 220ms ease-out;
+}
+
+.login-session-expired-banner strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #9a3412;
+}
+
+.login-session-expired-banner span {
+  font-size: 13px;
+  color: #7c2d12;
+}
+
+@keyframes login-session-expired-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

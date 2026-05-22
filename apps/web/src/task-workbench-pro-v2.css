@@ -1,0 +1,504 @@
+/* ============================================================
+   task-workbench-pro-v2.css
+   ------------------------------------------------------------
+   Layout polish for the nurse task processing page (workbench).
+   Addresses four concrete issues raised during review:
+
+     1. The 患者临床背景 panel (right column) must float along
+        with the page like the left-side task queue and related
+        风险依据 panel, rather than being pinned at the top of
+        the layout flow and scrolling away.
+
+     2. 电话随访沟通 form and 最近指标记录 table overflow the
+        centre column because each form internally re-splits the
+        width 1:2 again. Both must stack vertically when the
+        outer layout is already 3-column.
+
+     3. 监测计划 — 当前启用计划 must sit on top of the form (two
+        vertically stacked sub-panels), not beside it.
+
+     4. The clinical-context indicator trend chart letterboxes
+        in the narrow 320px column. Use auto height + aspect
+        ratio instead of a hard 200px height.
+
+   All selectors are scoped to `.task-workbench-pro` (the unique
+   outer wrapper of the task processing page) so this file never
+   leaks into other pages, and so the cascade wins over the
+   component-loaded `task-clinical-context.css` regardless of
+   import order at runtime.
+   ============================================================ */
+
+/* ─── (0) Stabilise the page grid ─────────────────────────────
+   `task-clinical-context.css` defines this as a 3-column grid,
+   `patient-summary-sidebar.css` overrides it to flex. Depending
+   on which page mounts first, the live cascade differs. Lock it
+   to grid explicitly here so the centre column has a stable
+   `minmax(0, 1fr)` track that cannot blow out from long inline
+   content (long Chinese labels, datetime pickers, etc.).
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-processing-layout.task-workbench-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: 18px;
+  align-items: start;
+}
+
+.task-workbench-pro .task-processing-layout.task-workbench-layout > .task-workbench-main {
+  min-width: 0; /* required so children with overflow can shrink under flex/grid */
+}
+
+/* ─── (1) Float the clinical-context panel ────────────────────
+   Move the sticky behaviour from the inner `.compact` panel up
+   to the outer aside wrapper so it works in BOTH the compact
+   and expanded states. The inner panel goes back to static
+   block flow inside the sticky aside.
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-processing-clinical-context {
+  position: sticky;
+  top: 18px;
+  align-self: start;
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Thin scrollbar so the floating panel looks clean. */
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.task-workbench-pro .task-processing-clinical-context::-webkit-scrollbar {
+  width: 6px;
+}
+.task-workbench-pro .task-processing-clinical-context::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 6px;
+}
+
+/* The inner panel must NOT also try to be sticky inside an
+   already-sticky aside — otherwise scrolling inside the panel
+   stops working when expanded. */
+.task-workbench-pro .task-processing-clinical-context .clinical-context-panel.compact,
+.task-workbench-pro .task-processing-clinical-context .clinical-context-panel.expanded {
+  position: static;
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+}
+
+/* Slightly tighter padding inside the floating panel. */
+.task-workbench-pro .task-processing-clinical-context .clinical-context-panel.compact {
+  padding: 16px;
+  gap: 12px;
+}
+.task-workbench-pro .task-processing-clinical-context .clinical-context-panel.expanded {
+  padding: 18px;
+  gap: 16px;
+}
+
+/* ─── (4) Trend chart sizing inside the floating panel ────────
+   The SVG is authored 600×200 with `preserveAspectRatio="xMidYMid
+   meet"` and the CSS pins the host to a 200px tall box. In a
+   ~300px-wide column this produces ~100px of empty letterboxing.
+   Drop the fixed height and use intrinsic aspect ratio.
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-processing-clinical-context .vital-trend-chart-container {
+  padding: 12px;
+  border-width: 1px;
+  margin-bottom: 12px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .vital-trend-chart-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .vital-trend-chart-title {
+  font-size: 14px;
+}
+.task-workbench-pro .task-processing-clinical-context .vital-trend-chart-subtitle {
+  font-size: 12px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .vital-trend-chart-legend {
+  flex-wrap: wrap;
+  gap: 8px;
+  row-gap: 4px;
+  font-size: 11px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .vital-trend-svg,
+.task-workbench-pro .task-processing-clinical-context .blood-pressure-trend-chart .vital-trend-svg {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 1;
+  max-height: 160px;
+  display: block;
+}
+
+/* Mini-trend in the compact (card) view: drop to ~48px tall. */
+.task-workbench-pro .task-processing-clinical-context .mini-trend {
+  height: auto;
+  aspect-ratio: 4 / 1;
+  max-height: 56px;
+}
+
+/* The tab strip can scroll horizontally rather than wrap awkwardly. */
+.task-workbench-pro .task-processing-clinical-context .context-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.task-workbench-pro .task-processing-clinical-context .context-tabs::-webkit-scrollbar {
+  display: none;
+}
+.task-workbench-pro .task-processing-clinical-context .context-tab {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+/* Filter selects above the trends chart: stack on narrow columns. */
+.task-workbench-pro .task-processing-clinical-context .tab-panel > div[style*='display: flex'] {
+  flex-wrap: wrap;
+}
+
+/* ─── (2) Phone follow-up form fits the centre column ─────────
+   The form internally uses `.task-call-two-column-grid` (220-
+   300px / 1fr) which compounds with the page's outer 3-column
+   grid. Drop it to a single column inside the workbench, and
+   flatten the embedded contact card to a horizontal info strip
+   above the form fields.
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-workbench-main .task-call-two-column-grid,
+.task-workbench-pro .task-workbench-main .compact-two-column-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* Contact card flattens into a single horizontal information strip. */
+.task-workbench-pro .task-workbench-main .embedded-contact-card {
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.task-workbench-pro .task-workbench-main .embedded-contact-card h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.02em;
+}
+
+.task-workbench-pro .task-workbench-main .embedded-contact-card .contact-info-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+  padding: 0;
+}
+
+.task-workbench-pro .task-workbench-main .embedded-contact-card .contact-info-list > div {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 0 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.task-workbench-pro .task-workbench-main .embedded-contact-card .contact-info-list dt {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.task-workbench-pro .task-workbench-main .embedded-contact-card .contact-info-list dd {
+  font-size: 13px;
+  color: #0f172a;
+  margin: 0;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* Inner form-grid: prevent horizontal overflow when nested
+   inside the already-narrow centre column. */
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-grid,
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-grid.form-grid-two,
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-grid.form-grid-three {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-row {
+  min-width: 0;
+}
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-row input,
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-row select,
+.task-workbench-pro .task-workbench-main .task-call-form-fields .form-row textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* ─── (3) 监测计划 + 复测：stack vertically ───────────────────
+   Both `.plan-editor-layout` and `.recheck-grid` are 1fr / 280-
+   420px. Collapse to single column inside the workbench. The
+   plan selector becomes a horizontally scrollable card row
+   above the form.
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-workbench-main .plan-editor-layout,
+.task-workbench-pro .task-workbench-main .recheck-grid,
+.task-workbench-pro .task-workbench-main .compact-plan-editor,
+.task-workbench-pro .task-workbench-main .compact-recheck-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+/* Plan selector list becomes a horizontal scroller of cards. */
+.task-workbench-pro .task-workbench-main .plan-editor-layout .plan-selector-list {
+  display: grid;
+  grid-template-rows: auto auto;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 12px;
+}
+
+.task-workbench-pro .task-workbench-main .plan-editor-layout .plan-selector-list h3 {
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.02em;
+}
+
+.task-workbench-pro .task-workbench-main .plan-editor-layout .plan-selector-list > :not(h3):not(.empty-state) {
+  /* wrapper of cards */
+}
+
+/* If multiple plan cards exist, lay them out as a horizontally
+   scrolling strip so the editor below has the full column. */
+.task-workbench-pro .task-workbench-main .plan-editor-layout .plan-selector-card {
+  display: inline-grid;
+  width: auto;
+  min-width: 180px;
+  max-width: 240px;
+  gap: 4px;
+}
+
+/* When the selector list has many cards, switch to a horizontal
+   strip layout. Using flex container property only applies if we
+   wrap the cards; do it via display: flex on the aside with
+   wrap: nowrap and overflow-x: auto. */
+.task-workbench-pro .task-workbench-main .plan-editor-layout > aside.plan-selector-list {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px 14px;
+  scrollbar-width: thin;
+}
+
+.task-workbench-pro .task-workbench-main .plan-editor-layout > aside.plan-selector-list h3 {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 0;
+  padding-right: 6px;
+  border-right: 1px solid #d8e3ef;
+  min-width: 72px;
+}
+
+.task-workbench-pro .task-workbench-main .plan-editor-layout > aside.plan-selector-list .empty-state {
+  flex: 1;
+}
+
+.task-workbench-pro .task-workbench-main .plan-editor-layout > aside.plan-selector-list .plan-selector-card {
+  flex: 0 0 auto;
+}
+
+/* Monitoring-plan form: prevent inner form-grid from overflowing. */
+.task-workbench-pro .task-workbench-main .monitoring-plan-form .form-grid,
+.task-workbench-pro .task-workbench-main .monitoring-plan-form .form-grid.form-grid-three,
+.task-workbench-pro .task-workbench-main .recheck-grid .form-grid,
+.task-workbench-pro .task-workbench-main .recheck-grid .form-grid.form-grid-three {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.task-workbench-pro .task-workbench-main .monitoring-plan-form .form-row,
+.task-workbench-pro .task-workbench-main .recheck-grid .form-row {
+  min-width: 0;
+}
+.task-workbench-pro .task-workbench-main .monitoring-plan-form input,
+.task-workbench-pro .task-workbench-main .monitoring-plan-form select,
+.task-workbench-pro .task-workbench-main .monitoring-plan-form textarea,
+.task-workbench-pro .task-workbench-main .recheck-grid input,
+.task-workbench-pro .task-workbench-main .recheck-grid select,
+.task-workbench-pro .task-workbench-main .recheck-grid textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+/* Recheck table: allow horizontal scroll on narrow columns
+   instead of overflowing the centre. */
+.task-workbench-pro .task-workbench-main .recheck-grid .clean-subpanel {
+  min-width: 0;
+}
+.task-workbench-pro .task-workbench-main .recheck-grid .table-wrap,
+.task-workbench-pro .task-workbench-main .recheck-grid .clean-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+/* ─── (5) Medical records & exam reports — list cards ────────
+   New panels replacing the old `任务相关` tab. Visual styling
+   for `.medical-record-card`, used in both `病历` (encounters
+   + summaries) and `检查报告` (examReports).
+   ──────────────────────────────────────────────────────────── */
+.task-workbench-pro .task-processing-clinical-context .medical-records-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.task-workbench-pro .task-processing-clinical-context .medical-records-section:last-child {
+  margin-bottom: 0;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-records-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card.exam-report-card {
+  background: #fbfdff;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-date {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-line {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+}
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-line em {
+  font-style: normal;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-summary {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+.task-workbench-pro .task-processing-clinical-context .medical-record-card-flag {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 2px 8px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+/* ─── (6) Below ~1280px: collapse to 2-column, hide aside ────
+   The clinical-context aside currently disappears at <=1400px
+   in the original css. Keep that, but make sure when it's gone
+   the centre column reclaims the full width.
+   ──────────────────────────────────────────────────────────── */
+@media (max-width: 1400px) {
+  .task-workbench-pro .task-processing-layout.task-workbench-layout {
+    grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  }
+  .task-workbench-pro .task-processing-clinical-context {
+    display: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .task-workbench-pro .task-processing-layout.task-workbench-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .task-workbench-pro .task-processing-sidebar {
+    position: static;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

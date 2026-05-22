@@ -1,0 +1,568 @@
+/* 问题清单视图 Problem List - 中国医院风格 */
+
+/* 问题清单容器 */
+.problem-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 问题卡片 */
+.problem-card {
+  border: 2px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.problem-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.problem-card.problem-high-risk {
+  border-color: #fca5a5;
+  background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%);
+}
+
+.problem-card.problem-medium-risk {
+  border-color: #fcd34d;
+  background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);
+}
+
+.problem-card.problem-stable {
+  border-color: #d1fae5;
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+}
+
+/* 问题卡片头部 */
+.problem-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.problem-card-header:hover {
+  background: rgba(241, 245, 249, 0.5);
+}
+
+.problem-card-title-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.problem-card-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.problem-card-title h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.problem-card-title .risk-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.problem-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.problem-card-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.problem-card-meta-item strong {
+  color: #334155;
+  font-weight: 700;
+}
+
+.problem-card-meta-item.meta-danger strong {
+  color: #dc2626;
+}
+
+.problem-card-meta-item.meta-warning strong {
+  color: #d97706;
+}
+
+.problem-card-meta-item.meta-normal strong {
+  color: #059669;
+}
+
+/* 问题卡片状态指示器 */
+.problem-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.problem-status-indicator.status-processing {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.problem-status-indicator.status-stable {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.problem-status-indicator.status-monitoring {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+/* 展开/收起图标 */
+.problem-expand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 18px;
+  transition: all 0.2s ease;
+}
+
+.problem-card-header:hover .problem-expand-icon {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.problem-expand-icon.expanded {
+  transform: rotate(180deg);
+}
+
+/* 问题卡片内容区 */
+.problem-card-content {
+  border-top: 1px solid #e5edf7;
+  background: #f8fafc;
+}
+
+.problem-detail-section {
+  padding: 20px;
+  border-bottom: 1px solid #e5edf7;
+}
+
+.problem-detail-section:last-child {
+  border-bottom: none;
+}
+
+.problem-detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.problem-detail-section-title::before {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: #3b82f6;
+}
+
+/* 问题详情网格 */
+.problem-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.problem-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.problem-detail-item-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.problem-detail-item-value {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* 指标趋势简图 */
+.problem-vital-trend {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.problem-vital-trend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.problem-vital-trend-title {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.problem-vital-trend-value {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.problem-vital-trend-value.trend-danger {
+  color: #dc2626;
+}
+
+.problem-vital-trend-value.trend-warning {
+  color: #d97706;
+}
+
+.problem-vital-trend-value.trend-normal {
+  color: #059669;
+}
+
+.problem-vital-sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 40px;
+}
+
+.problem-vital-sparkline-bar {
+  flex: 1;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  background: #cbd5e1;
+  transition: all 0.2s ease;
+}
+
+.problem-vital-sparkline-bar.bar-danger {
+  background: #fca5a5;
+}
+
+.problem-vital-sparkline-bar.bar-warning {
+  background: #fcd34d;
+}
+
+.problem-vital-sparkline-bar.bar-normal {
+  background: #86efac;
+}
+
+.problem-vital-sparkline-bar:hover {
+  opacity: 0.7;
+}
+
+/* 相关预警列表 */
+.problem-alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.problem-alert-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  border-left: 4px solid #cbd5e1;
+}
+
+.problem-alert-item.alert-high {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.problem-alert-item.alert-medium {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+
+.problem-alert-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.problem-alert-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.problem-alert-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.problem-alert-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.problem-alert-time {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+/* 相关任务列表 */
+.problem-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.problem-task-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.problem-task-checkbox {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  flex-shrink: 0;
+}
+
+.problem-task-checkbox.checked {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  position: relative;
+}
+
+.problem-task-checkbox.checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.problem-task-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.problem-task-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.problem-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.problem-task-due {
+  color: #d97706;
+  font-weight: 700;
+}
+
+/* 最近处置记录 */
+.problem-disposition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.problem-disposition-item {
+  padding: 14px;
+  border-radius: 10px;
+  background: #ffffff;
+  border-left: 4px solid #3b82f6;
+}
+
+.problem-disposition-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.problem-disposition-type {
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.problem-disposition-time {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.problem-disposition-content {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 空状态 */
+.problem-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.problem-empty-icon {
+  margin-bottom: 12px;
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.problem-empty-text {
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+/* 快捷操作按钮 */
+.problem-actions {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  background: #ffffff;
+}
+
+.problem-action-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.problem-action-btn:hover {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.problem-action-btn.btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.problem-action-btn.btn-primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .problem-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .problem-card-meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .problem-actions {
+    flex-direction: column;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

@@ -77,6 +77,21 @@ enum HospitalVisitReminderStatus {
   REVOKED
 }
 
+enum EncounterType {
+  OUTPATIENT
+  INPATIENT
+  EMERGENCY
+  CHECKUP
+}
+
+enum MedicalRecordType {
+  OUTPATIENT_NOTE
+  INPATIENT_RECORD
+  DISCHARGE_SUMMARY
+  PROGRESS_NOTE
+  CONSULTATION_NOTE
+}
+
 
 enum IntegrationSystemType {
   HIS
@@ -126,10 +141,14 @@ model Patient {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  responsibleDoctor   User? @relation("PatientDoctor", fields: [responsibleDoctorId], references: [id])
+  responsibleNurse    User? @relation("PatientNurse", fields: [responsibleNurseId], references: [id])
+
   diseaseProfiles DiseaseProfile[]
   vitalRecords    VitalRecord[]
   followUps       FollowUpRecord[]
   tasks           Task[]
+  taskProcessingEvents TaskProcessingEvent[]
 
   riskAlerts     RiskAlert[]
   medicationRecords MedicationRecord[]
@@ -137,6 +156,10 @@ model Patient {
   questionnaireResults QuestionnaireResult[]
   vitalMonitoringPlans VitalMonitoringPlan[]
   hospitalVisitReminders HospitalVisitReminder[]
+  encounterRecords EncounterRecord[]
+  medicalRecordSummaries MedicalRecordSummary[]
+  examReportRecords ExamReportRecord[]
+  hospitalMedicationOrders HospitalMedicationOrder[]
 
   @@index([responsibleDoctorId])
   @@index([responsibleNurseId])
@@ -222,10 +245,32 @@ model Task {
   updatedAt   DateTime @updatedAt
 
   patient     Patient @relation(fields: [patientId], references: [id])
+  processingEvents TaskProcessingEvent[]
 
   @@index([patientId, status, dueAt])
   @@index([assigneeId, status, dueAt])
   @@index([relatedAlertId])
+}
+
+model TaskProcessingEvent {
+  id                  String   @id @default(uuid())
+  taskId              String
+  patientId           String
+  eventType           String
+  title               String
+  description         String?
+  sourceType          String?
+  sourceId            String?
+  operatorId          String?
+  electronicSignature String?
+  createdAt           DateTime @default(now())
+
+  task                Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  patient             Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([taskId, createdAt])
+  @@index([patientId, createdAt])
+  @@index([eventType, createdAt])
 }
 
 model AuditLog {
@@ -383,6 +428,9 @@ model User {
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  patientsAsDoctor Patient[] @relation("PatientDoctor")
+  patientsAsNurse  Patient[] @relation("PatientNurse")
 
   @@index([role, isActive])
 }
@@ -731,6 +779,113 @@ model ExternalPrescriptionRecord {
   @@index([sourceId, importStatus, createdAt])
   @@index([localMedicationRecordId])
 }
+
+model EncounterRecord {
+  id                String   @id @default(uuid())
+  patientId         String
+  hospitalPatientId String?
+  externalVisitId   String?
+  visitType         EncounterType
+  departmentName    String?
+  doctorName        String?
+  visitTime         DateTime
+  chiefComplaint    String?
+  diagnosisSummary  String?
+  treatmentSummary  String?
+  dataSource        DataSource @default(HIS)
+  sourceSystem      String?
+  rawData           Json?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  patient           Patient @relation(fields: [patientId], references: [id])
+  hospitalMedicationOrders HospitalMedicationOrder[]
+
+  @@index([patientId, visitTime])
+  @@index([visitType, visitTime])
+  @@index([externalVisitId])
+}
+
+model MedicalRecordSummary {
+  id              String   @id @default(uuid())
+  patientId       String
+  externalRecordId String?
+  recordType      MedicalRecordType
+  recordTime      DateTime
+  departmentName  String?
+  title           String
+  summary         String?
+  diagnosisText   String?
+  treatmentPlan   String?
+  doctorAdvice    String?
+  dataSource      DataSource @default(EMR)
+  sourceSystem    String?
+  rawData         Json?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  patient         Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, recordTime])
+  @@index([recordType, recordTime])
+  @@index([externalRecordId])
+}
+
+model ExamReportRecord {
+  id              String   @id @default(uuid())
+  patientId       String
+  externalExamId  String?
+  examType        String
+  examName        String
+  examTime        DateTime
+  departmentName  String?
+  finding         String?
+  conclusion      String?
+  reportUrl       String?
+  dataSource      DataSource @default(HIS)
+  sourceSystem    String?
+  rawData         Json?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  patient         Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, examTime])
+  @@index([examType, examTime])
+  @@index([externalExamId])
+}
+
+model HospitalMedicationOrder {
+  id                    String   @id @default(uuid())
+  patientId             String
+  externalOrderId       String?
+  encounterRecordId     String?
+  medicationName        String
+  dosage                String
+  frequency             String
+  route                 String?
+  duration              String?
+  prescribedBy          String?
+  prescribedAt          DateTime
+  dataSource            DataSource @default(HIS)
+  sourceSystem          String?
+  rawData               Json?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  patient               Patient @relation(fields: [patientId], references: [id])
+  encounterRecord       EncounterRecord? @relation(fields: [encounterRecordId], references: [id])
+
+  @@index([patientId, prescribedAt])
+  @@index([encounterRecordId])
+  @@index([externalOrderId])
+}
+
+
 
 
 

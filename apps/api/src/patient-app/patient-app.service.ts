@@ -378,7 +378,13 @@ export class PatientAppService {
       targetType: 'VitalRecord',
       targetId: result.vitalRecord?.id,
       ipAddress,
-      afterData: { type: dto.type, value: dto.value, unit: dto.unit },
+      afterData: {
+        type: dto.type,
+        value: dto.value,
+        systolicValue: dto.systolicValue,
+        diastolicValue: dto.diastolicValue,
+        unit: dto.unit,
+      },
     });
     return result;
   }
@@ -486,5 +492,7 @@ export class PatientAppService {
     return result;
   }
 }
+
+
 
 

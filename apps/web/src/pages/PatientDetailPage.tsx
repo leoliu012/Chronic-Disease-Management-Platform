@@ -1,7 +1,22 @@
-import type { FormEvent } from 'react';
+import type { FormEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
+import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
+import { HospitalRecordsView } from '../components/HospitalRecordsView';
+import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';
+import { PatientHospitalVisitTab } from '../components/PatientHospitalVisitTab';
+// trend-range-filter-import-v1
+import { BloodPressureTrendChart, VitalTrendChart, TrendRangeFilterBar, filterVitalsByTrendRange, describeTrendRange, DEFAULT_TREND_RANGE } from '../components/VitalTrendChart';
+import { buildLatestVitalDisplayItemsByMetric } from '../utils/vitalDisplay';
+import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
+import '../patient-snapshot.css';
+import '../problem-list.css';
+import '../closed-loop-events.css';
+import '../hospital-records.css';
+import '../patient-task-side-panel.css';
+import '../patient-detail-task-ux-polish.css';
+import '../trend-chart-unified-v1.css';
 
 type TimelineEvent = {
   type: string;
@@ -35,13 +50,37 @@ type PatientTimelineResponse = {
     birthDate?: string;
     phone?: string;
     address?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
     responsibleDoctorId?: string;
     responsibleNurseId?: string;
   };
   timeline: TimelineEvent[];
 };
 
+type FollowUpRecordItem = {
+  id: string;
+  patientId: string;
+  followUpType: string;
+  followUpTime: string;
+  content?: string | null;
+  result?: string | null;
+  suggestion?: string | null;
+  nextFollowUpTime?: string | null;
+  operatorId?: string | null;
+  createdAt: string;
+};
+
+type FollowUpListResponse = {
+  items: FollowUpRecordItem[];
+  total: number;
+  skip: number;
+  take: number;
+  hasMore: boolean;
+};
+
 const nurseId = 'nurse-001';
+const FOLLOW_UP_HISTORY_PAGE_SIZE = 8;
 
 const genderLabelMap: Record<string, string> = {
   MALE: '男',
@@ -91,6 +130,10 @@ const medicationTimingRelationLabelMap: Record<string, string> = {
 
 const timelineTypeLabelMap: Record<string, string> = {
   ALL: '全部记录',
+  ENCOUNTER_RECORD: '就诊记录',
+  MEDICAL_RECORD_SUMMARY: '病历摘要',
+  EXAM_REPORT: '检查报告',
+  HOSPITAL_MEDICATION: '院内处方',
   DISEASE_PROFILE: '慢病档案',
   VITAL_RECORD: '健康指标',
   VITAL_MONITORING_PLAN: '指标打卡计划',
@@ -104,8 +147,8 @@ const timelineTypeLabelMap: Record<string, string> = {
 
 const vitalTypeLabelMap: Record<string, string> = {
   BLOOD_PRESSURE: '血压（收缩压/舒张压）',
-  SYSTOLIC_BP: '收缩压',
-  DIASTOLIC_BP: '舒张压',
+  SYSTOLIC_BP: '血压（收缩压/舒张压）',
+  DIASTOLIC_BP: '血压（收缩压/舒张压）',
   BLOOD_GLUCOSE: '血糖',
   WEIGHT: '体重',
   HEART_RATE: '心率',
@@ -138,6 +181,7 @@ const taskTypeLabelMap: Record<string, string> = {
   VITAL_MEASUREMENT_MISSED: '指标漏测复核',
   QUESTIONNAIRE_REVIEW: '问卷复核',
   LAB_TEST_REMINDER: '检查提醒',
+  HOSPITAL_VISIT_FOLLOW_UP: '到院提醒任务',
 };
 
 const followUpTypeLabelMap: Record<string, string> = {
@@ -246,7 +290,8 @@ const timelineTabs = [
   'QUESTIONNAIRE_RESULT',
 ];
 
-type PatientDetailWorkspace = 'overview' | 'actions' | 'disease' | 'monitoring' | 'medication' | 'care' | 'timeline';
+type PatientDetailWorkspace = 'overview' | 'hospital-records' | 'actions' | 'disease' | 'monitoring' | 'medication' | 'follow-up' | 'hospital-visit' | 'handling-history' | 'care' | 'timeline';
+type TimelineSubsection = 'records' | 'vitals' | 'closedLoop';
 
 const patientDetailWorkspaceTabs: Array<{
   key: PatientDetailWorkspace;
@@ -254,14 +299,40 @@ const patientDetailWorkspaceTabs: Array<{
   description: string;
 }> = [
   { key: 'overview', title: '患者概览', description: '基本信息与关键状态' },
+  { key: 'hospital-records', title: '院内病历', description: '就诊、病历、检查、处方' },
   { key: 'disease', title: '慢病档案', description: '诊断、分期、风险等级' },
   { key: 'monitoring', title: '指标监测', description: '打卡计划与指标录入' },
   { key: 'medication', title: '用药计划', description: '院内维护与患者打卡' },
+  { key: 'follow-up', title: '电话随访', description: '沟通记录与随访闭环' },
+  { key: 'hospital-visit', title: '到院提醒', description: '生成提醒与到院结果' },
+  { key: 'handling-history', title: '处置记录', description: '最近处理历史与签名' },
   { key: 'timeline', title: '全流程记录', description: '患者长期管理时间线' },
 ];
 
+const timelineSubsectionTabs: Array<{
+  key: TimelineSubsection;
+  title: string;
+  description: string;
+}> = [
+  { key: 'records', title: '记录明细', description: '按类型筛选患者长期记录' },
+  { key: 'vitals', title: '指标趋势', description: '血压、血糖、血氧等趋势图' },
+  { key: 'closedLoop', title: '处置闭环', description: '预警、任务、随访、结果串联' },
+];
+
 function isPatientDetailWorkspace(value: string | null): value is PatientDetailWorkspace {
-  return value === 'overview' || value === 'disease' || value === 'monitoring' || value === 'medication' || value === 'timeline';
+  return (
+    value === 'overview' ||
+    value === 'hospital-records' ||
+    value === 'actions' ||
+    value === 'disease' ||
+    value === 'monitoring' ||
+    value === 'medication' ||
+    value === 'follow-up' ||
+    value === 'hospital-visit' ||
+    value === 'handling-history' ||
+    value === 'care' ||
+    value === 'timeline'
+  );
 }
 
 function formatTime(value?: string) {
@@ -272,6 +343,26 @@ function formatTime(value?: string) {
 function formatDate(value?: string) {
   if (!value) return '-';
   return new Date(value).toLocaleDateString('zh-CN');
+}
+
+function formatPatientGenderLabel(value?: string) {
+  const gender = String(value ?? '').toUpperCase();
+  if (gender === 'MALE') return '男';
+  if (gender === 'FEMALE') return '女';
+  return '未登记';
+}
+
+function formatPatientAgeLabel(value?: string) {
+  if (!value) return '未登记';
+  const birth = new Date(value);
+  if (Number.isNaN(birth.getTime())) return '未登记';
+
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const monthDiff = now.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birth.getDate())) age -= 1;
+
+  return age >= 0 && age < 130 ? `${age}岁` : '未登记';
 }
 
 function getTimelineCardClass(type: string) {
@@ -300,6 +391,26 @@ function toIsoDateTime(value: string) {
   return value ? new Date(value).toISOString() : undefined;
 }
 
+function toIsoDateBoundary(value: string, endOfDay = false) {
+  if (!value) return undefined;
+  const suffix = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
+  return new Date(`${value}${suffix}`).toISOString();
+}
+
+function normalizeFollowUpListResponse(payload: FollowUpListResponse | FollowUpRecordItem[]): FollowUpListResponse {
+  if (Array.isArray(payload)) {
+    return {
+      items: payload,
+      total: payload.length,
+      skip: 0,
+      take: payload.length,
+      hasMore: false,
+    };
+  }
+
+  return payload;
+}
+
 
 function parseTimeList(value: string) {
   return value
@@ -325,17 +436,24 @@ function formatNextDose(value?: string) {
 
 export function PatientDetailPage() {
   const { patientId } = useParams();
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
-
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<PatientTimelineResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  // prominent-feedback-bridge-v1
+  useFeedbackMessageBridge(message, error);
   const [activeTimelineType, setActiveTimelineType] = useState('ALL');
+  const [activeTimelineSubsection, setActiveTimelineSubsection] = useState<TimelineSubsection>('records');
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [showAllTaskHistory, setShowAllTaskHistory] = useState(false);
   const [activeWorkspace, setActiveWorkspace] = useState<PatientDetailWorkspace>('overview');
+  const [taskPanelOpen, setTaskPanelOpen] = useState(() => searchParams.get('taskPanel') === '1' || Boolean(searchParams.get('taskId')));
+  const [taskPanelWidthPercent, setTaskPanelWidthPercent] = useState(() => {
+    const saved = Number(window.localStorage.getItem('patient_detail_task_panel_width_percent') ?? '36');
+    return Number.isFinite(saved) ? Math.min(46, Math.max(30, saved)) : 36;
+  });
   const [cleaningTestData, setCleaningTestData] = useState(false);
 
   const [showDiseaseForm, setShowDiseaseForm] = useState(false);
@@ -353,8 +471,10 @@ export function PatientDetailPage() {
   const [diseaseDataSource, setDiseaseDataSource] = useState('NURSE_INPUT');
 
   const [savingVital, setSavingVital] = useState(false);
-  const [vitalType, setVitalType] = useState('SYSTOLIC_BP');
+  const [vitalType, setVitalType] = useState('BLOOD_PRESSURE');
   const [vitalValue, setVitalValue] = useState('');
+  const [systolicValue, setSystolicValue] = useState('');
+  const [diastolicValue, setDiastolicValue] = useState('');
   const [vitalUnit, setVitalUnit] = useState('mmHg');
   const [vitalMeasuredAt, setVitalMeasuredAt] = useState('');
   const [manualAbnormal, setManualAbnormal] = useState(false);
@@ -413,11 +533,49 @@ export function PatientDetailPage() {
   const [syncRelatedTasksOnRiskResolve, setSyncRelatedTasksOnRiskResolve] = useState(true);
 
   const [savingFollowUp, setSavingFollowUp] = useState(false);
+  const [followUpFormOpen, setFollowUpFormOpen] = useState(false);
+  const [followUpHistoryLoaded, setFollowUpHistoryLoaded] = useState(false);
+  const [followUpHistoryLoading, setFollowUpHistoryLoading] = useState(false);
+  const [followUpHistoryLoadingMore, setFollowUpHistoryLoadingMore] = useState(false);
+  const [followUpHistoryError, setFollowUpHistoryError] = useState('');
+  const [followUpHistory, setFollowUpHistory] = useState<FollowUpRecordItem[]>([]);
+  const [followUpHistoryTotal, setFollowUpHistoryTotal] = useState(0);
+  const [followUpHistoryHasMore, setFollowUpHistoryHasMore] = useState(false);
+  const [followUpCreatedFrom, setFollowUpCreatedFrom] = useState('');
+  const [followUpCreatedTo, setFollowUpCreatedTo] = useState('');
   const [followUpType, setFollowUpType] = useState('PHONE');
+  const [followUpContactOutcome, setFollowUpContactOutcome] = useState('CONTACTED');
+  const [followUpConclusion, setFollowUpConclusion] = useState('CONTINUE_OBSERVE');
   const [content, setContent] = useState('');
   const [result, setResult] = useState('');
   const [suggestion, setSuggestion] = useState('');
   const [nextFollowUpTime, setNextFollowUpTime] = useState('');
+  const [followUpSignature, setFollowUpSignature] = useState('');
+
+  // phone-follow-up-next-visit-patch:state — see scripts/apply_phone_followup_next_visit_patch.py
+  const [activeNextFollowUp, setActiveNextFollowUp] = useState<{
+    followUpRecordId: string;
+    nextFollowUpTime: string;
+    sourceFollowUpType?: string;
+    sourceFollowUpTime?: string;
+    operatorId?: string | null;
+    recordCreatedAt?: string;
+  } | null>(null);
+  const [activeNextFollowUpTask, setActiveNextFollowUpTask] = useState<{
+    id: string;
+    title: string;
+    type: string;
+    status: string;
+    dueAt?: string | null;
+  } | null>(null);
+  const [activeNextFollowUpLoading, setActiveNextFollowUpLoading] = useState(false);
+  const [editingNextFollowUp, setEditingNextFollowUp] = useState(false);
+  const [nextFollowUpEditDraft, setNextFollowUpEditDraft] = useState('');
+  const [savingNextFollowUp, setSavingNextFollowUp] = useState(false);
+  const [overwrittenNextFollowUpNotice, setOverwrittenNextFollowUpNotice] = useState<{
+    previous: string;
+    next: string;
+  } | null>(null);
 
   async function loadTimeline() {
     if (!patientId) {
@@ -459,13 +617,80 @@ export function PatientDetailPage() {
     }
   }
 
+  async function loadFollowUpHistory(options: { reset?: boolean } = {}) {
+    if (!patientId) return;
+
+    const reset = options.reset === true;
+    const skip = reset ? 0 : followUpHistory.length;
+
+    if (reset) {
+      setFollowUpHistoryLoading(true);
+    } else {
+      setFollowUpHistoryLoadingMore(true);
+    }
+    setFollowUpHistoryError('');
+
+    try {
+      const response = await api.get<FollowUpListResponse | FollowUpRecordItem[]>(`/patients/${patientId}/follow-ups`, {
+        params: {
+          followUpType: 'PHONE',
+          sortBy: 'createdAt',
+          sortOrder: 'desc',
+          skip,
+          take: FOLLOW_UP_HISTORY_PAGE_SIZE,
+          createdFrom: toIsoDateBoundary(followUpCreatedFrom),
+          createdTo: toIsoDateBoundary(followUpCreatedTo, true),
+        },
+      });
+      const payload = normalizeFollowUpListResponse(response.data);
+      const nextItems = reset ? payload.items : [...followUpHistory, ...payload.items];
+      const uniqueItems = Array.from(new Map(nextItems.map((item) => [item.id, item])).values());
+
+      setFollowUpHistory(uniqueItems);
+      setFollowUpHistoryTotal(payload.total);
+      setFollowUpHistoryHasMore(payload.hasMore);
+      setFollowUpHistoryLoaded(true);
+    } catch (err) {
+      console.error(err);
+      setFollowUpHistoryError(getApiErrorMessage(err, '电话随访历史加载失败，请稍后重试。'));
+    } finally {
+      setFollowUpHistoryLoading(false);
+      setFollowUpHistoryLoadingMore(false);
+    }
+  }
+
+  useEffect(() => {
+    setFollowUpHistory([]);
+    setFollowUpHistoryTotal(0);
+    setFollowUpHistoryHasMore(false);
+    setFollowUpHistoryLoaded(false);
+    setFollowUpFormOpen(false);
+  }, [patientId]);
+
   useEffect(() => {
     loadTimeline();
   }, [patientId]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'follow-up' || followUpHistoryLoaded || followUpHistoryLoading) return;
+    loadFollowUpHistory({ reset: true });
+  }, [activeWorkspace, followUpHistoryLoaded, followUpHistoryLoading, patientId]);
+
+  // phone-follow-up-next-visit-patch:tab-effect
+  useEffect(() => {
+    if (activeWorkspace !== 'follow-up') return;
+    loadActiveNextFollowUp();
+    // intentionally not depending on the loader identity
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspace, patientId]);
+
+  useEffect(() => {
     const requestedWorkspace = searchParams.get('workspace');
     const requestedFocus = searchParams.get('focus');
+
+    if (searchParams.get('taskPanel') === '1' || searchParams.get('taskId')) {
+      setTaskPanelOpen(true);
+    }
 
     if (requestedWorkspace === 'risk' || requestedWorkspace === 'actions' || requestedWorkspace === 'care') {
       setActiveWorkspace('timeline');
@@ -474,24 +699,36 @@ export function PatientDetailPage() {
     }
 
     if (requestedFocus === 'alert') {
+      setActiveTimelineSubsection('records');
       setActiveTimelineType('RISK_ALERT');
       const requestedAlertId = searchParams.get('alertId');
       if (requestedAlertId) setSelectedRiskAlertId(requestedAlertId);
     } else if (requestedFocus === 'task') {
+      setActiveTimelineSubsection('records');
       setActiveTimelineType('TASK');
     } else if (requestedFocus === 'vitals') {
+      setActiveTimelineSubsection('vitals');
       setActiveTimelineType('VITAL_RECORD');
     }
   }, [searchParams]);
 
+
   const visibleTimeline = useMemo(() => {
     if (!data) return [];
 
+    const withoutStandaloneOpenAlerts = data.timeline.filter((item) => {
+      if (item.type !== 'RISK_ALERT') return true;
+      if (item.data?.status !== 'OPEN' && item.data?.status !== 'IN_PROGRESS') return true;
+
+      // 风险预警只作为任务触发依据展示；前端不再把 open 预警当作单独事项。
+      return false;
+    });
+
     if (showAllHistory) {
-      return data.timeline;
+      return withoutStandaloneOpenAlerts;
     }
 
-    return data.timeline.filter((item) => !isLowPriorityHistory(item));
+    return withoutStandaloneOpenAlerts.filter((item) => !isLowPriorityHistory(item));
   }, [data, showAllHistory]);
 
   const hiddenHistoryCount = useMemo(() => {
@@ -560,6 +797,66 @@ export function PatientDetailPage() {
     return visibleTimeline.filter((item) => item.type === activeTimelineType);
   }, [activeTimelineType, visibleTimeline]);
 
+  // 闭环事件数据聚合
+  const closedLoopEvents = useMemo(() => {
+    if (!data) return [];
+    const alerts = data.timeline.filter((item) => item.type === 'RISK_ALERT');
+    const tasks = data.timeline.filter((item) => item.type === 'TASK');
+    const followUps = data.timeline.filter((item) => item.type === 'FOLLOW_UP');
+
+    return alerts.map((alert) => {
+      const relatedTask = tasks.find((t) => t.data?.relatedAlertId === alert.data?.id);
+      const relatedFollowUp = followUps.find((f) => {
+        const fTime = new Date(f.time).getTime();
+        const aTime = new Date(alert.time).getTime();
+        return fTime > aTime && fTime - aTime < 86400000 * 3;
+      });
+
+      const isResolved = alert.data?.status === 'RESOLVED' || alert.data?.status === 'DISMISSED';
+      const isInProgress = relatedTask?.data?.status === 'PENDING';
+
+      let result = '';
+      if (isResolved) {
+        result = relatedTask?.data?.status === 'DONE'
+          ? '任务已完成，预警已处置'
+          : '预警已处置';
+      }
+
+      return {
+        id: alert.data?.id || `${alert.time}-${alert.title}`,
+        title: alert.title || '异常处置闭环',
+        date: new Date(alert.time).toLocaleDateString('zh-CN'),
+        status: (isResolved ? 'resolved' : isInProgress ? 'in-progress' : 'open') as 'resolved' | 'open' | 'in-progress',
+        trigger: alert,
+        systemJudgment: alert.data?.triggerRule
+          ? `${riskLabelMap[alert.data.riskLevel] || alert.data.riskLevel}预警，规则：${alert.data.triggerRule}`
+          : `${riskLabelMap[alert.data?.riskLevel] || ''}预警`,
+        task: relatedTask,
+        action: relatedFollowUp,
+        result,
+      };
+    }).sort((a, b) => {
+      const order = { open: 0, 'in-progress': 1, resolved: 2 };
+      return order[a.status] - order[b.status];
+    });
+  }, [data]);
+
+  // vital-trend-range-state-v1: shared time-range filter for every trend chart on this page.
+  const [vitalTrendRange, setVitalTrendRange] = useState(DEFAULT_TREND_RANGE);
+
+  // 指标趋势图的事件标注
+  const vitalEventMarkers = useMemo(() => {
+    if (!data) return [];
+    const markers: Array<{ time: string; type: 'alert' | 'followup' | 'recheck'; label: string }> = [];
+    data.timeline.filter((item) => item.type === 'RISK_ALERT').forEach((alert) => {
+      markers.push({ time: alert.time, type: 'alert', label: '预警' });
+    });
+    data.timeline.filter((item) => item.type === 'FOLLOW_UP').forEach((fu) => {
+      markers.push({ time: fu.time, type: 'followup', label: '随访' });
+    });
+    return markers;
+  }, [data]);
+
   function countByType(type: string) {
     if (type === 'ALL') return visibleTimeline.length;
     return visibleTimeline.filter((item) => item.type === type).length;
@@ -568,8 +865,9 @@ export function PatientDetailPage() {
   function handleVitalTypeChange(nextType: string) {
     setVitalType(nextType);
 
-    if (nextType === 'BLOOD_PRESSURE' || nextType === 'SYSTOLIC_BP' || nextType === 'DIASTOLIC_BP') {
+    if (nextType === 'BLOOD_PRESSURE') {
       setVitalUnit('mmHg');
+      setVitalValue('');
     } else if (nextType === 'BLOOD_GLUCOSE') {
       setVitalUnit('mmol/L');
     } else if (nextType === 'WEIGHT') {
@@ -584,41 +882,6 @@ export function PatientDetailPage() {
   function resetNotice() {
     setMessage('');
     setError('');
-  }
-
-  async function startRiskAlertTaskFromDetail(item: TimelineEvent) {
-    if (!patientId || !item.data?.id || processingActionId) return;
-
-    setProcessingActionId(item.data.id);
-    resetNotice();
-
-    try {
-      const dueAt = new Date();
-      if (item.data?.riskLevel === 'VERY_HIGH') dueAt.setHours(dueAt.getHours() + 4);
-      else if (item.data?.riskLevel === 'HIGH') dueAt.setHours(dueAt.getHours() + 24);
-      else dueAt.setHours(dueAt.getHours() + 72);
-
-      const taskRes = await api.post(`/patients/${patientId}/tasks`, {
-        title: localizeBackendText(item.title).replace(/^风险预警：/, '风险随访：'),
-        type: 'RISK_ALERT_FOLLOW_UP',
-        dueAt: dueAt.toISOString(),
-        assigneeId: nurseId,
-        relatedAlertId: item.data.id,
-      });
-
-      await api.patch(`/risk-alerts/${item.data.id}/in-progress`, {
-        handledBy: nurseId,
-        handlingNote: '护士已从患者详情页将风险预警转为统一任务处理。',
-      });
-
-      navigate(`/patients/${patientId}/task-processing?taskId=${taskRes.data.id}&mode=phone`);
-    } catch (err) {
-      console.error(err);
-      setError(getApiErrorMessage(err, '风险预警转任务失败，请稍后重试。'));
-      await loadTimeline();
-    } finally {
-      setProcessingActionId(null);
-    }
   }
 
   async function submitDiseaseProfile(event: FormEvent) {
@@ -667,18 +930,41 @@ export function PatientDetailPage() {
     setSavingVital(true);
 
     try {
-      const res = await api.post(`/patients/${patientId}/vital-records`, {
-        type: vitalType,
-        value: Number(vitalValue),
-        unit: vitalUnit,
-        measuredAt: toIsoDateTime(vitalMeasuredAt) ?? new Date().toISOString(),
-        dataSource: 'NURSE_INPUT',
-        isAbnormal: manualAbnormal,
-        monitoringPlanId: vitalMonitoringPlanId || undefined,
-        note: vitalNote,
-      });
+      const measuredAt = toIsoDateTime(vitalMeasuredAt) ?? new Date().toISOString();
+      const payload =
+        vitalType === 'BLOOD_PRESSURE'
+          ? {
+              type: 'BLOOD_PRESSURE',
+              systolicValue: Number(systolicValue),
+              diastolicValue: Number(diastolicValue),
+              unit: 'mmHg',
+              measuredAt,
+              dataSource: 'NURSE_INPUT',
+              isAbnormal: manualAbnormal,
+              monitoringPlanId: vitalMonitoringPlanId || undefined,
+              note: vitalNote,
+            }
+          : {
+              type: vitalType,
+              value: Number(vitalValue),
+              unit: vitalUnit,
+              measuredAt,
+              dataSource: 'NURSE_INPUT',
+              isAbnormal: manualAbnormal,
+              monitoringPlanId: vitalMonitoringPlanId || undefined,
+              note: vitalNote,
+            };
+
+      if (vitalType === 'BLOOD_PRESSURE' && (!systolicValue || !diastolicValue)) {
+        setError('选择血压时必须同时填写收缩压和舒张压。');
+        return;
+      }
+
+      const res = await api.post(`/patients/${patientId}/vital-records`, payload);
 
       setVitalValue('');
+      setSystolicValue('');
+      setDiastolicValue('');
       setVitalMeasuredAt('');
       setManualAbnormal(false);
       setVitalNote('');
@@ -1013,6 +1299,150 @@ export function PatientDetailPage() {
     });
   }
 
+  // phone-follow-up-next-visit-patch:helpers
+  async function loadActiveNextFollowUp() {
+    if (!patientId) {
+      setActiveNextFollowUp(null);
+      setActiveNextFollowUpTask(null);
+      return;
+    }
+    setActiveNextFollowUpLoading(true);
+    try {
+      const res = await api.get(
+        `/patients/${patientId}/follow-ups/active-next-follow-up`,
+      );
+      const payload = res.data ?? {};
+      setActiveNextFollowUp(payload.active ?? null);
+      setActiveNextFollowUpTask(payload.scheduledTask ?? null);
+    } catch (err) {
+      console.warn('Failed to load active next follow-up schedule.', err);
+      setActiveNextFollowUp(null);
+      setActiveNextFollowUpTask(null);
+    } finally {
+      setActiveNextFollowUpLoading(false);
+    }
+  }
+
+  function beginEditNextFollowUp() {
+    if (!activeNextFollowUp) return;
+    // datetime-local needs YYYY-MM-DDTHH:mm in local time.
+    const d = new Date(activeNextFollowUp.nextFollowUpTime);
+    if (Number.isNaN(d.getTime())) {
+      setNextFollowUpEditDraft('');
+    } else {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      setNextFollowUpEditDraft(
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      );
+    }
+    setEditingNextFollowUp(true);
+  }
+
+  function cancelEditNextFollowUp() {
+    setEditingNextFollowUp(false);
+    setNextFollowUpEditDraft('');
+  }
+
+  async function saveEditedNextFollowUp() {
+    if (!patientId || savingNextFollowUp) return;
+    const iso = toIsoDateTime(nextFollowUpEditDraft);
+    if (!iso) {
+      setError('请填写有效的下次随访时间。');
+      return;
+    }
+    resetNotice();
+    setSavingNextFollowUp(true);
+    try {
+      await api.patch(
+        `/patients/${patientId}/follow-ups/active-next-follow-up`,
+        { nextFollowUpTime: iso, editReason: '在患者详情页内调整下次随访时间' },
+      );
+      setMessage('下次随访时间已更新。');
+      setEditingNextFollowUp(false);
+      setNextFollowUpEditDraft('');
+      await Promise.all([
+        loadActiveNextFollowUp(),
+        loadFollowUpHistory({ reset: true }),
+        loadTimeline(),
+      ]);
+    } catch (err) {
+      console.error(err);
+      setError(getApiErrorMessage(err, '下次随访时间更新失败，请稍后重试。'));
+    } finally {
+      setSavingNextFollowUp(false);
+    }
+  }
+
+  async function cancelActiveNextFollowUp() {
+    if (!patientId || savingNextFollowUp) return;
+    if (!window.confirm('确定取消该患者当前的下次随访时间？取消后已生成的电话随访提醒任务也会一并关闭。')) {
+      return;
+    }
+    resetNotice();
+    setSavingNextFollowUp(true);
+    try {
+      await api.patch(
+        `/patients/${patientId}/follow-ups/active-next-follow-up`,
+        { nextFollowUpTime: null, editReason: '在患者详情页内取消下次随访时间' },
+      );
+      setMessage('下次随访时间已取消，关联的电话随访提醒任务也已关闭。');
+      setEditingNextFollowUp(false);
+      setNextFollowUpEditDraft('');
+      await Promise.all([
+        loadActiveNextFollowUp(),
+        loadFollowUpHistory({ reset: true }),
+        loadTimeline(),
+      ]);
+    } catch (err) {
+      console.error(err);
+      setError(getApiErrorMessage(err, '取消下次随访时间失败，请稍后重试。'));
+    } finally {
+      setSavingNextFollowUp(false);
+    }
+  }
+
+  function primeFollowUpDraft() {
+    setFollowUpType('PHONE');
+    setFollowUpContactOutcome('CONTACTED');
+    setFollowUpConclusion('CONTINUE_OBSERVE');
+    setContent('电话联系患者，核对近期症状、指标变化、用药依从性和复诊/复测安排。');
+    setResult('已电话联系，待补充患者反馈。');
+    setSuggestion('请患者继续按慢病管理要求监测指标，如出现危险症状及时就医。');
+    setNextFollowUpTime('');
+    setFollowUpSignature('');
+  }
+
+  function openFollowUpTab(_taskId?: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set('workspace', 'follow-up');
+    next.delete('taskPanel');
+    next.delete('taskId');
+    next.delete('mode');
+    next.delete('followUpTaskId');
+    setSearchParams(next, { replace: false });
+    setTaskPanelOpen(false);
+    setActiveWorkspace('follow-up');
+    setFollowUpFormOpen(true);
+    primeFollowUpDraft();
+  }
+
+  function resetFollowUpForm() {
+    setContent('');
+    setResult('');
+    setSuggestion('');
+    setNextFollowUpTime('');
+    setFollowUpSignature('');
+    setFollowUpContactOutcome('CONTACTED');
+    setFollowUpConclusion('CONTINUE_OBSERVE');
+    setFollowUpType('PHONE');
+  }
+
+  function submitFollowUpHistorySearch(event: FormEvent) {
+    event.preventDefault();
+    setFollowUpHistoryLoaded(false);
+    loadFollowUpHistory({ reset: true });
+  }
+
   function selectRiskAlert(alertId: string) {
     setSelectedRiskAlertId(alertId);
     const alert = activeRiskAlerts.find((item) => item.data?.id === alertId);
@@ -1114,28 +1544,55 @@ export function PatientDetailPage() {
     event.preventDefault();
     if (!patientId || savingFollowUp) return;
 
+    const signature = followUpSignature.trim();
+    if (!signature) {
+      setError('请填写电子签名后再保存电话随访记录。');
+      return;
+    }
+
     resetNotice();
     setSavingFollowUp(true);
 
     try {
-      await api.post(`/patients/${patientId}/follow-ups`, {
+      // phone-follow-up-next-visit-patch:submit
+      const submitRes = await api.post(`/patients/${patientId}/follow-ups`, {
         followUpType,
         followUpTime: new Date().toISOString(),
-        content,
-        result,
-        suggestion,
+        content: [
+          `联系结果：${followUpContactOutcome}`,
+          content.trim(),
+        ].filter(Boolean).join('\n'),
+        result: `随访结论：${followUpConclusion}。${result.trim()}`,
+        suggestion: `${suggestion.trim()}\n电子签名：${signature}`,
         nextFollowUpTime: toIsoDateTime(nextFollowUpTime),
         operatorId: nurseId,
       });
 
-      setContent('');
-      setResult('');
-      setSuggestion('');
-      setNextFollowUpTime('');
-      setMessage('随访记录已保存。');
-      setActiveTimelineType('FOLLOW_UP');
+      const submitPayload = submitRes?.data ?? {};
+      const replaced = submitPayload.replacedPreviousScheduled;
+      const generatedReminder = submitPayload.generatedReminderTask;
 
-      await loadTimeline();
+      resetFollowUpForm();
+      setFollowUpFormOpen(false);
+      if (replaced && replaced.nextFollowUpTime && submitPayload.nextFollowUpTime) {
+        setOverwrittenNextFollowUpNotice({
+          previous: String(replaced.nextFollowUpTime),
+          next: String(submitPayload.nextFollowUpTime),
+        });
+        setMessage('电话随访记录已保存，原下次随访时间已被本次记录覆盖。');
+      } else if (generatedReminder) {
+        setMessage('电话随访记录已保存，已自动生成「电话随访」提醒任务。');
+      } else {
+        setMessage('电话随访记录已保存。');
+      }
+      setActiveTimelineType('FOLLOW_UP');
+      setFollowUpHistoryLoaded(false);
+
+      await Promise.all([
+        loadTimeline(),
+        loadFollowUpHistory({ reset: true }),
+        loadActiveNextFollowUp(),
+      ]);
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '随访记录保存失败，请稍后重试。'));
@@ -1143,6 +1600,7 @@ export function PatientDetailPage() {
       setSavingFollowUp(false);
     }
   }
+
 
   async function submitRiskDispositionAction(event: FormEvent) {
     event.preventDefault();
@@ -1177,7 +1635,7 @@ export function PatientDetailPage() {
       if (selectedActions.includes('URGENT_VISIT')) {
         await api.post(`/patients/${patientId}/hospital-visit-reminders`, {
           sourceRiskAlertId: alertId,
-          reason: '基于当前风险预警，提醒患者立即前往医院或门急诊评估',
+          reason: '立即前往医院/门急诊评估：基于当前风险预警，提醒患者到院检查',
           note: `${note}；交代内容：${instruction}；电子签名：${signature}`,
           electronicSignature: signature,
         });
@@ -1230,12 +1688,16 @@ export function PatientDetailPage() {
           `处置记录：${note}`,
           instruction ? `交代内容：${instruction}` : '',
           `电子签名：${signature}`,
-          syncRelatedTasksOnRiskResolve ? '同步结果：已确认一并完成关联待办任务' : '同步结果：暂不变更关联待办任务',
+          selectedActions.includes('URGENT_VISIT')
+            ? '同步结果：保留到院提醒任务，待护士后续闭环处理'
+            : syncRelatedTasksOnRiskResolve
+              ? '同步结果：已确认一并完成关联待办任务'
+              : '同步结果：暂不变更关联待办任务',
         ].filter(Boolean).join('；'),
-        syncRelatedTasks: syncRelatedTasksOnRiskResolve,
+        syncRelatedTasks: syncRelatedTasksOnRiskResolve && !selectedActions.includes('URGENT_VISIT'),
       });
 
-      setMessage('风险处置已提交，相关预警已自动标记为已处理。');
+      setMessage(selectedActions.includes('URGENT_VISIT') ? '风险处置已提交，已生成到院提醒任务；相关预警已自动标记为已处理。' : '风险处置已提交，相关预警已自动标记为已处理。');
       setRiskDispositionActions(['FOLLOW_UP']);
       setRiskDispositionNote('');
       setRiskDispositionInstruction('');
@@ -1287,6 +1749,58 @@ export function PatientDetailPage() {
     }
   }
 
+
+  function openInlineTaskPanel(taskId?: string, mode = 'close') {
+    const next = new URLSearchParams(searchParams);
+    next.set('taskPanel', '1');
+    if (taskId) next.set('taskId', taskId);
+    if (mode) next.set('mode', mode);
+    setSearchParams(next, { replace: false });
+    setTaskPanelOpen(true);
+  }
+
+  function closeInlineTaskPanel() {
+    const next = new URLSearchParams(searchParams);
+    next.delete('taskPanel');
+    next.delete('taskId');
+    next.delete('mode');
+    setSearchParams(next, { replace: true });
+    setTaskPanelOpen(false);
+  }
+
+  function selectInlineTask(taskId: string, mode = 'close') {
+    if (!taskId) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('taskPanel', '1');
+    next.set('taskId', taskId);
+    next.set('mode', mode);
+    setSearchParams(next, { replace: false });
+    setTaskPanelOpen(true);
+  }
+
+  function startTaskPanelResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const shell = event.currentTarget.closest('.patient-detail-split-shell') as HTMLElement | null;
+    if (!shell) return;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const rect = shell.getBoundingClientRect();
+      if (!rect.width) return;
+      const rightWidth = rect.right - moveEvent.clientX;
+      const nextPercent = Math.min(46, Math.max(30, Math.round((rightWidth / rect.width) * 100)));
+      setTaskPanelWidthPercent(nextPercent);
+      window.localStorage.setItem('patient_detail_task_panel_width_percent', String(nextPercent));
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  }
+
   if (loading && !data) {
     return <div className="loading-state">正在加载患者长期健康档案...</div>;
   }
@@ -1318,43 +1832,51 @@ export function PatientDetailPage() {
 
   const { patient } = data;
   const diseaseProfileCount = data.timeline.filter((item) => item.type === 'DISEASE_PROFILE').length;
-  const activeRiskAlertCount = data.timeline.filter(
-    (item) => item.type === 'RISK_ALERT' && item.data?.status === 'OPEN',
-  ).length;
-  const activeTaskCount = data.timeline.filter(
-    (item) => item.type === 'TASK' && item.data?.status === 'PENDING',
-  ).length;
-  const followUpCount = data.timeline.filter((item) => item.type === 'FOLLOW_UP').length;
-  const recentVitalCount = data.timeline.filter((item) => item.type === 'VITAL_RECORD').length;
-  const questionnaireCount = data.timeline.filter((item) => item.type === 'QUESTIONNAIRE_RESULT').length;
-  const activeRiskAlerts = data.timeline.filter(
-    (item) => item.type === 'RISK_ALERT' && item.data?.status === 'OPEN',
-  );
   const activeTasks = data.timeline.filter(
-    (item) => item.type === 'TASK' && item.data?.status === 'PENDING',
+    (item) => item.type === 'TASK' && ['PENDING', 'IN_PROGRESS'].includes(item.data?.status),
   );
   const activeTaskRelatedAlertIds = new Set(
     activeTasks.map((item) => item.data?.relatedAlertId).filter(Boolean) as string[],
   );
-  const riskAlertById = new Map(activeRiskAlerts.map((item) => [item.data?.id, item]));
-  const alertOnlyRiskAlerts = activeRiskAlerts.filter((item) => !activeTaskRelatedAlertIds.has(item.data?.id));
-  const unifiedOpenItemCount = activeTasks.length + alertOnlyRiskAlerts.length;
+  const allOpenRiskAlerts = data.timeline.filter(
+    (item) => item.type === 'RISK_ALERT' && item.data?.status === 'OPEN',
+  );
+  const activeRiskAlerts = allOpenRiskAlerts.filter((item) =>
+    activeTaskRelatedAlertIds.has(item.data?.id),
+  );
+  const activeRiskAlertCount = activeRiskAlerts.length;
+  const activeTaskCount = activeTasks.length;
+  const followUpTimeline = data.timeline
+    .filter((item) => item.type === 'FOLLOW_UP')
+    .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime());
+  const phoneFollowUpTimeline = followUpTimeline.filter((item) => item.data?.followUpType === 'PHONE');
+  const followUpCount = followUpTimeline.length;
+  const questionnaireCount = data.timeline.filter((item) => item.type === 'QUESTIONNAIRE_RESULT').length;
+  const unifiedOpenItemCount = activeTasks.length;
   const firstOpenTask = activeTasks[0];
-  const firstAlertOnly = alertOnlyRiskAlerts[0];
-  const defaultTaskProcessingUrl = firstOpenTask?.data?.id
-    ? `/patients/${patientId}/task-processing?taskId=${firstOpenTask.data.id}&mode=phone`
-    : `/patients/${patientId}/task-processing`;
   const diseaseProfileTimeline = data.timeline.filter((item) => item.type === 'DISEASE_PROFILE');
   const vitalRecordTimeline = data.timeline.filter((item) => item.type === 'VITAL_RECORD');
+  const recentVitals = buildLatestVitalDisplayItemsByMetric(vitalRecordTimeline);
+  const recentVitalCount = recentVitals.length;
   const selectedRiskAlert = activeRiskAlerts.find((item) => item.data?.id === selectedRiskAlertId) ?? activeRiskAlerts[0];
   const selectedRiskAlertRelatedTasks = activeTasks.filter((item) => item.data?.relatedAlertId === selectedRiskAlert?.data?.id);
   const selectedRiskAlertRelatedTask = selectedRiskAlertRelatedTasks[0];
-  const recentVitals = vitalRecordTimeline.slice(0, 4);
   const latestDiseaseProfile = data.timeline.find((item) => item.type === 'DISEASE_PROFILE');
   const latestQuestionnaire = data.timeline.find((item) => item.type === 'QUESTIONNAIRE_RESULT');
-  const commandEmptyText = unifiedOpenItemCount
-    ? '任务、风险预警已合并为统一处置队列。先进入任务处理页，再选择电话随访、复测任务或计划调整。'
-    : '当前没有待处理任务；风险预警已处置或未触发。可继续维护监测、用药和随访计划。';
+  const handlingHistoryTimeline = data.timeline
+    .filter((item) => {
+      if (item.type === 'FOLLOW_UP') return true;
+      if (item.type === 'TASK') return ['DONE', 'CANCELED', 'IN_PROGRESS'].includes(item.data?.status);
+      if (item.type === 'RISK_ALERT') return ['RESOLVED', 'DISMISSED', 'IN_PROGRESS'].includes(item.data?.status);
+      return false;
+    })
+    .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime());
+  const selectedTaskIdFromUrl = searchParams.get('taskId') ?? firstOpenTask?.data?.id ?? '';
+  const requestedTaskPanelMode = searchParams.get('mode');
+  const shouldShowTaskPanel = taskPanelOpen && activeTasks.length > 0;
+  const splitGridTemplateColumns = shouldShowTaskPanel
+    ? `minmax(0, ${100 - taskPanelWidthPercent}%) 10px minmax(360px, ${taskPanelWidthPercent}%)`
+    : '1fr';
 
   function getWorkspaceCount(key: PatientDetailWorkspace) {
     if (key === 'overview') return unifiedOpenItemCount;
@@ -1362,64 +1884,17 @@ export function PatientDetailPage() {
     if (key === 'disease') return diseaseProfileCount;
     if (key === 'monitoring') return activeMonitoringPlanTimeline.length;
     if (key === 'medication') return activeMedicationTimeline.length;
+    if (key === 'follow-up') return phoneFollowUpTimeline.length;
+    if (key === 'hospital-visit') return activeHospitalVisitReminders.length;
+    if (key === 'handling-history') return handlingHistoryTimeline.length;
     if (key === 'care') return activeTaskCount + followUpCount;
     return visibleTimeline.length;
   }
 
   return (
     <div className="business-page patient-detail-page hospital-record-page">
-      <div className="page-header">
-        <div>
-          <Link className="action-link" to="/patients">← 返回患者档案</Link>
-          <div className="page-kicker">慢病中心患者档案</div>
-          <h1>{patient.name}</h1>
-          <p className="page-subtitle">
-            院内 ID：{patient.hospitalPatientId ?? '-'} · 责任医生：{patient.responsibleDoctorId ?? '-'} · 责任护士：
-            {patient.responsibleNurseId ?? '-'}
-          </p>
-        </div>
-        <div className="patient-hero-actions">
-          {import.meta.env.DEV && (
-            <button
-              className="danger-outline-button"
-              type="button"
-              onClick={cleanupTestData}
-              disabled={cleaningTestData}
-            >
-              {cleaningTestData ? '清理中...' : '清理测试流水'}
-            </button>
-          )}
-          {unifiedOpenItemCount > 0 ? (
-            firstOpenTask?.data?.id ? (
-              <Link className="primary-btn compact-link-btn" to={defaultTaskProcessingUrl}>
-                处理当前任务（{unifiedOpenItemCount}）
-              </Link>
-            ) : (
-              <button
-                className="primary-btn compact-link-btn"
-                type="button"
-                disabled={!firstAlertOnly || processingActionId !== null}
-                onClick={() => firstAlertOnly && startRiskAlertTaskFromDetail(firstAlertOnly)}
-              >
-                生成任务并处理（{unifiedOpenItemCount}）
-              </button>
-            )
-          ) : (
-            <Link className="secondary-btn compact-link-btn" to={defaultTaskProcessingUrl}>
-              查看任务处理页
-            </Link>
-          )}
-          <button className="secondary-btn" type="button" onClick={loadTimeline} disabled={loading}>
-            {loading ? '刷新中...' : '刷新档案'}
-          </button>
-        </div>
-      </div>
-
-      {message && <div className="notice-success operation-inline-success" role="status">{message}</div>}
-      {error && <div className="notice-error operation-inline-error" role="alert">{error}</div>}
-
       {activeHospitalVisitReminders.length > 0 && (
-        <section className="patient-hospital-visit-banner" role="status">
+        <section className="patient-hospital-visit-banner patient-hospital-visit-banner-top" role="status">
           <div>
             <strong>已提示该患者立即前往医院</strong>
             <p>{activeHospitalVisitReminders[0]?.reason}</p>
@@ -1450,13 +1925,204 @@ export function PatientDetailPage() {
             >
               撤销
             </button>
-            <Link className="primary-btn compact-link-btn" to="/hospital-visit-reminders">
+            <Link className="primary-btn compact-link-btn" to={`/hospital-visit-reminders?patientId=${patient.id}`}>
               查看详情
             </Link>
           </div>
         </section>
       )}
 
+      <div className="page-header">
+        <div>
+          <Link className="action-link" to="/patients">← 返回患者档案</Link>
+          <div className="page-kicker">慢病中心患者档案</div>
+          <h1>{patient.name}</h1>
+          <p className="page-subtitle">
+            院内 ID：{patient.hospitalPatientId ?? '-'} · 责任医生：{patient.responsibleDoctorId ?? '-'} · 责任护士：
+            {patient.responsibleNurseId ?? '-'}
+          </p>
+        </div>
+        <div className="patient-hero-actions">
+          {import.meta.env.DEV && (
+            <button
+              className="danger-outline-button"
+              type="button"
+              onClick={cleanupTestData}
+              disabled={cleaningTestData}
+            >
+              {cleaningTestData ? '清理中...' : '清理测试流水'}
+            </button>
+          )}
+          {unifiedOpenItemCount > 0 && firstOpenTask?.data?.id ? (
+            <button className="primary-btn compact-link-btn" type="button" onClick={() => openInlineTaskPanel(firstOpenTask.data.id, 'close')}>
+              处理当前任务（{unifiedOpenItemCount}）
+            </button>
+          ) : (
+            <button className="secondary-btn compact-link-btn" type="button" onClick={() => openInlineTaskPanel()}>
+              查看待办面板
+            </button>
+          )}
+          <button className="secondary-btn" type="button" onClick={loadTimeline} disabled={loading}>
+            {loading ? '刷新中...' : '刷新档案'}
+          </button>
+        </div>
+      </div>
+
+      <div className="patient-snapshot-grid">
+        {/* 卡片1：当前风险 */}
+        <article className={`patient-snapshot-card card-risk ${activeRiskAlertCount > 0 ? '' : ''}`}>
+          <div className="patient-snapshot-card-label">当前风险</div>
+          {activeRiskAlertCount > 0 ? (
+            <>
+              <span className={`patient-snapshot-card-value ${
+                activeRiskAlerts.some(a => a.data?.riskLevel === 'HIGH' || a.data?.riskLevel === 'VERY_HIGH')
+                  ? 'value-danger'
+                  : 'value-warning'
+              }`}>
+                {activeRiskAlertCount} 条
+              </span>
+              <div className="patient-snapshot-card-desc">
+                {activeRiskAlerts[0] && (
+                  <>
+                    <strong>{localizeBackendText(activeRiskAlerts[0].title)}</strong>
+                    <br />
+                    {activeRiskAlerts[0].data?.riskLevel && (
+                      <span className={getRiskClass(activeRiskAlerts[0].data.riskLevel)}>
+                        {riskLabelMap[activeRiskAlerts[0].data.riskLevel]}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              {activeRiskAlerts[0]?.time && (
+                <div className="patient-snapshot-card-footer">
+                  触发时间：{formatTime(activeRiskAlerts[0].time)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="patient-snapshot-card-empty">
+              <div className="patient-snapshot-card-empty-icon">✓</div>
+              <div>暂无未处理风险</div>
+            </div>
+          )}
+        </article>
+
+        {/* 卡片2：当前任务 */}
+        <article className={`patient-snapshot-card card-task ${activeTaskCount > 0 ? '' : ''}`}>
+          <div className="patient-snapshot-card-label">当前任务</div>
+          {activeTaskCount > 0 ? (
+            <>
+              <span className="patient-snapshot-card-value value-warning">{activeTaskCount} 条</span>
+              <div className="patient-snapshot-card-desc">
+                {activeTasks[0] && (
+                  <>
+                    <strong>{localizeBackendText(activeTasks[0].title)}</strong>
+                    <br />
+                    {activeTasks[0].data?.type && taskTypeLabelMap[activeTasks[0].data.type]}
+                  </>
+                )}
+              </div>
+              {activeTasks[0]?.data?.dueDate && (
+                <div className="patient-snapshot-card-footer">
+                  截止时间：{formatTime(activeTasks[0].data.dueDate)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="patient-snapshot-card-empty">
+              <div className="patient-snapshot-card-empty-icon">✓</div>
+              <div>暂无待处理任务</div>
+            </div>
+          )}
+        </article>
+
+        {/* 卡片3：最近指标 */}
+        <article className="patient-snapshot-card card-vital">
+          <div className="patient-snapshot-card-label">最近指标</div>
+          {recentVitals.length > 0 ? (
+            <>
+              <span className="patient-snapshot-card-value value-normal">
+                {recentVitals.length} 类
+              </span>
+              <div className="patient-snapshot-card-desc">
+                {recentVitals[0] && (
+                  <>
+                    <strong>{recentVitals[0].label}</strong>
+                    <br />
+                    <span>{recentVitals[0].valueText}</span>
+                  </>
+                )}
+              </div>
+              {recentVitals[0]?.time && (
+                <div className="patient-snapshot-card-footer">
+                  上传时间：{formatTime(recentVitals[0].time)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="patient-snapshot-card-empty">
+              <div className="patient-snapshot-card-empty-icon">📊</div>
+              <div>暂无指标数据</div>
+            </div>
+          )}
+        </article>
+
+        {/* 卡片4：用药依从性 */}
+        <article className="patient-snapshot-card card-medication">
+          <div className="patient-snapshot-card-label">用药依从性</div>
+          {(() => {
+            const medicationCheckIns = data.timeline.filter(item => item.type === 'MEDICATION_CHECK_IN');
+            const recentCheckIn = medicationCheckIns[0];
+            const todayCheckIns = medicationCheckIns.filter(item => {
+              const itemDate = new Date(item.time).toDateString();
+              const today = new Date().toDateString();
+              return itemDate === today;
+            });
+            const takenToday = todayCheckIns.filter(item => item.data?.taken).length;
+            const missedRecent = medicationCheckIns.slice(0, 7).filter(item => !item.data?.taken).length;
+
+            if (medicationCheckIns.length === 0) {
+              return (
+                <div className="patient-snapshot-card-empty">
+                  <div className="patient-snapshot-card-empty-icon">💊</div>
+                  <div>暂无用药记录</div>
+                </div>
+              );
+            }
+
+            return (
+              <>
+                <span className={`patient-snapshot-card-value ${
+                  missedRecent === 0 ? 'value-normal' : missedRecent <= 2 ? 'value-warning' : 'value-danger'
+                }`}>
+                  {takenToday > 0 ? '今日已服药' : '今日未打卡'}
+                </span>
+                <div className="patient-snapshot-card-desc">
+                  {takenToday > 0 && <span>今日已打卡 {takenToday} 次</span>}
+                  {missedRecent > 0 && (
+                    <>
+                      <br />
+                      <span style={{ color: '#dc2626' }}>近7日漏服 {missedRecent} 次</span>
+                    </>
+                  )}
+                </div>
+                {recentCheckIn?.time && (
+                  <div className="patient-snapshot-card-footer">
+                    最近打卡：{formatTime(recentCheckIn.time)}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </article>
+      </div>
+
+      <div
+        className={shouldShowTaskPanel ? 'patient-detail-split-shell task-panel-open' : 'patient-detail-split-shell'}
+        style={{ gridTemplateColumns: splitGridTemplateColumns }}
+      >
+        <div className="patient-detail-record-pane">
       <div className="patient-detail-workspace-layout">
         <aside className="patient-detail-side-nav" aria-label="患者档案功能导航">
           <div className="patient-detail-side-nav-title">患者档案工作区</div>
@@ -1511,21 +2177,15 @@ export function PatientDetailPage() {
               type="button"
               className={unifiedOpenItemCount > 0 ? 'patient-summary-nav-card summary-card-focus' : 'patient-summary-nav-card'}
               onClick={() => {
-                if (firstOpenTask?.data?.id) {
-                  navigate(defaultTaskProcessingUrl);
-                } else if (firstAlertOnly) {
-                  startRiskAlertTaskFromDetail(firstAlertOnly);
-                } else {
-                  navigate(defaultTaskProcessingUrl);
-                }
+                if (firstOpenTask?.data?.id) openInlineTaskPanel(firstOpenTask.data.id, 'close');
               }}
             >
               <span>统一待处理任务</span>
               <strong>{unifiedOpenItemCount}</strong>
-              <p>{unifiedOpenItemCount ? '任务、预警、复测提醒合并到一个处理入口。' : '暂无待处理任务。'}</p>
-              <em>点击进入任务处理页</em>
+              <p>{unifiedOpenItemCount ? '风险已合并到任务；电话随访和结案分区处理。' : '暂无待处理任务。'}</p>
+              <em>点击打开右侧结案面板</em>
             </button>
-            <button type="button" className="patient-summary-nav-card" onClick={() => { setActiveWorkspace('monitoring'); setActiveTimelineType('VITAL_RECORD'); }}>
+            <button type="button" className="patient-summary-nav-card" onClick={() => { setActiveWorkspace('timeline'); setActiveTimelineSubsection('vitals'); setActiveTimelineType('VITAL_RECORD'); }}>
               <span>指标记录</span>
               <strong>{recentVitalCount}</strong>
               <p>患者端和院内录入的历史指标。</p>
@@ -1537,7 +2197,7 @@ export function PatientDetailPage() {
               <p>当前启用中的院内用药计划。</p>
               <em>点击进入用药计划</em>
             </button>
-            <button type="button" className="patient-summary-nav-card" onClick={() => { setActiveWorkspace('timeline'); setActiveTimelineType('QUESTIONNAIRE_RESULT'); }}>
+            <button type="button" className="patient-summary-nav-card" onClick={() => { setActiveWorkspace('timeline'); setActiveTimelineSubsection('records'); setActiveTimelineType('QUESTIONNAIRE_RESULT'); }}>
               <span>问卷记录</span>
               <strong>{questionnaireCount}</strong>
               <p>{latestQuestionnaire ? `最近评分 ${latestQuestionnaire.data?.score ?? '-'} 分` : '等待患者端提交。'}</p>
@@ -1545,107 +2205,11 @@ export function PatientDetailPage() {
             </button>
           </section>
 
-          <section className="stable-command-board unified-patient-task-board" aria-label="统一任务处理队列">
-            <div className="stable-command-board-header">
-              <div>
-                <span>统一任务处理中心</span>
-                <h2>当前待处理任务</h2>
-                <p>{commandEmptyText}</p>
-              </div>
-              <div className="stable-command-actions">
-                {firstOpenTask?.data?.id ? (
-                  <Link className="button" to={defaultTaskProcessingUrl}>进入任务处理页</Link>
-                ) : firstAlertOnly ? (
-                  <button
-                    className="button"
-                    type="button"
-                    disabled={processingActionId !== null}
-                    onClick={() => startRiskAlertTaskFromDetail(firstAlertOnly)}
-                  >
-                    生成任务并处理
-                  </button>
-                ) : (
-                  <Link className="secondary-button" to={defaultTaskProcessingUrl}>查看任务处理页</Link>
-                )}
-                <button className="secondary-button" type="button" onClick={() => { setActiveWorkspace('timeline'); setActiveTimelineType('TASK'); }}>查看任务时间轴</button>
-              </div>
-            </div>
-
-            <div className="stable-command-grid unified-command-grid">
-              <article className="stable-command-card unified-command-card-main">
-                <div className="stable-command-card-title">
-                  <strong>统一处置队列</strong>
-                  <span>{unifiedOpenItemCount} 条</span>
-                </div>
-                {unifiedOpenItemCount === 0 ? (
-                  <p className="stable-empty-line">当前没有未完成任务。风险预警已不再作为单独处置队列展示。</p>
-                ) : (
-                  <div className="stable-mini-list unified-mini-list">
-                    {activeTasks.slice(0, 5).map((item) => {
-                      const relatedAlert = item.data?.relatedAlertId ? riskAlertById.get(item.data.relatedAlertId) : null;
-                      return (
-                        <div className="stable-mini-row unified-mini-row" key={item.data?.id ?? `${item.time}-${item.title}`}>
-                          <div>
-                            <strong>{localizeBackendText(item.title)}</strong>
-                            <p>
-                              {taskTypeLabelMap[item.data?.type] ?? item.data?.type} · 截止 {formatTime(item.data?.dueAt)}
-                              {relatedAlert ? ` · ${riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}预警已合并` : ''}
-                            </p>
-                            {relatedAlert && (
-                              <small>风险依据：{localizeBackendText(relatedAlert.title)}{relatedAlert.data?.triggerRule ? ` · ${localizeBackendText(relatedAlert.data.triggerRule)}` : ''}</small>
-                            )}
-                          </div>
-                          <Link className="timeline-action-button primary" to={`/patients/${patientId}/task-processing?taskId=${item.data?.id}&mode=phone`}>
-                            处理任务
-                          </Link>
-                        </div>
-                      );
-                    })}
-                    {alertOnlyRiskAlerts.slice(0, Math.max(0, 5 - activeTasks.length)).map((item) => (
-                      <div className="stable-mini-row unified-mini-row alert-only-inline-row" key={item.data?.id ?? `${item.time}-${item.title}`}>
-                        <div>
-                          <strong>{localizeBackendText(item.title)}</strong>
-                          <p>{riskLabelMap[item.data?.riskLevel] ?? item.data?.riskLevel}预警 · 尚未生成随访任务 · {formatTime(item.time)}</p>
-                          <small>{item.data?.triggerRule ? `风险依据：${localizeBackendText(item.data.triggerRule)}` : '点击后会自动生成风险随访任务，并进入统一任务处理页。'}</small>
-                        </div>
-                        <button
-                          className="timeline-action-button primary"
-                          type="button"
-                          disabled={processingActionId !== null}
-                          onClick={() => startRiskAlertTaskFromDetail(item)}
-                        >
-                          生成任务并处理
-                        </button>
-                      </div>
-                    ))}
-                    {unifiedOpenItemCount > 5 && <p className="stable-more-line">另有 {unifiedOpenItemCount - 5} 条事项，请进入任务处理页逐项处理。</p>}
-                  </div>
-                )}
-              </article>
-
-              <article className="stable-command-card">
-                <div className="stable-command-card-title">
-                  <strong>最近健康指标</strong>
-                  <span>{recentVitals.length} 条</span>
-                </div>
-                {recentVitals.length === 0 ? (
-                  <p className="stable-empty-line">暂无患者端或院内指标记录。</p>
-                ) : (
-                  <div className="stable-mini-list">
-                    {recentVitals.map((item) => (
-                      <div className="stable-mini-row stable-mini-row-readonly" key={`${item.time}-${item.title}`}>
-                        <div>
-                          <strong>{vitalTypeLabelMap[item.data?.type] ?? item.data?.type}</strong>
-                          <p>{item.data?.value} {item.data?.unit} · {item.data?.isAbnormal ? '异常' : '正常'} · {formatTime(item.time)}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </article>
-            </div>
-          </section>
         </>
+      )}
+
+      {activeWorkspace === 'hospital-records' && (
+        <HospitalRecordsView patientId={patientId} />
       )}
 
       {false && activeWorkspace === 'actions' && (
@@ -1655,7 +2219,7 @@ export function PatientDetailPage() {
               <div>
                 <span>护士风险处置中心</span>
                 <h2>风险处置</h2>
-                <p className="section-hint">先选择需要处置的风险预警，再勾选处置方式。提交处置后，该风险预警会自动标记为已处理。普通待办任务和风险随访任务统一进入患者任务处理页。</p>
+                <p className="section-hint">先选择需要处置的风险预警，再勾选处置方式。提交处置后，该风险预警会自动标记为已处理。普通待办任务和风险随访任务在患者详情页内分区处理。</p>
               </div>
               <div className="action-workspace-header-metrics">
                 <span>未处理预警 <strong>{activeRiskAlertCount}</strong></span>
@@ -1699,21 +2263,21 @@ export function PatientDetailPage() {
                         </div>
                       </div>
                       {selectedRiskAlertRelatedTask ? (
-                        <Link className="timeline-action-button" to={`/patients/${patientId}/task-processing?taskId=${selectedRiskAlertRelatedTask.data?.id}&mode=phone`}>
-                          进入统一任务处理页
-                        </Link>
+                        <button className="timeline-action-button" type="button" onClick={() => selectedRiskAlertRelatedTask.data?.id && openInlineTaskPanel(selectedRiskAlertRelatedTask.data.id, 'close')}>
+                          打开右侧结案面板
+                        </button>
                       ) : (
-                        <span className="timeline-action-hint">如需电话联系，可勾选“电话随访沟通”并在本页记录。</span>
+                        <span className="timeline-action-hint">如需电话联系，请进入患者详情的“电话随访”tab 记录。</span>
                       )}
                     </section>
                   )}
 
                   <section className="risk-action-checklist" aria-label="选择风险处置方式">
                     {[
-                      { value: 'URGENT_VISIT', title: '提醒患者立即到院', desc: '向患者端发送醒目到院提醒，并在护士工作台和患者详情页显示提示横幅。' },
+                      { value: 'URGENT_VISIT', title: '提醒患者立即到院', desc: '向患者端发送醒目到院提醒，并自动生成单独的到院提醒任务。' },
                       { value: 'MEDICATION', title: '修改/增加用药', desc: '在本页记录新的用药计划或用药调整建议。' },
                       { value: 'RECHECK_TASK', title: '新增复测任务', desc: '为患者创建异常指标复测待办。' },
-                      { value: 'FOLLOW_UP', title: '电话随访沟通', desc: '记录电话沟通内容、患者反馈和护理建议。' },
+                      
                     ].map((item) => (
                       <label className={riskDispositionActions.includes(item.value) ? 'risk-action-check selected' : 'risk-action-check'} key={item.value}>
                         <input
@@ -1732,7 +2296,7 @@ export function PatientDetailPage() {
                   {riskDispositionActions.includes('URGENT_VISIT') && (
                     <section className="risk-expanded-section urgent-section">
                       <h3>到院提醒内容</h3>
-                      <p>提交后患者端将显示醒目的到院提醒；护士工作台和患者详情页会显示“已提醒到院”横幅。该动作不是普通待办任务。</p>
+                      <p>提交后患者端将显示醒目的到院提醒；系统会自动生成到院提醒记录，护士在患者详情的“到院提醒”tab内完成再次提醒、已到院、未到院或拒绝到院登记。</p>
                     </section>
                   )}
 
@@ -1852,9 +2416,10 @@ export function PatientDetailPage() {
             )}
           </section>
 
-          <p className="task-routing-small-note">待办任务请进入统一任务处理页</p>
+          <p className="task-routing-small-note">待办任务建议在患者档案右侧处置面板内完成，避免离开患者上下文。</p>
         </>
       )}
+
 
       {activeWorkspace === 'disease' && (
         <>
@@ -1984,7 +2549,6 @@ export function PatientDetailPage() {
               <div>
                 <span>指标监测</span>
                 <h2>健康指标与打卡计划</h2>
-                <p className="section-hint">先查看已有指标和医院配置的打卡计划；新增操作通过按钮展开，提交后自动收起。</p>
               </div>
               <div className="patient-hero-actions">
                 <button className="button" type="button" onClick={() => setShowVitalForm((value) => !value)}>
@@ -2005,21 +2569,98 @@ export function PatientDetailPage() {
               </div>
               {vitalRecordTimeline.length === 0 ? (
                 <div className="empty-state task-empty-state">当前患者暂无健康指标记录。</div>
-              ) : (
-                <div className="task-inline-grid">
-                  {vitalRecordTimeline.slice(0, 8).map((item) => (
-                    <article className="task-inline-card metric-inline-card" key={item.data?.id ?? `${item.time}-${item.title}`}>
-                      <div className="task-inline-card-topline">
-                        <span className="badge">{vitalTypeLabelMap[item.data?.type] ?? item.data?.type ?? '指标'}</span>
-                        <span className={item.data?.isAbnormal ? 'status-badge status-high' : 'status-badge status-low'}>{item.data?.isAbnormal ? '异常' : '正常'}</span>
-                      </div>
-                      <h4>{item.data?.value ?? '-'} {item.data?.unit ?? ''}</h4>
-                      <p>测量时间：{formatTime(item.data?.measuredAt ?? item.time)} · 来源：{dataSourceLabelMap[item.data?.dataSource] ?? item.data?.dataSource ?? '-'}</p>
-                      {item.data?.note && <p>{localizeBackendText(item.data.note)}</p>}
-                    </article>
-                  ))}
-                </div>
-              )}
+              ) : (() => {
+                // trend-range-filter-wrap-v1: share one time-range across every trend chart on this tab.
+                const rangeLabel = describeTrendRange(vitalTrendRange);
+                const systolicVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'SYSTOLIC_BP'),
+                  vitalTrendRange,
+                );
+                const diastolicVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'DIASTOLIC_BP'),
+                  vitalTrendRange,
+                );
+                const glucoseVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'BLOOD_GLUCOSE'),
+                  vitalTrendRange,
+                );
+                const weightVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'WEIGHT'),
+                  vitalTrendRange,
+                );
+                const heartRateVitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'HEART_RATE'),
+                  vitalTrendRange,
+                );
+                const spo2Vitals = filterVitalsByTrendRange(
+                  vitalRecordTimeline.filter((item) => item.data?.type === 'SPO2'),
+                  vitalTrendRange,
+                );
+                return (
+                  <div className="metric-trend-stack">
+                    <TrendRangeFilterBar value={vitalTrendRange} onChange={setVitalTrendRange} />
+                    {(systolicVitals.length > 0 || diastolicVitals.length > 0) && (
+                      <BloodPressureTrendChart
+                        systolicVitals={systolicVitals}
+                        diastolicVitals={diastolicVitals}
+                        unit="mmHg"
+                        eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
+                        formatTime={formatTime}
+                      />
+                    )}
+                    {glucoseVitals.length > 0 && (
+                      <VitalTrendChart
+                        vitals={glucoseVitals}
+                        vitalType="BLOOD_GLUCOSE"
+                        vitalTypeName="血糖"
+                        unit="mmol/L"
+                        thresholdHigh={10}
+                        thresholdLow={3.9}
+                        eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
+                        formatTime={formatTime}
+                      />
+                    )}
+                    {weightVitals.length > 0 && (
+                      <VitalTrendChart
+                        vitals={weightVitals}
+                        vitalType="WEIGHT"
+                        vitalTypeName="体重"
+                        unit="kg"
+                        eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
+                        formatTime={formatTime}
+                      />
+                    )}
+                    {heartRateVitals.length > 0 && (
+                      <VitalTrendChart
+                        vitals={heartRateVitals}
+                        vitalType="HEART_RATE"
+                        vitalTypeName="心率"
+                        unit="bpm"
+                        thresholdHigh={120}
+                        thresholdLow={50}
+                        eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
+                        formatTime={formatTime}
+                      />
+                    )}
+                    {spo2Vitals.length > 0 && (
+                      <VitalTrendChart
+                        vitals={spo2Vitals}
+                        vitalType="SPO2"
+                        vitalTypeName="血氧"
+                        unit="%"
+                        thresholdLow={95}
+                        eventMarkers={vitalEventMarkers}
+                        rangeLabel={rangeLabel}
+                        formatTime={formatTime}
+                      />
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </section>
 
@@ -2038,18 +2679,30 @@ export function PatientDetailPage() {
                   <div className="form-row">
                     <label>指标类型</label>
                     <select value={vitalType} onChange={(event) => handleVitalTypeChange(event.target.value)}>
-                      <option value="SYSTOLIC_BP">收缩压</option>
-                      <option value="DIASTOLIC_BP">舒张压</option>
+                      <option value="BLOOD_PRESSURE">血压（收缩压/舒张压）</option>
                       <option value="BLOOD_GLUCOSE">血糖</option>
                       <option value="WEIGHT">体重</option>
                       <option value="HEART_RATE">心率</option>
                       <option value="SPO2">血氧</option>
                     </select>
                   </div>
-                  <div className="form-row">
-                    <label>数值</label>
-                    <input type="number" step="0.1" value={vitalValue} onChange={(event) => setVitalValue(event.target.value)} required />
-                  </div>
+                  {vitalType === 'BLOOD_PRESSURE' ? (
+                    <>
+                      <div className="form-row">
+                        <label>收缩压</label>
+                        <input type="number" step="1" min="1" value={systolicValue} onChange={(event) => setSystolicValue(event.target.value)} required placeholder="例如：128" />
+                      </div>
+                      <div className="form-row">
+                        <label>舒张压</label>
+                        <input type="number" step="1" min="1" value={diastolicValue} onChange={(event) => setDiastolicValue(event.target.value)} required placeholder="例如：82" />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="form-row">
+                      <label>数值</label>
+                      <input type="number" step="0.1" value={vitalValue} onChange={(event) => setVitalValue(event.target.value)} required />
+                    </div>
+                  )}
                   <div className="form-row">
                     <label>单位</label>
                     <input value={vitalUnit} onChange={(event) => setVitalUnit(event.target.value)} required />
@@ -2298,7 +2951,7 @@ export function PatientDetailPage() {
               <div>
                 <span>随访任务</span>
                 <h2>电话随访与待办处理</h2>
-                <p className="section-hint">普通待办任务进入统一任务处理页完成闭环；风险预警已合并到任务处理页，不再作为单独处置入口。</p>
+                <p className="section-hint">普通待办任务在患者详情页内闭环；电话随访进入独立 tab，到院提醒进入“到院提醒”tab，结案进入右侧面板。</p>
               </div>
               <button className="button" type="button" onClick={() => setShowTaskForm((value) => !value)}>
                 {showTaskForm ? '收起新增任务' : '新增任务'}
@@ -2351,7 +3004,7 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>当前待办任务</h3>
-                  <p className="muted small">待办任务需要先电话联系患者、记录内容并电子签名后完成。</p>
+                  <p className="muted small">电话随访记录在“电话随访”tab 内维护；任务结案在右侧处置面板内完成。</p>
                   {!showAllTaskHistory && hiddenTaskHistoryCount > 0 && <p className="muted small">已默认隐藏 {hiddenTaskHistoryCount} 条已完成或已取消任务。</p>}
                 </div>
                 <label className="history-toggle task-history-toggle">
@@ -2377,7 +3030,7 @@ export function PatientDetailPage() {
                         <div className="timeline-extra">截止时间：{formatTime(item.data?.dueAt)}{item.data?.relatedAlertId ? ' · 已关联风险预警' : ''}</div>
                         {item.data?.status === 'PENDING' && (
                           <div className="timeline-actions">
-                            <Link className="timeline-action-button primary" to={`/patients/${patientId}/task-processing?taskId=${item.data.id}&mode=phone`}>进入统一任务处理页</Link>
+                            <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>打开结案面板</button>
                           </div>
                         )}
                       </article>
@@ -2393,7 +3046,7 @@ export function PatientDetailPage() {
               <div className="task-inline-list-header">
                 <div>
                   <h3>待处理风险预警</h3>
-                  <p className="muted small">可以选中预警快速完成处置；如需多种处理方式，请进入统一任务处理页。</p>
+                  <p className="muted small">可以选中预警快速完成处置；如需电话沟通，请进入“电话随访”tab。</p>
                 </div>
               </div>
 
@@ -2417,7 +3070,7 @@ export function PatientDetailPage() {
                             完成预警处置
                           </button>
                           <button className="timeline-action-button" type="button" onClick={() => { setActiveWorkspace('actions'); item.data?.id && selectRiskAlert(item.data.id); }}>
-                            进入任务处理页
+                            进入患者详情处理
                           </button>
                         </div>
                       </article>
@@ -2430,8 +3083,400 @@ export function PatientDetailPage() {
         </>
       )}
 
+      {activeWorkspace === 'follow-up' && (
+        <section className="panel patient-follow-up-tab-panel collapsible-workspace-panel patient-follow-up-ledger-panel">
+          <div className="hospital-section-header follow-up-ledger-header">
+            <div>
+              <span>患者内电话随访</span>
+              <h2>电话随访沟通记录</h2>
+              <p className="section-hint">默认展示历史沟通记录，按记录创建时间倒序加载。需要记录新沟通时，再点击右侧按钮展开表单。</p>
+            </div>
+            <div className="follow-up-header-actions">
+              <button
+                className="button"
+                type="button"
+                onClick={() => {
+                  if (!followUpFormOpen) primeFollowUpDraft();
+                  setFollowUpFormOpen((current) => !current);
+                }}
+              >
+                {followUpFormOpen ? '收起新建表单' : '新建电话沟通记录'}
+              </button>
+              <button className="secondary-button" type="button" onClick={() => loadFollowUpHistory({ reset: true })} disabled={followUpHistoryLoading}>
+                刷新记录
+              </button>
+            </div>
+          </div>
+          {/* next-follow-up-banner-removed-v1: 下次随访时间 banner intentionally removed from patient detail page. */}
+
+          <section className="visit-patient-detail-card" aria-label="电话随访患者联系信息">
+            <div className="visit-patient-detail-identity">
+              <div>
+                <span>患者信息</span>
+                <h3>{data.patient.name}</h3>
+                <p>
+                  {formatPatientGenderLabel(data.patient.gender)} · {formatPatientAgeLabel(data.patient.birthDate)} · {data.patient.hospitalPatientId ? `病案号 ${data.patient.hospitalPatientId}` : '病案号未登记'}
+                </p>
+              </div>
+              <strong className="visit-active-count">电话随访</strong>
+            </div>
+
+            <div className="visit-patient-detail-grid">
+              <div className="visit-patient-detail-item primary-contact">
+                <span>联系电话</span>
+                <strong>{data.patient.phone || '未登记'}</strong>
+                {data.patient.phone ? <a href={`tel:${data.patient.phone}`}>拨打患者电话</a> : <small>请先补全联系方式</small>}
+              </div>
+              <div className="visit-patient-detail-item address-item">
+                <span>居住地址</span>
+                <strong>{data.patient.address || '未登记'}</strong>
+                <small>用于核对患者所在社区、电话沟通背景和后续随访安排</small>
+              </div>
+              <div className="visit-patient-detail-item">
+                <span>紧急联系人</span>
+                <strong>{data.patient.emergencyContactName || '未登记'}</strong>
+                {data.patient.emergencyContactPhone ? <a href={`tel:${data.patient.emergencyContactPhone}`}>{data.patient.emergencyContactPhone}</a> : <small>暂无紧急联系人电话</small>}
+              </div>
+              <div className="visit-patient-detail-item">
+                <span>责任医护</span>
+                <strong>医生：{data.patient.responsibleDoctorId || '未分配'}</strong>
+                <small>护士：{data.patient.responsibleNurseId || '未分配'}</small>
+              </div>
+            </div>
+          </section>
+
+          {followUpFormOpen && (
+            <form className="hospital-form patient-follow-up-form-card follow-up-create-form" onSubmit={submitFollowUp} aria-busy={savingFollowUp}>
+              <div className="task-inline-list-header">
+                <div>
+                  <h3>新建电话沟通记录</h3>
+                  <p className="muted small">该记录直接归入患者档案，不再绑定具体任务；任务结案仍在右侧处置面板完成。</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    resetFollowUpForm();
+                    setFollowUpFormOpen(false);
+                  }}
+                  disabled={savingFollowUp}
+                >
+                  取消
+                </button>
+              </div>
+
+              <div className="form-grid form-grid-three compact-follow-up-form-grid">
+                <div className="form-row">
+                  <label>随访方式</label>
+                  <select value={followUpType} onChange={(event) => setFollowUpType(event.target.value)}>
+                    <option value="PHONE">电话随访</option>
+                    <option value="WECHAT">微信随访</option>
+                    <option value="OUTPATIENT">门诊随访</option>
+                    <option value="HOME_VISIT">上门随访</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>联系结果</label>
+                  <select value={followUpContactOutcome} onChange={(event) => setFollowUpContactOutcome(event.target.value)}>
+                    <option value="CONTACTED">已接通</option>
+                    <option value="NO_ANSWER">未接通</option>
+                    <option value="FAMILY_CONTACTED">家属接听</option>
+                    <option value="WRONG_NUMBER">号码异常</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>随访结论</label>
+                  <select value={followUpConclusion} onChange={(event) => setFollowUpConclusion(event.target.value)}>
+                    <option value="CONTINUE_OBSERVE">继续观察</option>
+                    <option value="NEED_RECHECK">需要复测</option>
+                    <option value="NEED_VISIT">建议门诊复诊</option>
+                    <option value="URGENT_VISIT">建议立即就医</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label>下次随访时间</label>
+                  <input type="datetime-local" value={nextFollowUpTime} onChange={(event) => setNextFollowUpTime(event.target.value)} />
+                </div>
+                <div className="form-row">
+                  <label>电子签名 <span className="required-mark">*</span></label>
+                  <input value={followUpSignature} onChange={(event) => setFollowUpSignature(event.target.value)} placeholder="请输入护士姓名 / 工号" />
+                </div>
+              </div>
+
+              <div className="form-row">
+                <label>电话沟通内容</label>
+                <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={4} placeholder="记录症状、近期指标、用药、复测/复诊沟通内容" />
+              </div>
+              <div className="form-grid form-grid-two">
+                <div className="form-row">
+                  <label>患者反馈 / 随访结果</label>
+                  <textarea value={result} onChange={(event) => setResult(event.target.value)} rows={3} />
+                </div>
+                <div className="form-row">
+                  <label>护理建议 / 后续安排</label>
+                  <textarea value={suggestion} onChange={(event) => setSuggestion(event.target.value)} rows={3} />
+                </div>
+              </div>
+              <div className="form-actions sticky-form-actions pro-form-actions">
+                <button className="button" type="submit" disabled={savingFollowUp}>{savingFollowUp ? '保存中，请勿重复提交...' : '保存电话沟通记录'}</button>
+                <span className="operation-form-hint">保存后自动回到历史记录列表，记录按创建时间倒序显示。</span>
+              </div>
+            </form>
+          )}
+
+          <section className="patient-follow-up-history-card follow-up-ledger-card">
+            <div className="task-inline-list-header follow-up-ledger-toolbar">
+              <div>
+                <h3>历史电话沟通记录</h3>
+                <p className="muted small">Lazy loading 分页加载；默认按记录创建时间从新到旧排序。</p>
+              </div>
+              <strong>{followUpHistoryLoaded ? `${followUpHistory.length}/${followUpHistoryTotal} 条` : '待加载'}</strong>
+            </div>
+
+            <form className="follow-up-history-filter" onSubmit={submitFollowUpHistorySearch}>
+              <label>
+                <span>创建时间从</span>
+                <input type="date" value={followUpCreatedFrom} onChange={(event) => setFollowUpCreatedFrom(event.target.value)} />
+              </label>
+              <label>
+                <span>创建时间至</span>
+                <input type="date" value={followUpCreatedTo} onChange={(event) => setFollowUpCreatedTo(event.target.value)} />
+              </label>
+              <div className="follow-up-filter-actions">
+                <button className="secondary-button" type="submit" disabled={followUpHistoryLoading}>查询</button>
+                <button
+                  className="secondary-button subtle"
+                  type="button"
+                  disabled={followUpHistoryLoading}
+                  onClick={() => {
+                    setFollowUpCreatedFrom('');
+                    setFollowUpCreatedTo('');
+                    window.setTimeout(() => loadFollowUpHistory({ reset: true }), 0);
+                  }}
+                >
+                  重置
+                </button>
+              </div>
+            </form>
+
+            {followUpHistoryError && <div className="form-error compact-error">{followUpHistoryError}</div>}
+
+            {followUpHistoryLoading && followUpHistory.length === 0 ? (
+              <div className="empty-state compact-empty">正在加载电话随访历史...</div>
+            ) : followUpHistory.length === 0 ? (
+              <div className="empty-state compact-empty">当前患者暂无电话随访记录。点击“新建电话沟通记录”开始记录。</div>
+            ) : (
+              <div className="follow-up-history-list follow-up-ledger-list">
+                {followUpHistory.map((item) => (
+                  <article className="follow-up-history-card follow-up-ledger-row" key={item.id}>
+                    <header>
+                      <div>
+                        <strong>记录创建：{formatTime(item.createdAt)}</strong>
+                        <span>沟通时间：{formatTime(item.followUpTime)} · {followUpTypeLabelMap[item.followUpType] ?? item.followUpType}</span>
+                      </div>
+                      <em>{item.operatorId ?? '未记录'}</em>
+                    </header>
+                    <dl>
+                      <div><dt>沟通内容</dt><dd>{localizeBackendText(item.content) || '-'}</dd></div>
+                      <div><dt>患者反馈</dt><dd>{localizeBackendText(item.result) || '-'}</dd></div>
+                      <div><dt>后续安排</dt><dd>{localizeBackendText(item.suggestion) || '-'}</dd></div>
+                      {item.nextFollowUpTime && <div><dt>下次随访</dt><dd>{formatTime(item.nextFollowUpTime)}</dd></div>}
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {followUpHistoryHasMore && (
+              <div className="follow-up-load-more-row">
+                <button className="secondary-button" type="button" onClick={() => loadFollowUpHistory()} disabled={followUpHistoryLoadingMore}>
+                  {followUpHistoryLoadingMore ? '加载中...' : '加载更多历史记录'}
+                </button>
+              </div>
+            )}
+          </section>
+        </section>
+      )}
+
+
+      {activeWorkspace === 'hospital-visit' && (
+        <PatientHospitalVisitTab
+          patientId={patient.id}
+          patient={patient}
+          timeline={data.timeline}
+          activeHospitalVisitReminders={activeHospitalVisitReminders}
+          onChanged={loadTimeline}
+          formatTime={formatTime}
+          localizeBackendText={localizeBackendText}
+        />
+      )}
+
+      {activeWorkspace === 'handling-history' && (
+        <section className="panel patient-handling-history-panel collapsible-workspace-panel">
+          <div className="hospital-section-header">
+            <div>
+              <span>最近处理历史</span>
+              <h2>处置记录与任务闭环</h2>
+              <p className="section-hint">聚合电话随访、任务状态变更和风险处置结果。医护处理任务时可在右侧面板操作，完整病历和趋势仍保留在左侧患者档案。</p>
+            </div>
+            {firstOpenTask?.data?.id && (
+              <button className="button" type="button" onClick={() => openInlineTaskPanel(firstOpenTask.data.id, 'close')}>
+                打开当前任务结案面板
+              </button>
+            )}
+          </div>
+
+          {handlingHistoryTimeline.length === 0 ? (
+            <div className="empty-state">当前患者暂无处理历史。</div>
+          ) : (
+            <div className="handling-history-list">
+              {handlingHistoryTimeline.slice(0, 30).map((item, index) => (
+                <article className="handling-history-card" key={`${item.type}-${item.time}-${item.data?.id ?? index}`}>
+                  <div className="handling-history-time">
+                    <strong>{timelineTypeLabelMap[item.type] ?? item.type}</strong>
+                    <span>{formatTime(item.time)}</span>
+                  </div>
+                  <div>
+                    <h3>{localizeBackendText(item.title)}</h3>
+                    <p>{localizeBackendText(item.description)}</p>
+                    <div className="handling-history-meta">
+                      {item.data?.status && <span>状态：{statusLabelMap[item.data.status] ?? item.data.status}</span>}
+                      {item.data?.followUpType && <span>方式：{followUpTypeLabelMap[item.data.followUpType] ?? item.data.followUpType}</span>}
+                      {item.data?.operatorId && <span>记录人：{item.data.operatorId}</span>}
+                      {item.data?.handledBy && <span>处理人：{item.data.handledBy}</span>}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+
       {activeWorkspace === 'timeline' && (
         <>
+      <section className="panel timeline-subsection-panel">
+        <div className="hospital-section-header timeline-subsection-header">
+          <div>
+            <span>患者长期管理记录</span>
+            <h2>全流程记录</h2>
+            <p className="section-hint">将全流程记录拆分为记录明细、指标趋势和处置闭环，避免所有信息直接堆在同一屏。</p>
+          </div>
+        </div>
+        <div className="timeline-subsection-tabs">
+          {timelineSubsectionTabs.map((tab) => {
+            const count = tab.key === 'records' ? visibleTimeline.length : tab.key === 'vitals' ? recentVitalCount : closedLoopEvents.length;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={activeTimelineSubsection === tab.key ? 'timeline-subsection-tab active' : 'timeline-subsection-tab'}
+                onClick={() => setActiveTimelineSubsection(tab.key)}
+              >
+                <strong>{tab.title}</strong>
+                <small>{tab.description}</small>
+                <em>{count}</em>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {activeTimelineSubsection === 'vitals' && (
+        <>
+      {/* 指标趋势图 */}
+      {(() => {
+        const systolicVitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'SYSTOLIC_BP');
+        const diastolicVitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'DIASTOLIC_BP');
+        const glucoseVitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'BLOOD_GLUCOSE');
+        const weightVitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'WEIGHT');
+        const heartRateVitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'HEART_RATE');
+        const spo2Vitals = data.timeline.filter((item) => item.type === 'VITAL_RECORD' && item.data?.type === 'SPO2');
+        return (
+          <>
+            {(systolicVitals.length > 0 || diastolicVitals.length > 0) && (
+              <BloodPressureTrendChart
+                systolicVitals={systolicVitals}
+                diastolicVitals={diastolicVitals}
+                unit="mmHg"
+                eventMarkers={vitalEventMarkers}
+                formatTime={formatTime}
+              />
+            )}
+            {glucoseVitals.length > 0 && (
+              <VitalTrendChart
+                vitals={glucoseVitals}
+                vitalType="BLOOD_GLUCOSE"
+                vitalTypeName="血糖"
+                unit="mmol/L"
+                thresholdHigh={10}
+                thresholdLow={3.9}
+                eventMarkers={vitalEventMarkers}
+                formatTime={formatTime}
+              />
+            )}
+            {weightVitals.length > 0 && (
+              <VitalTrendChart
+                vitals={weightVitals}
+                vitalType="WEIGHT"
+                vitalTypeName="体重"
+                unit="kg"
+                eventMarkers={vitalEventMarkers}
+                formatTime={formatTime}
+              />
+            )}
+            {heartRateVitals.length > 0 && (
+              <VitalTrendChart
+                vitals={heartRateVitals}
+                vitalType="HEART_RATE"
+                vitalTypeName="心率"
+                unit="bpm"
+                thresholdHigh={120}
+                thresholdLow={50}
+                eventMarkers={vitalEventMarkers}
+                formatTime={formatTime}
+              />
+            )}
+            {spo2Vitals.length > 0 && (
+              <VitalTrendChart
+                vitals={spo2Vitals}
+                vitalType="SPO2"
+                vitalTypeName="血氧"
+                unit="%"
+                thresholdLow={95}
+                eventMarkers={vitalEventMarkers}
+                formatTime={formatTime}
+              />
+            )}
+          </>
+        );
+      })()}
+        </>
+      )}
+
+      {activeTimelineSubsection === 'closedLoop' && (
+        <section className="panel timeline-closed-loop-subsection" style={{ padding: '20px', marginBottom: '16px' }}>
+          <div className="hospital-section-header">
+            <div>
+              <span>处置闭环</span>
+              <h2>处置闭环事件</h2>
+              <p className="section-hint">将相关的预警、任务、处置和随访结果合并为完整流程；该区块只在“处置闭环”二级页签下展示。</p>
+            </div>
+          </div>
+          {closedLoopEvents.length === 0 ? (
+            <div className="empty-state">当前暂无可串联的处置闭环事件。</div>
+          ) : (
+            <ClosedLoopEventList
+              events={closedLoopEvents}
+              formatTime={formatTime}
+              localizeBackendText={localizeBackendText}
+            />
+          )}
+        </section>
+      )}
+
+      {activeTimelineSubsection === 'records' && (
       <section className="panel timeline-panel">
         <div className="hospital-section-header timeline-header">
           <div>
@@ -2495,18 +3540,13 @@ export function PatientDetailPage() {
                     </div>
                   )}
                   {item.type === 'RISK_ALERT' &&
-                    item.data?.status === 'OPEN' && (
+                    item.data?.status === 'OPEN' &&
+                    activeTasks.find((task) => task.data?.relatedAlertId === item.data?.id)?.data?.id && (
                       <div className="timeline-actions">
-                        {activeTasks.find((task) => task.data?.relatedAlertId === item.data?.id)?.data?.id ? (
-                          <Link className="timeline-action-button primary" to={`/patients/${patientId}/task-processing?taskId=${activeTasks.find((task) => task.data?.relatedAlertId === item.data?.id)?.data?.id}&mode=phone`}>
-                            查看关联任务
-                          </Link>
-                        ) : (
-                          <button className="timeline-action-button primary" type="button" disabled={processingActionId !== null} onClick={() => startRiskAlertTaskFromDetail(item)}>
-                            生成任务并处理
-                          </button>
-                        )}
-                        <span className="timeline-action-hint">风险预警不再单独处置，请通过统一任务处理页闭环。</span>
+                        <button className="timeline-action-button primary" type="button" onClick={() => { const relatedTask = activeTasks.find((task) => task.data?.relatedAlertId === item.data?.id); if (relatedTask?.data?.id) openInlineTaskPanel(relatedTask.data.id, 'close'); }}>
+                          查看关联任务
+                        </button>
+                        <span className="timeline-action-hint">风险预警不再单独处置，请通过电话随访 tab 和右侧处置面板闭环。</span>
                       </div>
                     )}
                   {item.type === 'TASK' && (
@@ -2519,13 +3559,16 @@ export function PatientDetailPage() {
                   {item.type === 'TASK' &&
                     item.data?.status === 'PENDING' && (
                       <div className="timeline-actions">
-                        <Link className="timeline-action-button primary" to={`/patients/${patientId}/task-processing?taskId=${item.data.id}&mode=phone`}>
-                          查看任务处理页
-                        </Link>
+                        <button className="timeline-action-button primary" type="button" onClick={() => item.data?.id && openFollowUpTab(item.data.id)}>
+                          记录电话随访
+                        </button>
+                        <button className="timeline-action-button" type="button" onClick={() => item.data?.id && openInlineTaskPanel(item.data.id, 'close')}>
+                          打开处置面板
+                        </button>
                         {item.data?.relatedAlertId && (
                           <span className="timeline-action-hint">关联风险已合并到该任务详情中</span>
                         )}
-                        <span className="timeline-action-hint">待办任务请进入统一任务处理页</span>
+                        <span className="timeline-action-hint">待办任务请在患者档案内闭环</span>
                       </div>
                     )}
                   {item.type === 'FOLLOW_UP' && (
@@ -2565,14 +3608,38 @@ export function PatientDetailPage() {
           </div>
         )}
       </section>
+      )}
         </>
       )}
         </main>
       </div>
+        </div>
+        {shouldShowTaskPanel && (
+          <>
+            <button
+              className="patient-detail-task-resizer"
+              type="button"
+              aria-label="拖动调整任务处置面板宽度"
+              onPointerDown={startTaskPanelResize}
+            />
+            <PatientTaskSidePanel
+              patientId={patient.id}
+              patient={patient}
+              tasks={activeTasks}
+              timeline={data.timeline}
+              selectedTaskId={selectedTaskIdFromUrl}
+              requestedMode={requestedTaskPanelMode}
+              onSelectTask={selectInlineTask}
+              onClose={closeInlineTaskPanel}
+              onChanged={loadTimeline}
+              formatTime={formatTime}
+              localizeBackendText={localizeBackendText}
+            />
+          </>
+        )}
+      </div>
     </div>
   );
 }
-
-
 
 

@@ -1,0 +1,686 @@
+/* 闭环事件卡片 + 指标趋势图 - 中国医院风格 */
+
+/* 闭环事件卡片 */
+.closed-loop-card {
+  border: 2px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+  margin-bottom: 16px;
+  transition: all 0.2s ease;
+}
+
+.closed-loop-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.closed-loop-card.loop-resolved {
+  border-color: #a7f3d0;
+}
+
+.closed-loop-card.loop-open {
+  border-color: #fca5a5;
+}
+
+.closed-loop-card.loop-in-progress {
+  border-color: #fed7aa;
+}
+
+/* 闭环卡片头部 */
+.closed-loop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e5edf7;
+  cursor: pointer;
+}
+
+.closed-loop-header:hover {
+  background: #f1f5f9;
+}
+
+.closed-loop-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.closed-loop-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.closed-loop-icon.icon-resolved {
+  background: #d1fae5;
+  color: #059669;
+}
+
+.closed-loop-icon.icon-open {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.closed-loop-icon.icon-in-progress {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.closed-loop-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.closed-loop-title {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.closed-loop-date {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.closed-loop-status-badge {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.closed-loop-status-badge.badge-resolved {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.closed-loop-status-badge.badge-open {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.closed-loop-status-badge.badge-in-progress {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* 闭环卡片流程步骤 */
+.closed-loop-steps {
+  padding: 20px;
+}
+
+.closed-loop-step {
+  display: flex;
+  gap: 14px;
+  position: relative;
+  padding-bottom: 20px;
+}
+
+.closed-loop-step:last-child {
+  padding-bottom: 0;
+}
+
+.closed-loop-step::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: #e2e8f0;
+}
+
+.closed-loop-step:last-child::before {
+  display: none;
+}
+
+.closed-loop-step-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 800;
+  z-index: 1;
+}
+
+.closed-loop-step-dot.dot-trigger {
+  background: #fee2e2;
+  color: #dc2626;
+  border: 2px solid #fca5a5;
+}
+
+.closed-loop-step-dot.dot-system {
+  background: #dbeafe;
+  color: #2563eb;
+  border: 2px solid #93c5fd;
+}
+
+.closed-loop-step-dot.dot-task {
+  background: #fef3c7;
+  color: #d97706;
+  border: 2px solid #fcd34d;
+}
+
+.closed-loop-step-dot.dot-action {
+  background: #e0e7ff;
+  color: #4f46e5;
+  border: 2px solid #a5b4fc;
+}
+
+.closed-loop-step-dot.dot-result {
+  background: #d1fae5;
+  color: #059669;
+  border: 2px solid #6ee7b7;
+}
+
+.closed-loop-step-content {
+  flex: 1;
+  padding-top: 4px;
+}
+
+.closed-loop-step-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.closed-loop-step-text {
+  color: #1e293b;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.closed-loop-step-time {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* 指标趋势图容器 */
+.vital-trend-chart-container {
+  border: 2px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.vital-trend-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.vital-trend-chart-title {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.vital-trend-chart-subtitle {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.vital-trend-chart-legend {
+  display: flex;
+  gap: 16px;
+}
+
+.vital-trend-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.vital-trend-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.vital-trend-legend-dot.dot-value {
+  background: #2563eb;
+}
+
+.vital-trend-legend-dot.dot-alert {
+  background: #dc2626;
+}
+
+.vital-trend-legend-dot.dot-followup {
+  background: #059669;
+}
+
+/* SVG趋势图 */
+.vital-trend-svg {
+  width: 100%;
+  height: 200px;
+  overflow: visible;
+}
+
+.vital-trend-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vital-trend-area {
+  fill: url(#trendGradient);
+  opacity: 0.15;
+}
+
+.vital-trend-point {
+  fill: #ffffff;
+  stroke: #2563eb;
+  stroke-width: 2.5;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.vital-trend-point:hover {
+  r: 6;
+  stroke-width: 3;
+}
+
+.vital-trend-point.point-danger {
+  stroke: #dc2626;
+  fill: #fee2e2;
+}
+
+.vital-trend-point.point-warning {
+  stroke: #d97706;
+  fill: #fef3c7;
+}
+
+/* 趋势图阈值线 */
+.vital-trend-threshold {
+  stroke-dasharray: 6 4;
+  stroke-width: 1.5;
+}
+
+.vital-trend-threshold.threshold-high {
+  stroke: #dc2626;
+}
+
+.vital-trend-threshold.threshold-low {
+  stroke: #d97706;
+}
+
+.vital-trend-threshold-label {
+  font-size: 11px;
+  font-weight: 700;
+  fill: #dc2626;
+}
+
+/* 趋势图事件标注 */
+.vital-trend-event-marker {
+  cursor: pointer;
+}
+
+.vital-trend-event-marker line {
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.vital-trend-event-marker.marker-alert line {
+  stroke: #dc2626;
+}
+
+.vital-trend-event-marker.marker-followup line {
+  stroke: #059669;
+}
+
+.vital-trend-event-marker.marker-recheck line {
+  stroke: #d97706;
+}
+
+.vital-trend-event-icon {
+  font-size: 14px;
+  text-anchor: middle;
+}
+
+/* 趋势图X轴标签 */
+.vital-trend-x-label {
+  font-size: 11px;
+  fill: #94a3b8;
+  text-anchor: middle;
+}
+
+.vital-trend-y-label {
+  font-size: 11px;
+  fill: #94a3b8;
+  text-anchor: end;
+}
+
+/* 趋势图网格线 */
+.vital-trend-grid-line {
+  stroke: #f1f5f9;
+  stroke-width: 1;
+}
+
+/* 趋势图tooltip */
+.vital-trend-tooltip {
+  position: absolute;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* 闭环事件列表容器 */
+.closed-loop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 闭环事件视图切换 */
+.closed-loop-view-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.closed-loop-view-btn {
+  padding: 8px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.closed-loop-view-btn:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.closed-loop-view-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .closed-loop-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .vital-trend-chart-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .vital-trend-chart-legend {
+    flex-wrap: wrap;
+  }
+}
+
+
+
+
+.vital-trend-legend-dot.dot-diastolic {
+  background: #7c3aed;
+}
+
+.vital-trend-line.bp-diastolic-line {
+  stroke: #7c3aed;
+}
+
+.vital-trend-line.bp-systolic-line {
+  stroke: #2563eb;
+}
+
+.vital-trend-point.bp-diastolic-point {
+  stroke: #7c3aed;
+}
+
+.vital-trend-threshold.threshold-diastolic-high {
+  stroke: #7c3aed;
+  stroke-dasharray: 4 4;
+  stroke-width: 1.5;
+}
+
+.vital-trend-threshold-label.threshold-diastolic-label {
+  fill: #7c3aed;
+}
+
+.blood-pressure-trend-chart .vital-trend-svg {
+  height: 220px;
+}
+
+.vital-overview-summary-row {
+  align-items: flex-start;
+}
+
+.vital-overview-summary-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vital-overview-summary-chart {
+  flex: 0 0 236px;
+  width: 236px;
+}
+
+.vital-trend-mini-card {
+  border: 1px solid #dbe7f3;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 8px 8px 6px;
+}
+
+.vital-trend-mini-card-bp {
+  padding-top: 6px;
+}
+
+.vital-trend-mini-svg {
+  width: 100%;
+  height: 92px;
+  display: block;
+  overflow: visible;
+}
+
+.vital-trend-mini-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vital-trend-mini-line.line-diastolic {
+  stroke: #7c3aed;
+}
+
+.vital-trend-mini-point {
+  fill: #ffffff;
+  stroke: #2563eb;
+  stroke-width: 2;
+}
+
+.vital-trend-mini-point.is-latest {
+  fill: #dbeafe;
+}
+
+.vital-trend-mini-point.point-diastolic {
+  stroke: #7c3aed;
+}
+
+.vital-trend-mini-point.point-diastolic.is-latest {
+  fill: #ede9fe;
+}
+
+.vital-trend-mini-threshold {
+  stroke-width: 1.25;
+  stroke-dasharray: 4 4;
+}
+
+.vital-trend-mini-threshold.threshold-high {
+  stroke: #dc2626;
+}
+
+.vital-trend-mini-threshold.threshold-low {
+  stroke: #d97706;
+}
+
+.vital-trend-mini-threshold.threshold-diastolic-high {
+  stroke: #7c3aed;
+}
+
+.vital-trend-mini-meta {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.vital-trend-mini-empty {
+  border: 1px dashed #d7e3ef;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 18px 12px;
+  text-align: center;
+}
+
+.vital-trend-mini-badges {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.vital-trend-mini-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.vital-trend-mini-badge.badge-systolic {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.vital-trend-mini-badge.badge-diastolic {
+  color: #6d28d9;
+  background: #ede9fe;
+}
+
+@media (max-width: 1200px) {
+  .vital-overview-summary-row {
+    flex-direction: column;
+  }
+
+  .vital-overview-summary-chart {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+
+
+/* Click-to-inspect value labels on vital trend charts. */
+.vital-trend-point.is-active {
+  r: 6;
+  stroke-width: 3.5;
+}
+
+.vital-trend-tooltip-svg {
+  pointer-events: none;
+}
+
+.vital-trend-tooltip-guide {
+  stroke: #94a3b8;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.vital-trend-tooltip-box {
+  fill: #ffffff;
+  stroke: #cbd5e1;
+  stroke-width: 1;
+  filter: drop-shadow(0 6px 12px rgba(15, 23, 42, 0.16));
+}
+
+.vital-trend-tooltip-title {
+  fill: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vital-trend-tooltip-value {
+  fill: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vital-trend-tooltip-time {
+  fill: #64748b;
+  font-size: 11px;
+}

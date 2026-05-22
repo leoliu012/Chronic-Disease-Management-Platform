@@ -1,0 +1,755 @@
+/* Patient detail task UX polish
+ * Goal: keep patient chart/context visible while making active-task handling compact.
+ * This file intentionally loads after patient-snapshot.css and patient-task-side-panel.css.
+ */
+
+/* --- First-screen patient snapshot: compact clinical status strip --- */
+.patient-status-bar {
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.patient-status-bar-row {
+  gap: 12px 18px;
+}
+
+.patient-status-bar-row + .patient-status-bar-row {
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.patient-status-primary {
+  gap: 8px;
+  font-size: 14px;
+}
+
+.patient-status-primary strong {
+  font-size: 16px;
+}
+
+.patient-status-item {
+  font-size: 13px;
+}
+
+.patient-snapshot-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.patient-snapshot-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "label value"
+    "desc desc"
+    "footer footer";
+  align-content: start;
+  min-height: 92px;
+  padding: 11px 12px;
+  border-width: 1px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.patient-snapshot-card:hover {
+  transform: none;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+}
+
+.patient-snapshot-card-label {
+  grid-area: label;
+  min-width: 0;
+  margin-bottom: 0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.patient-snapshot-card-label::before {
+  width: 3px;
+  height: 12px;
+}
+
+.patient-snapshot-card-value {
+  grid-area: value;
+  justify-self: end;
+  align-self: start;
+  max-width: 112px;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.15;
+  text-align: right;
+  white-space: normal;
+}
+
+.patient-snapshot-card.card-medication .patient-snapshot-card-value {
+  max-width: 136px;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.patient-snapshot-card-desc {
+  grid-area: desc;
+  min-width: 0;
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.patient-snapshot-card-desc strong,
+.patient-snapshot-card-desc span {
+  display: inline;
+}
+
+.patient-snapshot-card-footer {
+  grid-area: footer;
+  margin-top: 7px;
+  padding-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.patient-snapshot-card-empty {
+  grid-column: 1 / -1;
+  min-height: 52px;
+  flex-direction: row;
+  gap: 8px;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.patient-snapshot-card-empty-icon {
+  margin: 0;
+  font-size: 18px;
+}
+
+/* --- Overview summary cards: reduce duplicate height above the task center --- */
+.patient-overview-click-grid.patient-module-summary-grid {
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.patient-overview-click-grid .patient-summary-nav-card {
+  min-height: 0 !important;
+  padding: 12px 14px !important;
+  border-radius: 14px !important;
+}
+
+.patient-overview-click-grid .patient-summary-nav-card strong {
+  font-size: 24px !important;
+  line-height: 1.05;
+}
+
+.patient-overview-click-grid .patient-summary-nav-card p {
+  min-height: 0;
+  margin-top: 5px !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+
+.patient-overview-click-grid .patient-summary-nav-card em {
+  margin-top: 8px !important;
+  font-size: 11px !important;
+}
+
+/* --- Unified task center: compact worklist, not a giant dashboard --- */
+.unified-patient-task-board.stable-command-board {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  box-shadow: 0 10px 26px rgba(15, 35, 66, 0.06);
+}
+
+.unified-patient-task-board .stable-command-board-header {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+}
+
+.unified-patient-task-board .stable-command-board-header span {
+  margin-bottom: 3px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.unified-patient-task-board .stable-command-board-header h2 {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.unified-patient-task-board .stable-command-board-header p {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.unified-patient-task-board .stable-command-actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.unified-patient-task-board .stable-command-actions .button,
+.unified-patient-task-board .stable-command-actions .secondary-button,
+.unified-patient-task-board .timeline-action-button,
+.unified-patient-task-board .compact-link-btn {
+  min-height: 32px;
+  padding: 7px 10px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+  line-height: 1.2;
+}
+
+.unified-command-grid.stable-command-grid {
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 12px;
+}
+
+.unified-patient-task-board .stable-command-card {
+  min-height: 0;
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.unified-patient-task-board .stable-command-card-title {
+  margin-bottom: 9px;
+}
+
+.unified-patient-task-board .stable-command-card-title strong {
+  font-size: 14px;
+}
+
+.unified-patient-task-board .stable-command-card-title span {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.unified-mini-list.stable-mini-list,
+.unified-patient-task-board .stable-mini-list {
+  gap: 8px;
+}
+
+.unified-patient-task-board .unified-mini-list {
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.unified-mini-row.stable-mini-row,
+.unified-patient-task-board .stable-mini-row {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 13px;
+}
+
+.unified-mini-row > div:first-child,
+.unified-patient-task-board .stable-mini-row > div:first-child {
+  min-width: 0;
+}
+
+.unified-patient-task-board .stable-mini-row strong {
+  font-size: 13px;
+  line-height: 1.32;
+}
+
+.unified-patient-task-board .stable-mini-row p,
+.unified-patient-task-board .stable-mini-row small,
+.unified-patient-task-board .stable-empty-line,
+.unified-patient-task-board .stable-more-line {
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.unified-patient-task-board .stable-mini-row small {
+  display: block;
+  margin-top: 3px;
+  color: #7c2d12;
+}
+
+.task-row-action-stack {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 78px;
+}
+
+.task-row-action-stack .timeline-action-button {
+  width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.vital-overview-summary-row.stable-mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  align-items: center;
+}
+
+.vital-overview-summary-copy {
+  min-width: 0;
+}
+
+.vital-overview-summary-chart {
+  width: 96px;
+  max-height: 44px;
+  overflow: hidden;
+}
+
+.vital-overview-summary-chart svg {
+  max-height: 44px;
+}
+
+/* --- Right side task panel: medical form density and predictable scanning --- */
+.patient-task-side-panel {
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
+}
+
+.patient-task-panel-header {
+  align-items: center;
+  padding: 12px 14px 10px;
+}
+
+.patient-task-panel-header h2 {
+  margin: 2px 0;
+  font-size: 17px;
+}
+
+.patient-task-panel-header p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-panel-section {
+  margin: 10px;
+  padding: 11px;
+  border-radius: 14px;
+}
+
+.task-panel-section-title {
+  margin-bottom: 8px;
+}
+
+.task-panel-task-list {
+  max-height: 184px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.task-panel-task-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 9px 10px;
+  border-radius: 12px;
+}
+
+.task-panel-task-card strong {
+  font-size: 13px;
+}
+
+.task-panel-current-task {
+  padding: 10px;
+  border-radius: 12px;
+}
+
+.task-panel-current-task h3 {
+  margin: 5px 0 4px;
+  font-size: 15px;
+}
+
+.task-panel-related-alert,
+.task-panel-visit-reminder-summary {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 12px;
+}
+
+.task-panel-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.task-panel-mode-tabs button {
+  min-height: 34px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  text-align: center;
+  white-space: normal;
+}
+
+.task-panel-mode-body {
+  padding-top: 10px;
+}
+
+.task-panel-mode-hint {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.task-panel-form {
+  gap: 10px;
+  padding: 12px !important;
+  border-radius: 14px !important;
+}
+
+.task-panel-form textarea {
+  min-height: 88px;
+}
+
+.task-panel-form textarea[rows="3"] {
+  min-height: 72px;
+}
+
+.task-panel-form .form-actions,
+.task-panel-form .pro-form-actions {
+  margin-top: 0;
+  padding-top: 8px;
+}
+
+.task-panel-session-history li {
+  grid-template-columns: 40px minmax(0, 1fr);
+  padding: 8px;
+}
+
+/* Split mode needs denser cards because the record pane is narrower. */
+.patient-detail-split-shell.task-panel-open .patient-module-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.patient-detail-split-shell.task-panel-open .unified-command-grid.stable-command-grid {
+  grid-template-columns: 1fr;
+}
+
+.patient-detail-split-shell.task-panel-open .vital-overview-summary-row.stable-mini-row {
+  grid-template-columns: minmax(0, 1fr) 84px;
+}
+
+.patient-detail-split-shell.task-panel-open .vital-overview-summary-chart {
+  width: 84px;
+}
+
+@media (max-width: 1280px) {
+  .patient-snapshot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .unified-command-grid.stable-command-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .task-row-action-stack {
+    flex-direction: row;
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .patient-snapshot-grid,
+  .patient-detail-split-shell.task-panel-open .patient-module-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .patient-snapshot-card {
+    min-height: 0;
+  }
+
+  .unified-patient-task-board .stable-command-board-header {
+    align-items: flex-start;
+  }
+
+  .unified-patient-task-board .stable-command-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .vital-overview-summary-row.stable-mini-row {
+    grid-template-columns: 1fr;
+  }
+
+  .vital-overview-summary-chart {
+    width: 100%;
+  }
+
+  .task-panel-mode-tabs {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Phone follow-up tab: history-first ledger, lazy loading friendly --- */
+.patient-follow-up-ledger-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.follow-up-ledger-header {
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.follow-up-ledger-header .section-hint {
+  max-width: 720px;
+}
+
+.follow-up-patient-contact-card {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1.45fr 1fr;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+}
+
+.follow-up-patient-contact-card > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.follow-up-patient-contact-card span {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.follow-up-patient-contact-card strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.follow-up-patient-contact-card small,
+.follow-up-patient-contact-card a {
+  display: inline-block;
+  margin-top: 4px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.follow-up-create-form {
+  padding: 14px !important;
+  border-color: #bfdbfe !important;
+  background: #ffffff !important;
+}
+
+.compact-follow-up-form-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.follow-up-ledger-card {
+  padding: 14px;
+  box-shadow: none;
+}
+
+.follow-up-ledger-toolbar {
+  margin-bottom: 10px;
+}
+
+.follow-up-history-filter {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(180px, 220px) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.follow-up-history-filter label {
+  display: grid;
+  gap: 5px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.follow-up-history-filter input {
+  height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.follow-up-filter-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.follow-up-filter-actions .secondary-button {
+  min-height: 34px;
+  padding: 7px 12px !important;
+}
+
+.follow-up-filter-actions .secondary-button.subtle {
+  background: #fff !important;
+  color: #475569 !important;
+}
+
+.follow-up-ledger-list {
+  gap: 10px;
+  max-height: 620px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.follow-up-ledger-row {
+  padding: 12px 14px;
+  border-color: #dbeafe;
+  background: #ffffff;
+}
+
+.follow-up-ledger-row header {
+  margin-bottom: 8px;
+}
+
+.follow-up-ledger-row header strong {
+  font-size: 13px;
+}
+
+.follow-up-ledger-row dl {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.follow-up-ledger-row dl div:last-child:nth-child(4) {
+  grid-column: 1 / -1;
+}
+
+.follow-up-ledger-row dd {
+  max-height: 104px;
+  overflow: auto;
+}
+
+.follow-up-load-more-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+}
+
+.compact-error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+@media (max-width: 1180px) {
+  .follow-up-patient-contact-card,
+  .compact-follow-up-form-grid,
+  .follow-up-ledger-row dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .follow-up-patient-contact-card,
+  .compact-follow-up-form-grid,
+  .follow-up-history-filter,
+  .follow-up-ledger-row dl {
+    grid-template-columns: 1fr;
+  }
+
+  .follow-up-filter-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+
+/* Top-of-page hospital visit reminder banner */
+.patient-hospital-visit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid #fecaca;
+  border-left: 5px solid #dc2626;
+  border-radius: 14px;
+  background: linear-gradient(90deg, #fff1f2, #fff7ed);
+  box-shadow: 0 12px 26px rgba(220, 38, 38, 0.12);
+}
+
+.patient-hospital-visit-banner-top {
+  margin: 0 0 16px;
+}
+
+.patient-hospital-visit-banner strong {
+  display: block;
+  color: #991b1b;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.patient-hospital-visit-banner p {
+  margin: 4px 0 0;
+  color: #7f1d1d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.patient-hospital-visit-banner-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .patient-hospital-visit-banner {
+    display: grid;
+    align-items: start;
+  }
+
+  .patient-hospital-visit-banner-actions {
+    justify-content: flex-start;
+  }
+}
+
+
+/* Patient-detail hospital visit tab: detailed contact card, no masked phone numbers. */
+.hospital-visit-patient-detail-card,
+.visit-reminder-patient-detail-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.hospital-visit-patient-detail-card .contact-grid,
+.visit-reminder-patient-detail-card .contact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.hospital-visit-patient-detail-card a[href^='tel:'],
+.visit-reminder-patient-detail-card a[href^='tel:'] {
+  color: #0f766e;
+  font-weight: 800;
+  text-decoration: none;
+}

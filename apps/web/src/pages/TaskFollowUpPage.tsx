@@ -2,6 +2,7 @@ import type { FormEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
+import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
 type Patient = {
   id: string;
@@ -58,10 +59,6 @@ function formatTime(value?: string) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-function maskPhone(value?: string) {
-  if (!value || value.length < 7) return value ?? '-';
-  return `${value.slice(0, 3)}****${value.slice(-4)}`;
-}
 
 function getStatusClass(status?: string) {
   return `status-badge status-${String(status || '').toLowerCase().replace(/_/g, '-')}`;
@@ -76,6 +73,9 @@ export function TaskFollowUpPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+
+  // prominent-feedback-bridge-v1
+  useFeedbackMessageBridge(message, error);
 
   const [callOutcome, setCallOutcome] = useState('CONTACTED');
   const [callContent, setCallContent] = useState('');
@@ -225,9 +225,6 @@ export function TaskFollowUpPage() {
         </div>
       </div>
 
-      {message && <div className="notice-success operation-inline-success" role="status">{message}</div>}
-      {error && <div className="notice-error operation-inline-error" role="alert">{error}</div>}
-
       <section className="task-call-layout">
         <aside className="task-call-contact-card panel">
           <div className="hospital-section-header compact-header">
@@ -239,9 +236,9 @@ export function TaskFollowUpPage() {
           <dl className="contact-info-list">
             <div><dt>患者姓名</dt><dd>{patient.name}</dd></div>
             <div><dt>院内号</dt><dd>{patient.hospitalPatientId ?? '-'}</dd></div>
-            <div><dt>联系电话</dt><dd><a href={patient.phone ? `tel:${patient.phone}` : undefined}>{maskPhone(patient.phone)}</a></dd></div>
+            <div><dt>联系电话</dt><dd><a href={patient.phone ? `tel:${patient.phone}` : undefined}>{patient.phone ?? '-'}</a></dd></div>
             <div><dt>住址</dt><dd>{patient.address ?? '-'}</dd></div>
-            <div><dt>紧急联系人</dt><dd>{patient.emergencyContactName ?? '-'} {patient.emergencyContactPhone ? ` / ${maskPhone(patient.emergencyContactPhone)}` : ''}</dd></div>
+            <div><dt>紧急联系人</dt><dd>{patient.emergencyContactName ?? '-'} {patient.emergencyContactPhone ? ` / ${patient.emergencyContactPhone ?? '-'}` : ''}</dd></div>
             <div><dt>责任护士</dt><dd>{patient.responsibleNurseId ?? '-'}</dd></div>
           </dl>
 

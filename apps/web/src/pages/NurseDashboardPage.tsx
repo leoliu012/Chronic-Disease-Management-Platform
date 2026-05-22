@@ -48,7 +48,7 @@ type NurseDashboard = {
 
 type WorkItem = {
   id: string;
-  itemType: 'FOLLOW_UP_TASK' | 'RISK_FOLLOW_UP_TASK' | 'RISK_ALERT_ONLY';
+  itemType: 'FOLLOW_UP_TASK' | 'RISK_FOLLOW_UP_TASK' | 'RISK_ALERT_ONLY' | 'HOSPITAL_VISIT_TASK';
   sourceType: 'TASK' | 'RISK_ALERT';
   taskId?: string;
   alertId?: string;
@@ -66,6 +66,15 @@ type WorkItem = {
 
 type CreatedTask = {
   id: string;
+};
+
+type HospitalVisitReminder = {
+  id: string;
+  patientId: string;
+  reason: string;
+  remindedAt: string;
+  relatedTaskId?: string | null;
+  patient?: Patient;
 };
 
 type WorkItemsResponse = {
@@ -96,6 +105,7 @@ const nurseId = 'nurse-001';
 const itemTypeLabelMap: Record<string, string> = {
   FOLLOW_UP_TASK: '随访任务',
   RISK_FOLLOW_UP_TASK: '风险随访任务',
+  HOSPITAL_VISIT_TASK: '到院提醒任务',
   RISK_ALERT_ONLY: '风险预警',
 };
 
@@ -108,8 +118,8 @@ const riskLabelMap: Record<string, string> = {
 
 const vitalTypeLabelMap: Record<string, string> = {
   BLOOD_PRESSURE: '血压',
-  SYSTOLIC_BP: '收缩压',
-  DIASTOLIC_BP: '舒张压',
+  SYSTOLIC_BP: '血压（收缩压）',
+  DIASTOLIC_BP: '血压（舒张压）',
   BLOOD_GLUCOSE: '血糖',
   WEIGHT: '体重',
   HEART_RATE: '心率',
@@ -219,10 +229,10 @@ function WorkItemsTable({
             )}
             <span className="work-item-action-hint">
               {item.itemType === 'RISK_FOLLOW_UP_TASK'
-                ? '该事项已合并任务和预警，进入患者任务处理页后选择处理方式。'
+                ? '该事项已合并任务和预警；电话随访进入患者详情 tab，到院/结案进入右侧处置面板。'
                 : item.itemType === 'RISK_ALERT_ONLY'
-                  ? '该预警尚未形成随访任务，点击后会先生成风险随访任务，再进入电话随访闭环。'
-                  : '进入患者任务处理页，可选择电话随访、复测任务或计划调整。'}
+                  ? '该预警尚未形成随访任务，点击后会先生成风险随访任务，再进入患者详情页的电话随访 tab。'
+                  : '进入患者详情页，可在电话随访 tab 记录沟通，并在右侧面板完成到院/结案。'}
             </span>
           </div>
         </article>
@@ -311,6 +321,7 @@ export function NurseDashboardPage() {
   const navigate = useNavigate();
   const [data, setData] = useState<NurseDashboard | null>(null);
   const [workItemsData, setWorkItemsData] = useState<WorkItemsResponse | null>(null);
+  const [activeVisitReminders, setActiveVisitReminders] = useState<HospitalVisitReminder[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState<WorkbenchSectionKey>('workItems');
   const [workItemFilter, setWorkItemFilter] = useState<WorkItemFilter>('ALL');
@@ -323,12 +334,14 @@ export function NurseDashboardPage() {
     setError('');
 
     try {
-      const [dashboardRes, workItemsRes] = await Promise.all([
+      const [dashboardRes, workItemsRes, visitRemindersRes] = await Promise.all([
         api.get(`/nurse-dashboard?nurseId=${nurseId}`),
         api.get(`/work-items?nurseId=${nurseId}`),
+        api.get('/hospital-visit-reminders?status=ACTIVE'),
       ]);
       setData(dashboardRes.data);
       setWorkItemsData(workItemsRes.data);
+      setActiveVisitReminders(visitRemindersRes.data ?? []);
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '护士工作台加载失败，请确认后端服务已启动。'));
@@ -364,8 +377,8 @@ export function NurseDashboardPage() {
       });
 
       const createdTask = taskRes.data as CreatedTask;
-      setMessage('已生成风险随访任务，即将进入电话随访详情。');
-      navigate(`/patients/${item.patient.id}/task-processing?taskId=${createdTask.id}&mode=phone`);
+      setMessage('已生成风险随访任务，即将进入患者详情页的电话随访 tab。');
+      navigate(`/patients/${item.patient.id}?workspace=follow-up`);
     } catch (err) {
       console.error(err);
       setError(getApiErrorMessage(err, '风险预警转随访任务失败，请稍后重试。'));
@@ -382,7 +395,7 @@ export function NurseDashboardPage() {
   const workItems = workItemsData?.items ?? [];
   const filteredWorkItems = useMemo(() => {
     if (workItemFilter === 'RISK') {
-      return workItems.filter((item) => item.itemType === 'RISK_FOLLOW_UP_TASK' || item.itemType === 'RISK_ALERT_ONLY');
+      return workItems.filter((item) => item.itemType === 'RISK_FOLLOW_UP_TASK' || item.itemType === 'RISK_ALERT_ONLY' || item.itemType === 'HOSPITAL_VISIT_TASK');
     }
     if (workItemFilter === 'TASK') {
       return workItems.filter((item) => item.itemType === 'FOLLOW_UP_TASK');
@@ -401,7 +414,7 @@ export function NurseDashboardPage() {
 
   const summaryItems: SummaryItem[] = [
     { label: '待处理事项', value: summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount, section: 'workItems', filter: 'ALL', description: '任务与预警合并', tone: 'primary' },
-    { label: '风险随访', value: (summary?.riskTaskCount ?? 0) + (summary?.alertOnlyCount ?? 0), section: 'workItems', filter: 'RISK', description: '来自风险预警', tone: 'danger' },
+    { label: '风险随访', value: (summary?.riskTaskCount ?? 0) + (summary?.alertOnlyCount ?? 0), section: 'workItems', filter: 'RISK', description: '风险/到院闭环', tone: 'danger' },
     { label: '普通随访', value: summary?.regularTaskCount ?? data.summary.pendingTaskCount, section: 'workItems', filter: 'TASK', description: '无关联预警', tone: 'warning' },
     { label: '逾期事项', value: summary?.overdueCount ?? data.summary.overdueTaskCount, section: 'workItems', filter: 'OVERDUE', description: '优先联系', tone: 'danger' },
     { label: '异常指标', value: data.summary.recentAbnormalVitalCount, section: 'vitals', description: '近期异常值', tone: 'warning' },
@@ -424,15 +437,17 @@ export function NurseDashboardPage() {
 
   return (
     <div className="business-page nurse-workbench-clean unified-workbench-page">
-      <div className="page-header clean-page-header">
-        <div>
-          <div className="page-kicker">慢病护理工作台</div>
-          <h1>待处理事项</h1>
-          <p className="page-subtitle">风险预警是来源，随访任务是执行入口，电话随访记录是处理结果。护士只处理一条“事项”，系统后台同步维护任务和预警状态。</p>
-        </div>
-        <button className="secondary-btn" onClick={loadDashboard} disabled={loading}>{loading ? '刷新中...' : '刷新数据'}</button>
-      </div>
-
+      {activeVisitReminders.length > 0 && (
+        <section className="hospital-visit-workbench-banner" role="status">
+          <div>
+            <strong>已提醒以下患者到院：{activeVisitReminders.map((item) => item.patient?.name).filter(Boolean).join('、')}</strong>
+            <p>请从到院提醒中心进入患者详情右侧处置面板，完成再次提醒、已到院、未到院或拒绝到院记录。</p>
+          </div>
+          <Link className="primary-btn compact-link-btn" to="/hospital-visit-reminders">
+            查看详情
+          </Link>
+        </section>
+      )}
 
       <section className="workbench-overview-strip" aria-label="护士工作台指标入口">
         {summaryItems.map((item) => (
@@ -480,13 +495,13 @@ export function NurseDashboardPage() {
               <div className="clean-section-heading">
                 <div>
                   <h2>待处理事项</h2>
-                  <p>任务、预警、风险随访合并展示。所有任务统一进入患者任务处理页；护士先选任务，再选择电话随访、复测任务、计划调整或完成/取消处理。</p>
+                  <p>任务、预警、风险随访合并展示。所有任务回到患者详情页处理；电话随访在独立 tab 记录，到院与结案在右侧面板完成。</p>
                 </div>
               </div>
 
               <div className="segmented-tabs unified-work-item-tabs">
                 <button className={workItemFilter === 'ALL' ? 'active' : ''} onClick={() => setWorkItemFilter('ALL')} type="button">全部 <span>{workItems.length}</span></button>
-                <button className={workItemFilter === 'RISK' ? 'active' : ''} onClick={() => setWorkItemFilter('RISK')} type="button">风险相关 <span>{workItems.filter((item) => item.itemType !== 'FOLLOW_UP_TASK').length}</span></button>
+                <button className={workItemFilter === 'RISK' ? 'active' : ''} onClick={() => setWorkItemFilter('RISK')} type="button">风险/到院 <span>{workItems.filter((item) => item.itemType !== 'FOLLOW_UP_TASK').length}</span></button>
                 <button className={workItemFilter === 'TASK' ? 'active' : ''} onClick={() => setWorkItemFilter('TASK')} type="button">普通随访 <span>{workItems.filter((item) => item.itemType === 'FOLLOW_UP_TASK').length}</span></button>
                 <button className={workItemFilter === 'OVERDUE' ? 'active' : ''} onClick={() => setWorkItemFilter('OVERDUE')} type="button">逾期 <span>{workItems.filter((item) => isOverdue(item)).length}</span></button>
               </div>
@@ -499,7 +514,7 @@ export function NurseDashboardPage() {
 
           {activeSection === 'vitals' && (
             <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>最近异常指标</h2><p>指标异常作为风险来源线索；处理入口会落到待处理事项和电话随访闭环。</p></div></div>
+              <div className="clean-section-heading"><div><h2>最近异常指标</h2><p>指标异常作为风险来源线索；处理入口会落到患者详情页内的电话随访 tab 与处置面板。</p></div></div>
               <section className="clean-subpanel"><VitalsTable records={data.recentAbnormalVitals} /></section>
             </div>
           )}
@@ -558,5 +573,9 @@ export function NurseDashboardPage() {
     </div>
   );
 }
+
+
+
+
 
 

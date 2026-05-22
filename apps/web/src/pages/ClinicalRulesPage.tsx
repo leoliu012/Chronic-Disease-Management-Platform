@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { getRoleLabel, type CurrentUser } from './LoginPage';
+import { useFeedbackInferredBridge } from '../utils/feedbackMessage';
 
 type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
 
@@ -205,6 +206,9 @@ export function ClinicalRulesPage({ user }: { user: CurrentUser }) {
   const [savingId, setSavingId] = useState('');
   const [message, setMessage] = useState('');
 
+  // prominent-feedback-bridge-v1
+  useFeedbackInferredBridge(message);
+
   const isAdmin = user.role === 'ADMIN';
 
   async function loadRules() {
@@ -270,25 +274,14 @@ export function ClinicalRulesPage({ user }: { user: CurrentUser }) {
 
   return (
     <div className="page clinical-rules-page">
-      <div className="page-header hospital-page-header">
-        <div>
-          <div className="eyebrow">系统配置 / 慢病规则模板</div>
-          <h1>病种规则与风险阈值配置</h1>
-          <p>
-            将血压、血糖、血氧、心率等异常判断从代码逻辑收敛为医院可配置规则。医生/护士可查看，系统管理员可调整。
-          </p>
-        </div>
-        <div className="header-actions">
-          <span className="topbar-pill">当前角色：{getRoleLabel(user.role)}</span>
-          {isAdmin && (
-            <button className="secondary-btn" type="button" onClick={seedDefaults} disabled={savingId === 'seed-defaults'}>
-              {savingId === 'seed-defaults' ? '刷新中...' : '刷新默认规则'}
-            </button>
-          )}
-        </div>
+      <div className="header-actions clinical-rules-compact-actions">
+        <span className="topbar-pill">当前角色：{getRoleLabel(user.role)}</span>
+        {isAdmin && (
+          <button className="secondary-btn" type="button" onClick={seedDefaults} disabled={savingId === 'seed-defaults'}>
+            {savingId === 'seed-defaults' ? '刷新中...' : '刷新默认规则'}
+          </button>
+        )}
       </div>
-
-      {message && <div className="rules-message">{message}</div>}
 
       {loading ? (
         <div className="hospital-card">规则加载中...</div>
@@ -394,3 +387,5 @@ export function ClinicalRulesPage({ user }: { user: CurrentUser }) {
     </div>
   );
 }
+
+

@@ -3,8 +3,6 @@ const { formatDateTime } = require('../../utils/format');
 
 const vitalTypes = [
   { label: '血压（收缩压/舒张压）', type: 'BLOOD_PRESSURE', unit: 'mmHg', quickValues: [] },
-  { label: '收缩压', type: 'SYSTOLIC_BP', unit: 'mmHg', quickValues: [120, 140, 160, 180] },
-  { label: '舒张压', type: 'DIASTOLIC_BP', unit: 'mmHg', quickValues: [80, 90, 100, 110] },
   { label: '血糖', type: 'BLOOD_GLUCOSE', unit: 'mmol/L', quickValues: [5.6, 7.0, 11.1, 16.7] },
   { label: '血氧', type: 'SPO2', unit: '%', quickValues: [98, 95, 93, 89] },
   { label: '心率', type: 'HEART_RATE', unit: 'bpm', quickValues: [72, 98, 120, 48] },
@@ -15,18 +13,18 @@ Page({
   data: {
     patientId: '',
     vitalTypes,
-    selectedTypeIndex: 1,
-    selectedTypeLabel: vitalTypes[1].label,
+    selectedTypeIndex: 0,
+    selectedTypeLabel: vitalTypes[0].label,
     selectedPlanId: '',
     selectedPlan: null,
     plans: [],
     activePlans: [],
-    unit: vitalTypes[1].unit,
+    unit: vitalTypes[0].unit,
     value: '',
     systolicValue: '',
     diastolicValue: '',
     note: '',
-    quickValues: vitalTypes[1].quickValues.map((value) => ({ label: String(value), value })),
+    quickValues: vitalTypes[0].quickValues.map((value) => ({ label: String(value), value })),
     submitting: false,
     loadingPlans: false,
     lastResult: null
@@ -105,7 +103,7 @@ Page({
   onNoteInput(event) { this.setData({ note: event.detail.value }); },
   useQuickValue(event) { this.setData({ value: String(event.currentTarget.dataset.value) }); },
 
-  buildPayload(type, value) {
+  buildPayload(type, value, extra = {}) {
     const plan = this.data.selectedPlan;
     return {
       type,
@@ -115,7 +113,8 @@ Page({
       dataSource: 'MINI_PROGRAM',
       monitoringPlanId: this.data.selectedPlanId || undefined,
       scheduledAt: plan && plan.nextDue ? plan.nextDue.scheduledAt : undefined,
-      note: this.data.note || undefined
+      note: this.data.note || undefined,
+      ...extra
     };
   },
 
@@ -137,22 +136,14 @@ Page({
           wx.showToast({ title: '请输入有效的收缩压和舒张压', icon: 'none' });
           return;
         }
-        const systolicResult = await patientRequest({
+        result = await patientRequest({
           url: '/vitals',
           method: 'POST',
-          data: this.buildPayload('SYSTOLIC_BP', systolic)
+          data: this.buildPayload('BLOOD_PRESSURE', systolic, {
+            systolicValue: systolic,
+            diastolicValue: diastolic
+          })
         });
-        const diastolicResult = await patientRequest({
-          url: '/vitals',
-          method: 'POST',
-          data: this.buildPayload('DIASTOLIC_BP', diastolic)
-        });
-        result = {
-          vitalRecord: systolicResult.vitalRecord,
-          generatedRiskAlert: systolicResult.generatedRiskAlert || diastolicResult.generatedRiskAlert,
-          generatedTask: systolicResult.generatedTask || diastolicResult.generatedTask,
-          pairResult: { systolicResult, diastolicResult }
-        };
       } else {
         const numericValue = Number(this.data.value);
         if (!this.data.value || Number.isNaN(numericValue)) {
@@ -199,5 +190,7 @@ Page({
 
   goBind() { wx.navigateTo({ url: '/pages/bind/index' }); }
 });
+
+
 
 

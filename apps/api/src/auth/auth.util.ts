@@ -67,10 +67,24 @@ export function signToken(payload: Omit<AuthTokenPayload, 'iat' | 'exp'>) {
   return `${header}.${body}.${signature}`;
 }
 
+export class TokenExpiredError extends Error {
+  constructor(message = 'Token expired') {
+    super(message);
+    this.name = 'TokenExpiredError';
+  }
+}
+
+export class InvalidTokenError extends Error {
+  constructor(message = 'Invalid token') {
+    super(message);
+    this.name = 'InvalidTokenError';
+  }
+}
+
 export function verifyToken(token: string): AuthTokenPayload {
   const parts = token.split('.');
   if (parts.length !== 3) {
-    throw new Error('Invalid token format');
+    throw new InvalidTokenError('Invalid token format');
   }
 
   const [header, body, signature] = parts;
@@ -82,14 +96,20 @@ export function verifyToken(token: string): AuthTokenPayload {
     signature.length !== expectedSignature.length ||
     !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
   ) {
-    throw new Error('Invalid token signature');
+    throw new InvalidTokenError('Invalid token signature');
   }
 
-  const payload = JSON.parse(fromBase64Url(body)) as AuthTokenPayload;
+  let payload: AuthTokenPayload;
+  try {
+    payload = JSON.parse(fromBase64Url(body)) as AuthTokenPayload;
+  } catch {
+    throw new InvalidTokenError('Invalid token body');
+  }
+
   const now = Math.floor(Date.now() / 1000);
 
   if (!payload.exp || payload.exp < now) {
-    throw new Error('Token expired');
+    throw new TokenExpiredError('Token expired');
   }
 
   return payload;

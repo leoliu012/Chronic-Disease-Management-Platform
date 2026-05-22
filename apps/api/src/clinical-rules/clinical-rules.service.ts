@@ -102,6 +102,18 @@ function formatRuleThreshold(rule: MatchedRule) {
   return `${operatorLabelMap[rule.operator] ?? rule.operator} ${rule.thresholdValue} ${rule.unit}`;
 }
 
+function isBloodPressureComponent(type?: string | null) {
+  return type === 'SYSTOLIC_BP' || type === 'DIASTOLIC_BP' || type === 'BLOOD_PRESSURE';
+}
+
+function getAlertTitle(rule: MatchedRule) {
+  if (isBloodPressureComponent(rule.vitalType)) {
+    return '异常健康指标：血压';
+  }
+
+  return rule.alertTitle || `异常健康指标：${rule.displayName}`;
+}
+
 @Injectable()
 export class ClinicalRulesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -368,7 +380,7 @@ export class ClinicalRulesService {
     return {
       isAbnormal: true,
       riskLevel: topRule.riskLevel,
-      title: topRule.alertTitle || `异常健康指标：${topRule.displayName}`,
+      title: getAlertTitle(topRule),
       description: [
         `${topRule.displayName} ${value} ${dto.unit || topRule.unit}`,
         `命中规则：${topRule.templateName} / ${formatRuleThreshold(topRule)}`,
@@ -403,3 +415,5 @@ export class ClinicalRulesService {
     return questionnaire;
   }
 }
+
+
