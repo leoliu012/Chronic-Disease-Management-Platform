@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import type { CurrentUser } from './LoginPage';
 import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
@@ -61,8 +62,8 @@ export function HospitalVisitRemindersPage({ user: _user }: { user: CurrentUser 
   // prominent-feedback-bridge-v1
   useFeedbackMessageBridge(undefined, error);
 
-  async function loadReminders() {
-    setLoading(true);
+  async function loadReminders(opts?: { silent?: boolean }) {
+    if (!opts?.silent) setLoading(true);
     setError('');
 
     try {
@@ -72,13 +73,16 @@ export function HospitalVisitRemindersPage({ user: _user }: { user: CurrentUser 
       console.error(err);
       setError(getApiErrorMessage(err, '到院提醒列表加载失败，请稍后重试。'));
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadReminders();
   }, []);
+
+  // 到院提醒每 20 秒自动刷新，无需手动点「刷新」。
+  usePolling(() => loadReminders({ silent: true }), 20000);
 
   const sortedReminders = useMemo(() => {
     if (!highlightPatientId) return reminders;
@@ -192,5 +196,6 @@ export function HospitalVisitRemindersPage({ user: _user }: { user: CurrentUser 
     </div>
   );
 }
+
 
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ApiConnectionErrorDetail, OperationNoticeDetail } from '../api/client';
 import type { FeedbackMessageDetail } from '../utils/feedbackMessage';
+import { renderWithNameChips } from './EntityName';
 
 const MAX_ITEMS = 3;
 const AUTO_DISMISS_MS = 5200;
@@ -36,6 +37,11 @@ function shouldAutoDismiss(tone: Tone) {
  *
  * Every message renders as a CENTERED prominent message box (NOT a top-of-page
  * notice bar). The host must be mounted exactly once at the app root.
+ *
+ * Message text may contain `⟦name⟧` chip markers (see utils/entityNameToken).
+ * Those are rendered as styled pill spans instead of leaking through as
+ * raw Unicode, so medication names and vital indicator names read clearly
+ * in toast text without the legacy `「」` corner-bracket convention.
  */
 export function OperationToastHost() {
   const [items, setItems] = useState<ToastItem[]>([]);
@@ -131,9 +137,9 @@ export function OperationToastHost() {
                     : 'i'}
             </div>
             <div className="operation-toast-body">
-              <strong>{item.title}</strong>
-              <span>{item.message}</span>
-              {item.detail && <em>{item.detail}</em>}
+              <strong>{renderWithNameChips(item.title)}</strong>
+              <span>{renderWithNameChips(item.message)}</span>
+              {item.detail && <em>{renderWithNameChips(item.detail)}</em>}
             </div>
             <button
               className="operation-toast-close"

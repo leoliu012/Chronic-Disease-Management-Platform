@@ -1,3 +1,5 @@
+import { nameToken } from './entityNameToken';
+
 export type ActiveTaskProcessingSession = {
   patientId: string;
   taskId: string;
@@ -876,7 +878,7 @@ function detailsForMutation(method: string, url: string, requestData?: unknown, 
   const before = getSnapshot(entityType, resolvedEntityId);
   const after = mergeObjects(before, requestObject, responseObject);
   const itemName = getPrimaryName(entityType, after) || getPrimaryName(entityType, before);
-  const itemPrefix = itemName ? `${entityLabel}「${itemName}」` : entityLabel;
+  const itemPrefix = itemName ? `${entityLabel}${nameToken(itemName)}` : entityLabel;
 
   if (method === 'POST') {
     if (entityType === 'medications') {
@@ -891,7 +893,7 @@ function detailsForMutation(method: string, url: string, requestData?: unknown, 
   if (method === 'DELETE') {
     const target = before ?? responseObject ?? requestObject;
     const name = getPrimaryName(entityType, target);
-    const prefix = name ? `${entityLabel}「${name}」` : itemPrefix;
+    const prefix = name ? `${entityLabel}${nameToken(name)}` : itemPrefix;
     return `删除/停用${prefix}。`;
   }
 
@@ -957,5 +959,7 @@ export function buildAutoTaskProcessingEventPayload(
     sourceId: `${upperMethod} ${pathWithoutQuery(rawUrl)}`,
   };
 }
+
+
 
 

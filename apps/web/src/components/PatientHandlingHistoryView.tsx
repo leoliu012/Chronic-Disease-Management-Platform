@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
+// entity-name-chip-v1: render `⟦name⟧` markers carried by audit-log
+// descriptions and titles as styled pill chips instead of leaking the
+// Unicode brackets through to the DOM as raw text.
+import { renderWithNameChips } from './EntityName';
 
 /**
  * 处置记录 (handling history) view.
@@ -158,30 +162,33 @@ function parseStructuredDescription(description?: string | null) {
 function renderFlowDescription(description: string, localizeBackendText: (v?: string | null) => string) {
   const localized = localizeBackendText(description);
   const parsed = parseStructuredDescription(localized);
-  if (!parsed) return <p>{localized}</p>;
+  // entity-name-chip-v1: descriptions emitted by taskProcessingContext.ts
+  // carry `⟦name⟧` markers in the summary and the row values. Wrap every
+  // text slot with renderWithNameChips so they become styled pills.
+  if (!parsed) return <p>{renderWithNameChips(localized)}</p>;
 
   return (
     <div className="task-flow-node-description">
       <p className="task-flow-node-summary">
-        <strong>{parsed.summary}</strong>
+        <strong>{renderWithNameChips(parsed.summary)}</strong>
       </p>
       <dl className="task-flow-node-detail-list">
         {parsed.rows.map((row) => (
           <div key={row.id} className="task-flow-node-detail-row">
             {row.raw ? (
-              <dd className="task-flow-node-detail-value task-flow-node-detail-raw">{row.raw}</dd>
+              <dd className="task-flow-node-detail-value task-flow-node-detail-raw">{renderWithNameChips(row.raw)}</dd>
             ) : (
               <>
-                <dt className="task-flow-node-detail-label">{row.label}</dt>
+                <dt className="task-flow-node-detail-label">{renderWithNameChips(row.label)}</dt>
                 <dd className="task-flow-node-detail-value">
                   {row.before !== undefined && row.after !== undefined ? (
                     <span className="task-flow-node-change">
-                      <span className="task-flow-node-before">{row.before || '未填写'}</span>
+                      <span className="task-flow-node-before">{row.before ? renderWithNameChips(row.before) : '未填写'}</span>
                       <span className="task-flow-node-arrow">→</span>
-                      <strong className="task-flow-node-after">{row.after || '未填写'}</strong>
+                      <strong className="task-flow-node-after">{row.after ? renderWithNameChips(row.after) : '未填写'}</strong>
                     </span>
                   ) : (
-                    <strong>{row.value}</strong>
+                    <strong>{renderWithNameChips(row.value)}</strong>
                   )}
                 </dd>
               </>
@@ -232,10 +239,10 @@ function FlowChart({
             <div className="task-flow-node-index">{index + 1}</div>
             <div className="task-flow-node-body">
               <div className="task-flow-node-topline">
-                <strong>{EVENT_TYPE_LABEL[node.eventType] ?? node.title}</strong>
+                <strong>{EVENT_TYPE_LABEL[node.eventType] ?? renderWithNameChips(node.title)}</strong>
                 <span>{formatTime(node.createdAt)}</span>
               </div>
-              <h4>{localizeBackendText(node.title)}</h4>
+              <h4>{renderWithNameChips(localizeBackendText(node.title))}</h4>
               {node.description && renderFlowDescription(node.description, localizeBackendText)}
               {(node.sourceType || node.electronicSignature) && (
                 <div className="task-flow-node-meta">
@@ -525,7 +532,7 @@ export function PatientHandlingHistoryView({
                       <span className="handling-history-v2-card-pill">已关联风险预警</span>
                     )}
                   </div>
-                  <h3>{localizeBackendText(task.title)}</h3>
+                  <h3>{renderWithNameChips(localizeBackendText(task.title))}</h3>
                   <div className="handling-history-v2-card-meta">
                     <span>创建：{formatTime(task.createdAt)}</span>
                     <span>截止：{formatTime(task.dueAt ?? undefined)}</span>
@@ -563,3 +570,5 @@ export function PatientHandlingHistoryView({
     </section>
   );
 }
+
+

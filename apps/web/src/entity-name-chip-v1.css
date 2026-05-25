@@ -1,0 +1,154 @@
+/* =====================================================================
+ * entity-name-chip-v1.css
+ *
+ * Replaces the legacy `「name」` Chinese corner-bracket convention with a
+ * styled inline pill chip (`.entity-name-chip`). Applies to medication
+ * names (`二甲双胍片`), vital indicator names (`血糖`), plan titles,
+ * task titles, and field names that previously sat inside `「」`.
+ *
+ * Also defines the inline-edit container that lets a card expand its
+ * own edit form in-place instead of routing the user to a separate
+ * full-width form panel at the bottom of the page (which used to also
+ * force `window.scrollTo({ top: 0 })`).
+ * ===================================================================== */
+
+.entity-name-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  margin: 0 3px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.95em;
+  line-height: 1.45;
+  background: rgba(15, 94, 168, 0.09);
+  color: var(--hospital-blue-dark, #0b3d6d);
+  border: 1px solid rgba(15, 94, 168, 0.22);
+  vertical-align: baseline;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entity-name-chip-medication {
+  background: rgba(20, 149, 95, 0.10);
+  color: #14674a;
+  border-color: rgba(20, 149, 95, 0.30);
+}
+
+.entity-name-chip-vital {
+  background: rgba(217, 119, 6, 0.11);
+  color: #8a4506;
+  border-color: rgba(217, 119, 6, 0.32);
+}
+
+.entity-name-chip-plan {
+  background: rgba(15, 159, 188, 0.10);
+  color: #075763;
+  border-color: rgba(15, 159, 188, 0.30);
+}
+
+.entity-name-chip-task {
+  background: rgba(109, 91, 208, 0.10);
+  color: #4b3f96;
+  border-color: rgba(109, 91, 208, 0.28);
+}
+
+.entity-name-chip-field {
+  background: rgba(75, 100, 125, 0.10);
+  color: #2a3a4d;
+  border-color: rgba(75, 100, 125, 0.26);
+}
+
+/* Toast body chips: slightly smaller to fit the toast typography. */
+.operation-toast-body .entity-name-chip {
+  font-size: 13px;
+  padding: 0 7px;
+  margin: 0 2px;
+}
+
+/* Banner-hint chips: align with surrounding hint text size. */
+.follow-up-next-visit-banner-hint .entity-name-chip {
+  font-size: 12.5px;
+  padding: 0 6px;
+}
+
+/* ---------------------------------------------------------------------
+ * Inline-edit form: when a card is in edit mode, the same card hosts
+ * its edit form in-place. The card spans the full grid row so the form
+ * has room to breathe; siblings re-flow under it naturally.
+ * --------------------------------------------------------------------- */
+
+.task-inline-card.is-inline-editing {
+  grid-column: 1 / -1;
+  background: #ffffff;
+  border-left-color: var(--hospital-orange, #d97706);
+  box-shadow: 0 6px 20px rgba(15, 94, 168, 0.10);
+}
+
+.task-inline-card .inline-edit-toggle-active {
+  background: rgba(217, 119, 6, 0.12);
+  color: #8a4506;
+  border-color: rgba(217, 119, 6, 0.40);
+}
+
+.task-inline-card-inline-form {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed #cfdcec;
+}
+
+.task-inline-card-inline-form .hospital-form {
+  margin: 0;
+}
+
+.task-inline-card-inline-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.task-inline-card-inline-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-inline-card-inline-form .form-row > label {
+  font-size: 12.5px;
+  color: #4b647d;
+  font-weight: 600;
+}
+
+.task-inline-card-inline-form .form-row > input,
+.task-inline-card-inline-form .form-row > select,
+.task-inline-card-inline-form .form-row > textarea {
+  font-size: 13.5px;
+}
+
+.task-inline-card-inline-form .form-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-inline-card-inline-form .edit-mode-banner {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: rgba(217, 119, 6, 0.10);
+  border-left: 3px solid var(--hospital-orange, #d97706);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #6b3d05;
+  line-height: 1.55;
+}
+
+.task-inline-card-inline-form .operation-form-hint {
+  font-size: 12.5px;
+  color: var(--muted, #667085);
+}

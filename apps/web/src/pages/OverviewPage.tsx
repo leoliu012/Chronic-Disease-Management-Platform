@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 
 type OverviewReport = {
   summary: {
@@ -125,12 +126,21 @@ export function OverviewPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const dashboardRef = useRef<HTMLDivElement | null>(null);
 
+  const loadOverview = useCallback(
+    () =>
+      api
+        .get('/reports/overview')
+        .then((res) => setData(res.data))
+        .catch(() => setError('总览数据加载失败，请确认后端服务已启动。')),
+    [],
+  );
+
   useEffect(() => {
-    api
-      .get('/reports/overview')
-      .then((res) => setData(res.data))
-      .catch(() => setError('总览数据加载失败，请确认后端服务已启动。'));
-  }, []);
+    loadOverview();
+  }, [loadOverview]);
+
+  // 运营总览每 20 秒自动刷新，无需手动 reload。
+  usePolling(loadOverview, 20000);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -495,3 +505,4 @@ export function OverviewPage() {
     </div>
   );
 }
+

@@ -1,0 +1,382 @@
+/*
+ * gateway-promote-conflict-v1.css — conflict-resolution-ux-v1
+ *
+ * 网关入库冲突核验抽屉。视觉风格对齐 task-flow-node-* 那一套：
+ *   - 右侧滑入的 panel-card
+ *   - section-title + section-body 分块
+ *   - 用 before/after 思路展示「本地 vs 上游」字段对比
+ *   - 不一致的字段用浅红色背景 + 「不一致」红色 tag 标出
+ *
+ * 颜色变量沿用项目内 hospital-* 主题：
+ *   --color-danger / --color-warning / --color-success / --color-text-muted。
+ *   如果某个变量缺失，下面也给了硬编码 fallback。
+ */
+
+/* ---- 表格列辅助小字（让"说明"列别再是一堵中文文字） ---- */
+.gateway-conflict-cell-summary {
+  color: var(--color-text-muted, #5c6b80);
+  font-size: 12.5px;
+}
+.gateway-conflict-cell-summary code {
+  background: rgba(15, 23, 42, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.gateway-conflict-cell-pending {
+  color: var(--color-text-muted, #5c6b80);
+  font-style: italic;
+  font-size: 12.5px;
+}
+.gateway-conflict-cell-failed {
+  color: #b91c1c;
+  font-size: 12.5px;
+  line-height: 1.4;
+  display: inline-block;
+  max-width: 260px;
+}
+
+/* "查看详情 →" / "展开 / 收起" 这种内嵌链式按钮 */
+.gateway-conflict-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: inherit;
+  color: var(--color-primary, #2563eb);
+  cursor: pointer;
+  font-weight: 600;
+}
+.gateway-conflict-link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ---- 抽屉本体 ---- */
+.gateway-conflict-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+}
+.gateway-conflict-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.32);
+  backdrop-filter: blur(2px);
+}
+.gateway-conflict-drawer {
+  position: relative;
+  width: min(560px, 96vw);
+  height: 100vh;
+  background: #fff;
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.18);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  animation: gateway-conflict-slide-in 180ms ease-out;
+}
+@keyframes gateway-conflict-slide-in {
+  from { transform: translateX(24px); opacity: 0.6; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ---- header ---- */
+.gateway-conflict-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.9), #fff);
+}
+.gateway-conflict-header h3 {
+  margin: 8px 0 4px;
+  font-size: 18px;
+  line-height: 1.3;
+  color: #0f172a;
+}
+.gateway-conflict-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.gateway-conflict-subtitle {
+  margin: 4px 0 0;
+  color: var(--color-text-muted, #5c6b80);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.gateway-conflict-subtitle code {
+  background: rgba(15, 23, 42, 0.05);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.gateway-conflict-meta-dot {
+  margin: 0 6px;
+  color: rgba(15, 23, 42, 0.32);
+}
+.gateway-conflict-close {
+  margin-left: auto;
+  background: rgba(15, 23, 42, 0.06);
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: #475569;
+}
+.gateway-conflict-close:hover {
+  background: rgba(15, 23, 42, 0.12);
+}
+
+/* 颜色 pill —— 原因 + 资源类型 */
+.gateway-conflict-reason-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.5px;
+}
+.gateway-conflict-reason-pill.tone-danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+.gateway-conflict-reason-pill.tone-warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+.gateway-conflict-reason-pill.tone-info {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+.gateway-conflict-resource-pill {
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #334155;
+}
+
+/* ---- 通用 section ---- */
+.gateway-conflict-section {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+.gateway-conflict-section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #64748b;
+  margin-bottom: 10px;
+}
+.gateway-conflict-message {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #1f2937;
+  background: #fff8e8;
+  border-left: 3px solid #f59e0b;
+  padding: 10px 12px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.gateway-conflict-empty {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* ---- diff table —— 这是核心改进 ---- */
+.gateway-conflict-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.gateway-conflict-diff-table thead {
+  background: #f8fafc;
+}
+.gateway-conflict-diff-table th,
+.gateway-conflict-diff-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  vertical-align: top;
+}
+.gateway-conflict-diff-table thead th {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.gateway-conflict-diff-table tbody th {
+  font-weight: 600;
+  color: #334155;
+  width: 92px;
+  background: #fafbfc;
+}
+.gateway-conflict-diff-table tbody td {
+  word-break: break-all;
+}
+.gateway-conflict-diff-changed td,
+.gateway-conflict-diff-changed th {
+  background: rgba(239, 68, 68, 0.06);
+}
+.gateway-conflict-diff-changed td:last-child {
+  color: #b91c1c;
+  font-weight: 600;
+}
+.gateway-conflict-changed-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #b91c1c;
+  color: #fff;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.gateway-conflict-empty-cell {
+  color: #94a3b8;
+  font-style: italic;
+  font-size: 12.5px;
+}
+
+/* 元信息列表（本地档案概览） */
+.gateway-conflict-meta-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  color: #334155;
+}
+.gateway-conflict-meta-list li {
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(15, 23, 42, 0.05);
+}
+.gateway-conflict-meta-list li:last-child {
+  border-bottom: none;
+}
+
+/* 原始 payload */
+.gateway-conflict-raw {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 12px 14px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 280px;
+  margin: 0;
+}
+
+/* ---- footer / 动作按钮区 ---- */
+.gateway-conflict-footer {
+  margin-top: auto;
+  padding: 16px 24px 22px;
+  background: #f8fafc;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+.gateway-conflict-helper {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.6;
+}
+.gateway-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gateway-conflict-btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 120ms, border-color 120ms;
+}
+.gateway-conflict-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.gateway-conflict-btn.primary {
+  background: #2563eb;
+  color: #fff;
+}
+.gateway-conflict-btn.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.gateway-conflict-btn.danger {
+  background: #b91c1c;
+  color: #fff;
+}
+.gateway-conflict-btn.danger:hover:not(:disabled) {
+  background: #991b1b;
+}
+.gateway-conflict-btn.ghost {
+  background: #fff;
+  color: #334155;
+  border-color: rgba(15, 23, 42, 0.18);
+}
+.gateway-conflict-btn.ghost:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+/* 二次确认区 */
+.gateway-conflict-confirm {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: #fff;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+.gateway-conflict-confirm p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #1f2937;
+}
+
+/* 备注输入 */
+.gateway-conflict-note-label {
+  display: block;
+  font-size: 12.5px;
+  color: #475569;
+  margin: 8px 0;
+}
+.gateway-conflict-note-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+/* 移动端折叠 */
+@media (max-width: 600px) {
+  .gateway-conflict-drawer {
+    width: 100vw;
+  }
+  .gateway-conflict-diff-table tbody th {
+    width: 70px;
+  }
+}

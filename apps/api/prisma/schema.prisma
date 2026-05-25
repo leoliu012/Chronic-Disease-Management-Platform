@@ -117,6 +117,27 @@ enum IntegrationRecordStatus {
   SKIPPED
 }
 
+// IntegrationPromotionStatus — gateway-promote-pipeline
+//
+// 审计层 (IntegrationRecordStatus) 表示「外部数据是否成功被网关接收」，
+// 这里则表示「已接收的审计记录是否已 promote 到 Patient / VitalRecord /
+// DiseaseProfile / EncounterRecord / MedicalRecordSummary /
+// HospitalMedicationOrder 等正式业务表」。
+//
+//   NOT_REQUIRED — 不需要 promote（例如 IntegrationsService 旧的 mock-sync
+//                  在写审计之前就直接落了业务表；或 SKIPPED 重复事件）
+//   PENDING      — 已审计、待人工/批量 promote
+//   PROMOTED     — 已成功落到业务表（localTargetType / localTargetId 同时填充）
+//   CONFLICT     — promote 命中冲突，需要人工核验（例如同院内号、不同身份证）
+//   FAILED       — promote 抛错（patient 不存在、字段缺失等），可重试
+enum IntegrationPromotionStatus {
+  NOT_REQUIRED
+  PENDING
+  PROMOTED
+  CONFLICT
+  FAILED
+}
+
 enum ExternalRecordStatus {
   STAGED
   IMPORTED
@@ -160,6 +181,8 @@ model Patient {
   medicalRecordSummaries MedicalRecordSummary[]
   examReportRecords ExamReportRecord[]
   hospitalMedicationOrders HospitalMedicationOrder[]
+
+  promotedFromLeads        ChronicLead[]      @relation("LeadPromotedPatient")
 
   @@index([responsibleDoctorId])
   @@index([responsibleNurseId])
@@ -432,6 +455,8 @@ model User {
   patientsAsDoctor Patient[] @relation("PatientDoctor")
   patientsAsNurse  Patient[] @relation("PatientNurse")
 
+  reviewedLeads    ChronicLead[] @relation("LeadReviewer")
+
   @@index([role, isActive])
 }
 
@@ -469,6 +494,68 @@ model PatientSession {
   @@index([demoOpenId, patientId])
   @@index([patientId, expiresAt])
   @@index([expiresAt])
+}
+
+
+// ============================================================================
+// PatientConsent — 患者端统一知情同意书记录
+//
+// 设计要点（patient-self-consent-bind）:
+//   不论患者来自邀约库 (ChronicLead)、已有 Patient 档案，还是 HIS 暂存患者信息，
+//   只要患者在小程序绑定流程里勾选并签署《知情同意与隐私授权协议》，
+//   就在这张表落一条独立、可追溯的同意书记录。
+//
+//   - 与 ChronicLead / Patient / PatientBindingRequest 为松耦合（仅存 id，不建外键），
+//     因为同意书是在「提交绑定申请」之前先签的，签署时这些行可能还不存在。
+//   - 一个 demoOpenId 对同一识别对象重复签署时，旧记录会被置为 SUPERSEDED，
+//     始终只保留一条 SIGNED 的有效同意书。
+// ============================================================================
+
+enum PatientConsentSource {
+  MINI_PROGRAM
+  NURSE_PROXY
+  DOCTOR_PROXY
+}
+
+enum PatientConsentStatus {
+  SIGNED
+  SUPERSEDED
+  REVOKED
+}
+
+model PatientConsent {
+  id                  String               @id @default(uuid())
+
+  // ---- 患者端可信标识 ----
+  demoOpenId          String
+  hospitalPatientId   String?
+
+  // ---- 松耦合关联（签署时可能尚不存在）----
+  chronicLeadId       String?
+  patientId           String?
+  bindingRequestId    String?
+
+  // ---- 同意书内容快照 ----
+  consentVersion      String
+  consentSource       PatientConsentSource @default(MINI_PROGRAM)
+  consentTextSnapshot String?
+  matchType           String?
+
+  // ---- 签署证据 ----
+  signedAt            DateTime             @default(now())
+  ipAddress           String?
+  userAgent           String?
+
+  status              PatientConsentStatus @default(SIGNED)
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([demoOpenId, status, createdAt])
+  @@index([chronicLeadId])
+  @@index([patientId])
+  @@index([bindingRequestId])
+  @@index([hospitalPatientId])
 }
 
 
@@ -603,6 +690,13 @@ model IntegrationSource {
   description String?
   isEnabled   Boolean               @default(true)
 
+  // gateway-promote-pipeline:
+  // 是否在审计写入后由 InboundEventService 自动调用 IntegrationPromoteService。
+  // 默认 false —— 数据先进审计层，由管理员在【接口中心】手动点 promote。
+  // 把某个来源（例如医院已经稳定的 HL7 通道）切到 true 之后，新事件会同步
+  // 尝试 promote；遇到冲突照样进入 CONFLICT 队列，不会污染主数据。
+  autoPromote Boolean               @default(false)
+
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
 
@@ -649,6 +743,14 @@ model IntegrationSyncRecord {
   rawData             Json?
   normalizedData      Json?
 
+  // gateway-promote-pipeline:
+  // 审计 (status) 与 promote (promotionStatus) 是两条独立的状态线。
+  // promotionMessage 在 CONFLICT/FAILED 时给出人类可读的原因。
+  // promotedAt 仅在 promotionStatus = PROMOTED 时填充，便于 SLA 统计。
+  promotionStatus     IntegrationPromotionStatus @default(NOT_REQUIRED)
+  promotionMessage    String?
+  promotedAt          DateTime?
+
   createdAt           DateTime                @default(now())
 
   source              IntegrationSource       @relation(fields: [sourceId], references: [id])
@@ -657,6 +759,8 @@ model IntegrationSyncRecord {
   @@index([sourceId, externalRecordType, externalRecordId])
   @@index([batchId, status])
   @@index([localTargetType, localTargetId])
+  @@index([promotionStatus, createdAt])
+  @@index([sourceId, promotionStatus])
 }
 
 model IntegrationFieldMapping {
@@ -886,6 +990,111 @@ model HospitalMedicationOrder {
 }
 
 
+// ============================================================================
+// ChronicLead — patient-prestart-gate
+//
+// 网关捞到的高危慢病信号在患者签署知情同意之前，先落到这张待邀约池表，
+// 不能进入正式档案。任何把线索升档为 Patient 的动作都必须经过：
+//   1) 护士在【高危线索】页面【签约】按钮 (consentSource = NURSE_CONFIRM)，或
+//   2) 患者扫码进入微信小程序并签署电子知情同意 (consentSource = MINI_PROGRAM_SIGN)，或
+//   3) 医生在桌面 PC 上代为确认 (consentSource = DOCTOR_CONFIRM)。
+//
+// 单向状态机:
+//   PENDING_REVIEW → CONTACTED → SIGNED  (终态)
+//   PENDING_REVIEW → DEFERRED  → PENDING_REVIEW (可循环)
+//   PENDING_REVIEW → REJECTED  (终态)
+//   PENDING_REVIEW → EXPIRED   (cron 自动清理 30 天未处理)
+// ============================================================================
+
+enum LeadStatus {
+  PENDING_REVIEW
+  CONTACTED
+  SIGNED
+  REJECTED
+  DEFERRED
+  EXPIRED
+}
+
+enum LeadSourceChannel {
+  HL7_DISCHARGE
+  HL7_OUTPATIENT
+  HL7_ABNORMAL_OBSERVATION
+  FHIR_DISCHARGE
+  FHIR_ENCOUNTER
+  FHIR_CONDITION
+  FHIR_OBSERVATION
+  HIS_EVENT_DISCHARGE
+  HIS_EVENT_ENCOUNTER
+  HIS_EVENT_LAB
+  INTERMEDIATE_DB
+  MANUAL
+}
+
+enum LeadConsentSource {
+  MINI_PROGRAM_SIGN
+  NURSE_CONFIRM
+  DOCTOR_CONFIRM
+}
+
+model ChronicLead {
+  id                 String              @id @default(uuid())
+
+  // ---- 患者识别四件套 (任一非空即可) ----
+  hospitalPatientId  String?
+  idCardNo           String?
+  phone              String?
+  externalPatientId  String?
+
+  // ---- 患者快照 (来源系统截至命中时刻的视图) ----
+  name               String?
+  gender             Gender              @default(UNKNOWN)
+  birthDate          DateTime?
+
+  // ---- 来源 ----
+  sourceChannel      LeadSourceChannel
+  sourceRecordId     String?
+  sourceBatchId      String?
+
+  // ---- 临床证据 ----
+  suspectedDisease   DiseaseType?
+  diagnosisIcd       String?
+  diagnosisText      String?
+  riskHint           RiskLevel           @default(MEDIUM)
+  evidenceSummary    String?
+
+  // ---- 状态机 + 签约证据 ----
+  status             LeadStatus          @default(PENDING_REVIEW)
+  consentSource      LeadConsentSource?
+  consentRef         String?
+
+  // 护士/医生 review
+  reviewedById       String?
+  reviewedAt         DateTime?
+  rejectReason       String?
+  contactNote        String?
+  deferNote          String?
+
+  // ---- 升档 (Patient 落库) ----
+  promotedPatientId  String?
+  promotedAt         DateTime?
+
+  // ---- 网关去重 / 频次 ----
+  hitCount           Int                 @default(1)
+  lastSeenAt         DateTime            @default(now())
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  reviewedBy         User?               @relation("LeadReviewer", fields: [reviewedById], references: [id])
+  promotedPatient    Patient?            @relation("LeadPromotedPatient", fields: [promotedPatientId], references: [id])
+
+  @@index([status, lastSeenAt])
+  @@index([hospitalPatientId])
+  @@index([idCardNo])
+  @@index([phone])
+  @@index([suspectedDisease, riskHint])
+  @@index([sourceChannel, lastSeenAt])
+}
 
 
 

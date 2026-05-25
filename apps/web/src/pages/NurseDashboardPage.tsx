@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 
 type Patient = {
   id: string;
@@ -322,8 +323,8 @@ export function NurseDashboardPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  async function loadDashboard() {
-    setLoading(true);
+  async function loadDashboard(opts?: { silent?: boolean }) {
+    if (!opts?.silent) setLoading(true);
     setError('');
 
     try {
@@ -339,7 +340,7 @@ export function NurseDashboardPage() {
       console.error(err);
       setError(getApiErrorMessage(err, '护士工作台加载失败，请确认后端服务已启动。'));
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }
 
@@ -384,6 +385,9 @@ export function NurseDashboardPage() {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  // 护士工作台：预警 / 待办任务每 15 秒自动刷新，无需手动 reload。
+  usePolling(() => loadDashboard({ silent: true }), 15000);
 
   const workItems = workItemsData?.items ?? [];
   const filteredWorkItems = useMemo(() => {
@@ -565,6 +569,7 @@ export function NurseDashboardPage() {
     </div>
   );
 }
+
 
 
 

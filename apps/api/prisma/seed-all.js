@@ -9,12 +9,26 @@
  * This file intentionally combines what used to be separate seed-auth,
  * seed-clinical-rules, seed-integrations, and seed-demo scripts so the demo
  * database always matches the current workflow being tested.
+ *
+ * v3 (patient-self-consent-bind / patient-prestart-gate):
+ *   - 增加 ChronicLead 高危慢病线索池 demo 数据：覆盖 PENDING_REVIEW / CONTACTED /
+ *     DEFERRED / SIGNED / REJECTED / EXPIRED 全状态机，供护士工作台「高危线索」页面
+ *     以及小程序 /patient-app/identity/lookup 邀约库匹配演示。
+ *   - 增加 PatientConsent 知情同意书演示记录：对应已有的 demo-binding-approved-001
+ *     (EXISTING_PATIENT 路径) 和 demo-binding-pending-001 (CHRONIC_LEAD 路径)，
+ *     保证患者绑定流程的「已签同意书」前置态可被复现和审计。
  */
 
 const {
   PrismaClient,
   DiseaseType,
+  Gender,
   IntegrationSystemType,
+  LeadConsentSource,
+  LeadSourceChannel,
+  LeadStatus,
+  PatientConsentSource,
+  PatientConsentStatus,
   RiskLevel,
   UserRole,
 } = require('@prisma/client');
@@ -349,6 +363,14 @@ async function seedIntegrations() {
 const nurseId = 'nurse-001';
 const doctorId = 'doctor-001';
 const demoOpenId = 'demo-openid-patient-001';
+
+// patient-self-consent-bind 流程当前生效的同意书版本号，需与
+// apps/api/src/patient-app/patient-app.service.ts 中的 PATIENT_CONSENT_VERSION 一致。
+const PATIENT_CONSENT_VERSION = '2026-05-24-v2';
+const CONSENT_TEXT_SNAPSHOT =
+  '《知情同意与隐私授权协议》(2026-05-24-v2)\n' +
+  '本演示快照内容仅用于本地 demo，正式上线请由医院法务团队提供最终文本。\n' +
+  '患者已知悉数据采集范围、使用目的、保存期限和撤回权利。';
 
 function daysAgo(days, hour = 9, minute = 0) {
   const d = new Date();
@@ -722,13 +744,286 @@ const sessionSeeds = [
   { id: 'demo-patient-session-001', demoOpenId, patientId: 'demo-patient-001', tokenHash: 'demo-token-hash-patient-001-do-not-use-in-prod', expiresAt: daysFromNow(30, 23, 59), lastUsedAt: daysAgo(0, 7, 35), createdAt: daysAgo(7, 10, 2) },
 ];
 
+// ============================================================================
+// ChronicLead 高危慢病线索池 demo 数据 (patient-prestart-gate)
+//
+// 覆盖全状态机，方便护士工作台「高危线索」页面和小程序绑定流程
+// /patient-app/identity/lookup 的 CHRONIC_LEAD 分支演示。
+//
+// 注意:
+//   - 这些线索使用的 hospitalPatientId / phone / idCardNo 故意与 demoPatients
+//     不冲突，避免 lookup 时同一身份既命中 ChronicLead 又命中 Patient。
+//   - demo-lead-signed-001 是唯一与 demoPatients 关联的线索 (promotedPatientId
+//     = demo-patient-002)，演示"小程序签约 → 升档 → 等护士审核绑定申请"全链路。
+// ============================================================================
+
+const chronicLeadSeeds = [
+  // (1) PENDING_REVIEW — 待邀约，HL7 出院信号，极高危高血压
+  {
+    id: 'demo-lead-pending-001',
+    hospitalPatientId: 'MZ20260522101',
+    phone: '13900020001',
+    idCardNo: '610102195906151001',
+    externalPatientId: 'HL7-PID-20260522-A101',
+    name: '吴建华',
+    gender: Gender.MALE,
+    birthDate: yearsAgo(66, 5, 15),
+    sourceChannel: LeadSourceChannel.HL7_DISCHARGE,
+    sourceRecordId: 'HL7-DISCH-20260522-1041',
+    sourceBatchId: 'GATEWAY-BATCH-20260522',
+    suspectedDisease: DiseaseType.HYPERTENSION,
+    diagnosisIcd: 'I10',
+    diagnosisText: '原发性高血压（3级，极高危）',
+    riskHint: RiskLevel.VERY_HIGH,
+    evidenceSummary: '出院诊断 I10；住院期间最高血压 198/118 mmHg；建议立刻入组慢病管理。',
+    status: LeadStatus.PENDING_REVIEW,
+    hitCount: 1,
+    lastSeenAt: daysAgo(2, 10, 41),
+    createdAt: daysAgo(2, 10, 41),
+  },
+  // (2) PENDING_REVIEW — 待邀约，FHIR Observation，糖尿病高危
+  {
+    id: 'demo-lead-pending-002',
+    hospitalPatientId: 'MZ20260522102',
+    phone: '13900020002',
+    idCardNo: '610105197207120015',
+    externalPatientId: 'FHIR-PID-20260522-B215',
+    name: '陈丽君',
+    gender: Gender.FEMALE,
+    birthDate: yearsAgo(53, 6, 12),
+    sourceChannel: LeadSourceChannel.FHIR_OBSERVATION,
+    sourceRecordId: 'FHIR-OBS-20260522-A715',
+    sourceBatchId: 'GATEWAY-BATCH-20260522',
+    suspectedDisease: DiseaseType.TYPE_2_DIABETES,
+    diagnosisIcd: 'E11.9',
+    diagnosisText: '2型糖尿病',
+    riskHint: RiskLevel.HIGH,
+    evidenceSummary: '门诊 HbA1c 8.6%；FHIR Observation 提示空腹血糖 9.8 mmol/L。',
+    status: LeadStatus.PENDING_REVIEW,
+    hitCount: 2,
+    lastSeenAt: daysAgo(1, 14, 30),
+    createdAt: daysAgo(1, 14, 30),
+  },
+  // (3) PENDING_REVIEW — 待邀约，来自中间库，慢阻肺高危
+  {
+    id: 'demo-lead-pending-003',
+    hospitalPatientId: 'MZ20260523401',
+    phone: '13900020005',
+    idCardNo: '610104196301242088',
+    name: '韩玉珍',
+    gender: Gender.FEMALE,
+    birthDate: yearsAgo(63, 0, 24),
+    sourceChannel: LeadSourceChannel.INTERMEDIATE_DB,
+    sourceRecordId: 'IDB-20260523-0211',
+    sourceBatchId: 'INTERMEDIATE-POLL-20260523',
+    suspectedDisease: DiseaseType.COPD,
+    diagnosisIcd: 'J44.9',
+    diagnosisText: '慢性阻塞性肺疾病',
+    riskHint: RiskLevel.HIGH,
+    evidenceSummary: '中间库导入：肺功能 FEV1/FVC 60%，建议入组血氧监测。',
+    status: LeadStatus.PENDING_REVIEW,
+    hitCount: 1,
+    lastSeenAt: daysAgo(0, 9, 12),
+    createdAt: daysAgo(0, 9, 12),
+  },
+  // (4) CONTACTED — 已联系，等待二次回访
+  {
+    id: 'demo-lead-contacted-001',
+    hospitalPatientId: 'MZ20260518203',
+    phone: '13900020003',
+    idCardNo: '610103195811302001',
+    name: '高志强',
+    gender: Gender.MALE,
+    birthDate: yearsAgo(67, 10, 30),
+    sourceChannel: LeadSourceChannel.HIS_EVENT_DISCHARGE,
+    sourceRecordId: 'HIS-EVT-DISCH-20260518-0319',
+    suspectedDisease: DiseaseType.CORONARY_HEART_DISEASE,
+    diagnosisIcd: 'I25.9',
+    diagnosisText: '冠状动脉粥样硬化性心脏病（PCI 术后）',
+    riskHint: RiskLevel.HIGH,
+    evidenceSummary: '出院诊断 I25.9，PCI 术后一周；30 天内必须建立随访。',
+    status: LeadStatus.CONTACTED,
+    contactNote: '6 天前 17:30 电话联系成功，患者称需与家属商量，约定明日二次回访。',
+    reviewedById: nurseId,
+    reviewedAt: daysAgo(6, 17, 30),
+    hitCount: 1,
+    lastSeenAt: daysAgo(6, 17, 30),
+    createdAt: daysAgo(6, 9, 0),
+  },
+  // (5) DEFERRED — 患者暂缓，30 天后回访
+  {
+    id: 'demo-lead-deferred-001',
+    hospitalPatientId: 'MZ20260516301',
+    phone: '13900020004',
+    name: '田小英',
+    gender: Gender.FEMALE,
+    birthDate: yearsAgo(58, 2, 19),
+    sourceChannel: LeadSourceChannel.HL7_OUTPATIENT,
+    sourceRecordId: 'HL7-OPN-20260516-0701',
+    suspectedDisease: DiseaseType.HYPERTENSION,
+    diagnosisIcd: 'I10',
+    diagnosisText: '原发性高血压（1级）',
+    riskHint: RiskLevel.MEDIUM,
+    evidenceSummary: '门诊血压 146/92 mmHg。',
+    status: LeadStatus.DEFERRED,
+    deferNote: '患者出差中，约定 30 天后回访。',
+    reviewedById: nurseId,
+    reviewedAt: daysAgo(8, 11, 15),
+    hitCount: 1,
+    lastSeenAt: daysAgo(8, 11, 15),
+    createdAt: daysAgo(8, 11, 15),
+  },
+  // (6) SIGNED — 已升档为 demo-patient-002；对应 demo-binding-pending-001 的前史。
+  //     故事：李秀兰最初是 HL7 出院线索 → 护士打电话邀约 → 患者扫码进小程序 →
+  //          签知情同意书并提交绑定申请 → 后端同步创建 Patient/DiseaseProfile/
+  //          入组随访任务 → 绑定申请进入护士审核队列（PENDING）。
+  {
+    id: 'demo-lead-signed-001',
+    hospitalPatientId: 'MZ20260519002',
+    idCardNo: '610103196307080022',
+    phone: '13800010002',
+    externalPatientId: 'HL7-PID-20260512-7822',
+    name: '李秀兰',
+    gender: Gender.FEMALE,
+    birthDate: yearsAgo(63, 6, 8),
+    sourceChannel: LeadSourceChannel.HL7_DISCHARGE,
+    sourceRecordId: 'HL7-DISCH-20260512-0822',
+    sourceBatchId: 'GATEWAY-BATCH-20260512',
+    suspectedDisease: DiseaseType.TYPE_2_DIABETES,
+    diagnosisIcd: 'E11.9',
+    diagnosisText: '2型糖尿病（不伴有并发症）',
+    riskHint: RiskLevel.HIGH,
+    evidenceSummary: '出院诊断 E11.9；空腹血糖最高 13.2 mmol/L；HbA1c 9.4%。',
+    status: LeadStatus.SIGNED,
+    consentSource: LeadConsentSource.MINI_PROGRAM_SIGN,
+    consentRef:
+      'MINI_PROGRAM_BIND | consentId=demo-consent-002 | v' +
+      PATIENT_CONSENT_VERSION +
+      ' | openid=demo-openid-pending-001 | ip=203.0.113.88 | signedAt=' +
+      daysAgo(0, 10, 10).toISOString(),
+    reviewedById: nurseId,
+    reviewedAt: daysAgo(0, 10, 10),
+    promotedPatientId: 'demo-patient-002',
+    promotedAt: daysAgo(0, 10, 10),
+    hitCount: 2,
+    lastSeenAt: daysAgo(0, 10, 10),
+    createdAt: daysAgo(12, 9, 0),
+  },
+  // (7) REJECTED — 患者明确拒绝
+  {
+    id: 'demo-lead-rejected-001',
+    hospitalPatientId: 'MZ20260510501',
+    phone: '13900020006',
+    name: '马卫国',
+    gender: Gender.MALE,
+    birthDate: yearsAgo(54, 7, 7),
+    sourceChannel: LeadSourceChannel.HL7_ABNORMAL_OBSERVATION,
+    sourceRecordId: 'HL7-OBX-20260510-1133',
+    suspectedDisease: DiseaseType.HYPERLIPIDEMIA,
+    diagnosisIcd: 'E78.5',
+    diagnosisText: '高脂血症',
+    riskHint: RiskLevel.MEDIUM,
+    evidenceSummary: 'LDL-C 5.2 mmol/L；TG 3.8 mmol/L。',
+    status: LeadStatus.REJECTED,
+    rejectReason: '患者表示已在外院随访，无需入组。',
+    reviewedById: nurseId,
+    reviewedAt: daysAgo(13, 16, 0),
+    hitCount: 1,
+    lastSeenAt: daysAgo(14, 9, 0),
+    createdAt: daysAgo(14, 9, 0),
+  },
+  // (8) EXPIRED — 30 天未处理，cron 自动清理
+  {
+    id: 'demo-lead-expired-001',
+    hospitalPatientId: 'MZ20260420601',
+    phone: '13900020007',
+    name: '罗树森',
+    gender: Gender.MALE,
+    birthDate: yearsAgo(71, 4, 3),
+    sourceChannel: LeadSourceChannel.MANUAL,
+    suspectedDisease: DiseaseType.OBESITY,
+    diagnosisText: '体重管理建议（BMI 32.4）',
+    riskHint: RiskLevel.LOW,
+    evidenceSummary: 'BMI 32.4；纳入肥胖管理建议。',
+    status: LeadStatus.EXPIRED,
+    hitCount: 1,
+    lastSeenAt: daysAgo(34, 9, 0),
+    createdAt: daysAgo(34, 9, 0),
+  },
+];
+
+// ============================================================================
+// PatientConsent 知情同意书 demo 数据 (patient-self-consent-bind)
+//
+// 当前生效的同意书版本为 PATIENT_CONSENT_VERSION (= 2026-05-24-v2)。
+//
+// 这两条 demo 同意书分别覆盖两条核心路径:
+//   - demo-consent-001: EXISTING_PATIENT 路径 (王建国 8 天前签同意书 →
+//                       绑定申请 → 护士审批通过 → 已有患者端会话)
+//   - demo-consent-002: CHRONIC_LEAD 路径 (李秀兰今天签同意书 → 触发
+//                       demo-lead-signed-001 升档 → 绑定申请待审)
+// ============================================================================
+
+const consentSeeds = [
+  {
+    id: 'demo-consent-001',
+    demoOpenId,
+    hospitalPatientId: 'MZ20260519001',
+    chronicLeadId: null,
+    patientId: 'demo-patient-001',
+    bindingRequestId: 'demo-binding-approved-001',
+    consentVersion: PATIENT_CONSENT_VERSION,
+    consentSource: PatientConsentSource.MINI_PROGRAM,
+    consentTextSnapshot: CONSENT_TEXT_SNAPSHOT,
+    matchType: 'EXISTING_PATIENT',
+    signedAt: daysAgo(8, 9, 28),
+    ipAddress: '203.0.113.41',
+    userAgent: 'MicroMessenger/8.0.51 wechatdevtools/1.06.2412050',
+    status: PatientConsentStatus.SIGNED,
+    createdAt: daysAgo(8, 9, 28),
+  },
+  {
+    id: 'demo-consent-002',
+    demoOpenId: 'demo-openid-pending-001',
+    hospitalPatientId: 'MZ20260519002',
+    chronicLeadId: 'demo-lead-signed-001',
+    patientId: 'demo-patient-002',
+    bindingRequestId: 'demo-binding-pending-001',
+    consentVersion: PATIENT_CONSENT_VERSION,
+    consentSource: PatientConsentSource.MINI_PROGRAM,
+    consentTextSnapshot: CONSENT_TEXT_SNAPSHOT,
+    matchType: 'CHRONIC_LEAD',
+    signedAt: daysAgo(0, 10, 10),
+    ipAddress: '203.0.113.88',
+    userAgent: 'MicroMessenger/8.0.51 wechatdevtools/1.06.2412050',
+    status: PatientConsentStatus.SIGNED,
+    createdAt: daysAgo(0, 10, 10),
+  },
+];
+
 async function seedClinicalDemo() {
   const patientIds = demoPatients.map((p) => p.id);
+  const chronicLeadIds = chronicLeadSeeds.map((l) => l.id);
+  const consentIds = consentSeeds.map((c) => c.id);
+  const consentOpenIds = [...new Set(consentSeeds.map((c) => c.demoOpenId))];
 
   await prisma.$transaction([
     prisma.medicationCheckIn.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.questionnaireResult.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.patientSession.deleteMany({ where: { patientId: { in: patientIds } } }),
+
+    // patient-self-consent-bind: PatientConsent 没有 FK，按 demoOpenId / id / patientId
+    // 三个维度兜底清理，保证多次跑 seed 不残留旧 demo 数据。
+    prisma.patientConsent.deleteMany({
+      where: {
+        OR: [
+          { id: { in: consentIds } },
+          { demoOpenId: { in: consentOpenIds } },
+          { patientId: { in: patientIds } },
+        ],
+      },
+    }),
+
     prisma.patientBindingRequest.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.task.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.followUpRecord.deleteMany({ where: { patientId: { in: patientIds } } }),
@@ -738,6 +1033,11 @@ async function seedClinicalDemo() {
     prisma.vitalMonitoringPlan.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.medicationRecord.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.diseaseProfile.deleteMany({ where: { patientId: { in: patientIds } } }),
+
+    // patient-prestart-gate: 先清掉 demo ChronicLead，再删 Patient，避免遗留
+    // promotedPatientId 指向已删除的 patient（虽 onDelete 是 SetNull，留干净更稳）。
+    prisma.chronicLead.deleteMany({ where: { id: { in: chronicLeadIds } } }),
+
     prisma.patient.deleteMany({ where: { id: { in: patientIds } } }),
   ]);
 
@@ -829,6 +1129,16 @@ async function seedClinicalDemo() {
   await prisma.patientBindingRequest.createMany({ data: bindingSeeds });
   await prisma.patientSession.createMany({ data: sessionSeeds });
 
+  // patient-prestart-gate: 必须在 Patient 都建好后再建 ChronicLead，因为
+  // demo-lead-signed-001.promotedPatientId 引用 demo-patient-002 (FK)。
+  for (const lead of chronicLeadSeeds) {
+    await prisma.chronicLead.create({ data: lead });
+  }
+
+  // patient-self-consent-bind: 同意书在绑定申请和线索建好之后落，
+  // 这样 chronicLeadId / bindingRequestId 的反向链都不会变成悬挂引用。
+  await prisma.patientConsent.createMany({ data: consentSeeds });
+
   console.log('Clinical demo v2 seed completed:');
   console.log(`- ${demoPatients.length} patients`);
   console.log(`- ${profileSeeds.length} disease profiles`);
@@ -837,6 +1147,12 @@ async function seedClinicalDemo() {
   console.log(`- ${buildMedicationCheckIns().length} medication check-ins`);
   console.log(`- ${taskSeeds.length} tasks, including hospital-visit follow-up tasks`);
   console.log(`- ${hospitalVisitReminderSeeds.filter((item) => item.status === 'ACTIVE').length} active hospital-visit reminders`);
+  console.log(
+    `- ${chronicLeadSeeds.length} chronic leads (pending/contacted/deferred/signed/rejected/expired)`,
+  );
+  console.log(
+    `- ${consentSeeds.length} patient consents (consent version ${PATIENT_CONSENT_VERSION})`,
+  );
 }
 
 
@@ -858,5 +1174,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-
-

@@ -99,16 +99,63 @@ async function main() {
   });
   ok('POST /patient-app/demo-login', demoLogin?.bindingStatus || 'ok');
 
-  const bindingRequest = await request('POST /patient-app/binding-requests', 'POST', '/patient-app/binding-requests', {
-    body: {
-      demoOpenId: smokeOpenId,
-      phone: '13800010001',
-      hospitalPatientId: 'MZ20260519001',
-      idCardLast4: '0011',
-    },
-    expectedStatuses: [200, 201],
-  });
-  ok('POST /patient-app/binding-requests', bindingRequest?.message || 'ok');
+  // patient-self-consent-bind: 统一入口 —— 搜索院内信息 → 签署知情同意书 → 提交绑定申请。
+  const identity = {
+    demoOpenId: smokeOpenId,
+    phone: '13800010001',
+    hospitalPatientId: 'MZ20260519001',
+    idCardLast4: '0011',
+  };
+
+  const lookup = await request(
+    'POST /patient-app/identity/lookup',
+    'POST',
+    '/patient-app/identity/lookup',
+    { body: identity, expectedStatuses: [200, 201] },
+  );
+  ok('POST /patient-app/identity/lookup', lookup?.matchType || 'ok');
+
+  if (lookup?.matchType && lookup.matchType !== 'NOT_FOUND' && lookup.matchType !== 'HIS_PATIENT') {
+    const consent = await request(
+      'POST /patient-app/consent/submit',
+      'POST',
+      '/patient-app/consent/submit',
+      {
+        body: {
+          demoOpenId: smokeOpenId,
+          consentAccepted: true,
+          consentVersion: lookup.consentVersion || '2026-05-24-v2',
+          matchType: lookup.matchType,
+          chronicLeadId: lookup.chronicLead?.id,
+          patientId: lookup.patient?.id,
+          hospitalPatientId: identity.hospitalPatientId,
+        },
+        expectedStatuses: [200, 201],
+      },
+    );
+    ok('POST /patient-app/consent/submit', consent?.consentId ? 'consent signed' : 'ok');
+
+    const bindingRequest = await request(
+      'POST /patient-app/binding-requests',
+      'POST',
+      '/patient-app/binding-requests',
+      {
+        body: {
+          demoOpenId: smokeOpenId,
+          phone: identity.phone,
+          hospitalPatientId: identity.hospitalPatientId,
+          idCardLast4: identity.idCardLast4,
+          matchType: lookup.matchType,
+          chronicLeadId: lookup.chronicLead?.id,
+          consentId: consent?.consentId,
+        },
+        expectedStatuses: [200, 201],
+      },
+    );
+    ok('POST /patient-app/binding-requests', bindingRequest?.message || 'ok');
+  } else {
+    ok('POST /patient-app/binding-requests', `skipped (matchType=${lookup?.matchType || 'unknown'})`);
+  }
 
   const pendingBindings = await request('GET /patient-binding-requests', 'GET', '/patient-binding-requests?status=PENDING', {
     token: nurseToken,
@@ -128,3 +175,4 @@ main().catch((error) => {
   console.log('- Check API_BASE_URL if your API is not on http://localhost:3000');
   process.exit(1);
 });
+

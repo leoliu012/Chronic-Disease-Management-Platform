@@ -1,0 +1,181 @@
+<view class="container consent-sign-page">
+
+  <!-- 头部 -->
+  <view class="card hero-card">
+    <view class="card-title">第三步 · 知情同意书</view>
+    <view class="card-subtitle">
+      请确认下方信息为您本人，并仔细阅读《知情同意与隐私授权协议》。
+      勾选同意后点击「同意并提交绑定申请」，即可完成入组并提交护士审核。
+    </view>
+  </view>
+
+  <!-- 加载中 -->
+  <view wx:if="{{loading}}" class="card">
+    <view class="muted">正在查询您的院内信息…</view>
+  </view>
+
+  <!-- 提交成功（绑定申请已提交，等待审核） -->
+  <view wx:elif="{{success}}" class="card success-card">
+    <view class="item-title">{{bindingApproved ? '✓ 绑定已通过审核' : '✓ 绑定申请已提交'}}</view>
+    <view class="item-desc result-message">{{successMessage}}</view>
+    <view wx:if="{{patient}}" class="patient-mini-card">
+      <view class="item-title">{{patient.name || '档案'}}</view>
+      <view class="item-desc">院内号：{{patient.hospitalPatientId || '—'}}</view>
+    </view>
+    <view class="status-line">
+      <text wx:if="{{bindingApproved}}" class="status-pill status-done">已通过审核</text>
+      <text wx:else class="status-pill status-open">待护士审核（自动刷新中…）</text>
+    </view>
+    <view class="btn-row">
+      <view wx:if="{{bindingApproved}}" class="primary-btn tap-btn" hover-class="tap-btn-hover" catchtap="goHome">进入慢病管理首页</view>
+      <block wx:else>
+        <view class="secondary-btn tap-btn" hover-class="tap-btn-hover" catchtap="goHome">返回首页</view>
+        <view class="primary-btn tap-btn" hover-class="tap-btn-hover" catchtap="backToBind">查看绑定状态</view>
+      </block>
+    </view>
+    <view wx:if="{{!bindingApproved}}" class="muted">本页会自动检测审核结果，护士通过后将自动更新，无需手动刷新或退出重进。</view>
+  </view>
+
+  <!-- 未匹配 -->
+  <view wx:elif="{{!matched}}" class="card">
+    <view wx:if="{{error}}" class="item-title">查询失败</view>
+    <view wx:elif="{{reason === 'NEED_INPUT'}}" class="item-title">缺少识别信息</view>
+    <view wx:else class="item-title">未匹配到您的院内信息</view>
+
+    <view wx:if="{{error}}" class="item-desc">{{error}}</view>
+    <view wx:elif="{{reason === 'NEED_INPUT'}}" class="item-desc">
+      未携带识别参数。请返回绑定页重新输入手机号 / 院内号 / 身份证后四位。
+    </view>
+    <view wx:else class="item-desc">
+      未查到与该信息匹配的邀约线索或患者档案。请返回绑定页核对信息，或联系医院协助人工核验。
+    </view>
+
+    <view class="btn-row">
+      <view class="secondary-btn tap-btn" hover-class="tap-btn-hover" catchtap="refetch">重新查询</view>
+      <view class="primary-btn tap-btn" hover-class="tap-btn-hover" catchtap="backToBind">返回绑定页</view>
+    </view>
+  </view>
+
+  <!-- 找到匹配 → 患者快照 + 知情同意书 -->
+  <block wx:elif="{{matched && snapshot}}">
+
+    <!-- 患者快照 -->
+    <view class="card lead-snapshot">
+      <view class="item-title">请确认这是您本人的信息</view>
+      <view class="match-pill">{{matchTypeLabel}}</view>
+
+      <view class="snapshot-row">
+        <text class="snapshot-label">姓名</text>
+        <text class="snapshot-value">{{snapshot.name || '（未提供）'}}</text>
+      </view>
+      <view class="snapshot-row">
+        <text class="snapshot-label">院内号</text>
+        <text class="snapshot-value">{{snapshot.hospitalPatientId || '—'}}</text>
+      </view>
+      <view class="snapshot-row">
+        <text class="snapshot-label">手机号</text>
+        <text class="snapshot-value">{{snapshot.phone || '—'}}</text>
+      </view>
+      <view class="snapshot-row">
+        <text class="snapshot-label">身份证</text>
+        <text class="snapshot-value">{{snapshot.idCardNo || '—'}}</text>
+      </view>
+      <view class="snapshot-row">
+        <text class="snapshot-label">疑似病种</text>
+        <text class="snapshot-value">{{diseaseLabel}}</text>
+      </view>
+      <view wx:if="{{snapshot.riskHint}}" class="snapshot-row">
+        <text class="snapshot-label">风险提示</text>
+        <text class="snapshot-value risk-{{snapshot.riskHint}}">{{riskLabel}}</text>
+      </view>
+      <view wx:if="{{snapshot.diagnosisIcd}}" class="snapshot-row">
+        <text class="snapshot-label">临床证据</text>
+        <text class="snapshot-value">{{snapshot.diagnosisIcd}} · {{snapshot.diagnosisText || ''}}</text>
+      </view>
+      <view wx:if="{{snapshot.evidenceSummary}}" class="snapshot-row evidence-row">
+        <text class="snapshot-label">证据摘要</text>
+        <text class="snapshot-value">{{snapshot.evidenceSummary}}</text>
+      </view>
+      <view class="snapshot-row">
+        <text class="snapshot-label">数据来源</text>
+        <text class="snapshot-value">{{sourceLabel}}</text>
+      </view>
+    </view>
+
+    <!-- 知情同意协议正文 -->
+    <view class="card consent-card">
+      <view class="card-title">慢病管理知情同意与隐私授权协议</view>
+      <view class="consent-version muted">协议版本：{{consentVersion}}</view>
+
+      <view class="consent-section">
+        <view class="consent-heading">一、我同意加入慢病管理服务的目的</view>
+        <view class="consent-paragraph">
+          本院针对慢性病患者建立长期随访管理体系，目的是通过定期电话随访、门诊复诊提醒、
+          家庭血压/血糖远程监测和健康问卷，及时识别病情波动、提升用药依从性并改善长期预后。
+        </view>
+      </view>
+
+      <view class="consent-section">
+        <view class="consent-heading">二、本院将向您收集和使用的数据范围</view>
+        <view class="consent-paragraph">
+          1. 您在本院产生的门诊/住院诊疗信息（含诊断、化验、检查、用药、出院小结）；
+          2. 您在小程序中主动上传的家庭血压、血糖、心率、体重、症状问卷等；
+          3. 您与护士/医生在随访过程中产生的对话和电子签名记录。
+        </view>
+      </view>
+
+      <view class="consent-section">
+        <view class="consent-heading">三、数据的使用、共享与安全保护</view>
+        <view class="consent-paragraph">
+          1. 数据仅用于本院慢病管理临床团队对您本人的诊疗与随访，不会向第三方（含药企、保险公司）共享或出售；
+          2. 全部数据存储在本院 HIS / EMR 受控环境内，所有访问会写入审计日志；
+          3. 您随时有权要求查看、更正或注销您的个人健康档案。
+        </view>
+      </view>
+
+      <view class="consent-section">
+        <view class="consent-heading">四、我授权本院主动联系我的方式</view>
+        <view class="consent-paragraph">
+          授权护士在工作时间（08:00–20:00）通过电话、短信、微信小程序消息方式联系我，
+          进行随访、复测提醒和异常指标核实。
+        </view>
+      </view>
+
+      <view class="consent-section">
+        <view class="consent-heading">五、我的撤回权</view>
+        <view class="consent-paragraph">
+          我可以随时通过小程序「我的 → 联系医院」或拨打门诊办公室电话，要求暂停或永久退出慢病管理服务，
+          已收集的数据将按照本院隐私规则进行匿名化或销毁处理。
+        </view>
+      </view>
+
+      <view class="consent-checkbox" bindtap="toggleAgreed">
+        <view class="checkbox-box {{agreed ? 'checked' : ''}}">
+          <text wx:if="{{agreed}}">✓</text>
+        </view>
+        <view class="checkbox-label">
+          我已阅读并理解上述全部条款，<text class="strong">同意</text>加入本院慢病管理服务并授权使用我的健康数据。
+        </view>
+      </view>
+    </view>
+
+    <!-- 提交按钮 -->
+    <view class="card sign-action-card">
+      <view wx:if="{{error}}" class="error-banner {{recovering ? 'recovering-banner' : ''}}">{{error}}</view>
+      <button
+        class="primary-btn sign-btn"
+        loading="{{submitting}}"
+        disabled="{{!agreed || submitting}}"
+        bindtap="submitSign">
+        {{recovering ? '正在确认提交结果…' : '同意并提交绑定申请'}}
+      </button>
+      <view class="muted sign-disclaimer">
+        点击「同意并提交绑定申请」等同于您本人签署本协议（电子签名）。
+        若您来自医院邀约库，提交后本院将同步为您建档并生成首年随访计划；绑定申请仍需护士审核。
+      </view>
+    </view>
+
+  </block>
+
+  <view class="safe-bottom" />
+</view>

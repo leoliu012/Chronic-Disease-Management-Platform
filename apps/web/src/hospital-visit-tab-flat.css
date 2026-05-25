@@ -372,6 +372,47 @@
   color: #c2410c;
 }
 
+/* 顶部“当前到院提醒”横幅内的撤销表单：原因 + 工号，记录全程留存 */
+.visit-reminder-top-banner {
+  margin: 0 0 4px;
+}
+
+.follow-up-next-visit-banner-actions .visit-banner-revoke-form {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: min(360px, 100%);
+}
+
+.visit-banner-revoke-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.visit-banner-revoke-field textarea,
+.visit-banner-revoke-field input {
+  font: inherit;
+  font-weight: 500;
+  padding: 6px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.visit-banner-revoke-field textarea {
+  resize: vertical;
+  min-height: 48px;
+}
+
+.visit-banner-revoke-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .disabled-button:disabled,
 .visit-flat-header button:disabled {
   cursor: not-allowed;

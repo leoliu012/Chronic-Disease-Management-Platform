@@ -2,6 +2,7 @@ import type { FormEvent, KeyboardEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, AUTH_USER_STORAGE_KEY, getApiErrorMessage } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import type { CurrentUser } from './LoginPage';
 import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
@@ -194,21 +195,24 @@ export function PatientsPage() {
 
   const canExportPatients = currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER';
 
-  async function loadPatients() {
-    setLoading(true);
+  async function loadPatients(opts?: { silent?: boolean }) {
+    if (!opts?.silent) setLoading(true);
     try {
       const res = await api.get('/patients');
       setPatients(res.data);
     } catch (err) {
       setError(getApiErrorMessage(err, '患者主索引加载失败，请确认后端服务是否正常。'));
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     loadPatients();
   }, []);
+
+  // 患者主索引每 30 秒自动刷新。
+  usePolling(() => loadPatients({ silent: true }), 30000);
 
   const filteredPatients = useMemo(() => {
     const nameKeyword = normalizeText(nameFilter);
@@ -785,6 +789,7 @@ export function PatientsPage() {
     </div>
   );
 }
+
 
 
 

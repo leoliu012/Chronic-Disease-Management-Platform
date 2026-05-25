@@ -1,3 +1,5 @@
+
+
 /* Patient detail split workspace + in-chart/task processing panel */
 .patient-detail-split-shell {
   display: grid;
@@ -1426,4 +1428,169 @@
   cursor: not-allowed;
   opacity: 0.72;
   box-shadow: none;
+}
+
+
+/* ---- 处理完成：可展开/折叠的总结表入口（点击展开，再次点击折叠） ---- */
+.task-complete-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.task-complete-toggle:hover:not(:disabled) {
+  border-color: #0f766e;
+  box-shadow: 0 8px 22px rgba(15, 118, 110, 0.12);
+}
+
+.task-complete-toggle.open {
+  border-color: #0f766e;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: #f0fdfa;
+}
+
+.task-complete-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.task-complete-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-complete-toggle-label strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.task-complete-toggle-label em {
+  font-style: normal;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.task-complete-toggle-caret {
+  flex: none;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f766e;
+  white-space: nowrap;
+}
+
+.task-complete-toggle:disabled .task-complete-toggle-caret {
+  color: #94a3b8;
+}
+
+/* 展开后表体与切换按钮拼成一个整体卡片 */
+.task-panel-mode-section .task-complete-toggle.open + .task-panel-mode-body {
+  border: 1px solid #0f766e;
+  border-top: 0;
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+  margin-top: 0;
+  padding: 16px;
+  background: #ffffff;
+  animation: task-complete-collapsible-in 0.16s ease-out;
+}
+
+@keyframes task-complete-collapsible-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+
+/* ============================================================
+   统一任务处理中心 — 层次感强化
+   明确区分「任务选择区」与「任务处理工作区（信息/操作）」
+   ============================================================ */
+
+/* ---- 任务选择区：做成醒目的“选择器/导航”样式 ---- */
+.patient-task-side-panel .task-panel-queue-section {
+  margin: 14px 14px 0;
+  border: 1.5px solid rgba(15, 118, 110, 0.30);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ecfdf5, #f0fdfa);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+/* 选择区标题加一条强调竖条，强化“这是选择区” */
+.patient-task-side-panel .task-panel-queue-section .task-panel-section-title {
+  padding-left: 10px;
+  border-left: 3px solid #0f766e;
+}
+
+.patient-task-side-panel .task-panel-queue-section .task-panel-section-title span {
+  color: #0f766e;
+}
+
+/* 选中的任务卡片更突出，让“当前选中”一目了然 */
+.patient-task-side-panel .task-panel-queue-section .task-panel-task-card.active {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 1.5px #0f766e, 0 8px 20px rgba(15, 118, 110, 0.16);
+}
+
+/* ---- 选择区与工作区之间的明确分隔 ---- */
+.patient-task-side-panel .task-panel-workspace {
+  margin: 16px 10px 14px;
+  padding: 8px 4px 4px;
+  border-radius: 18px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
+/* 工作区带一个标签，作为“另一个区域”的视觉锚点 */
+.patient-task-side-panel .task-panel-workspace-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 8px;
+}
+
+.patient-task-side-panel .task-panel-workspace-label::before,
+.patient-task-side-panel .task-panel-workspace-label::after {
+  content: '';
+  height: 1px;
+  background: #cbd5e1;
+}
+
+.patient-task-side-panel .task-panel-workspace-label::before { width: 14px; flex: none; }
+.patient-task-side-panel .task-panel-workspace-label::after { flex: 1; }
+
+.task-panel-workspace-label-text {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+}
+
+/* 工作区内部的各个 section：去掉重边框，靠白底卡片彼此区隔，
+   与选择区的 teal 选择器形成对比 */
+.patient-task-side-panel .task-panel-workspace .task-panel-section {
+  margin: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+/* 工作区第一个/最后一个 section 的间距收紧，让“一组”更明显 */
+.patient-task-side-panel .task-panel-workspace .task-panel-section:first-of-type {
+  margin-top: 4px;
+}
+.patient-task-side-panel .task-panel-workspace .task-panel-section:last-of-type {
+  margin-bottom: 8px;
 }

@@ -22,7 +22,7 @@ const IGNORE_DIRS = new Set([
   "patches",
   "uploads",
   "catalogs",
-  "wechat-miniprogram"
+  // "wechat-miniprogram"
 ]);
 
 const IGNORE_FILES = new Set([

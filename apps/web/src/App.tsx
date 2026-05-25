@@ -10,6 +10,7 @@ import { IntegrationCenterPage } from './pages/IntegrationCenterPage';
 import { PatientTaskProcessingPage } from './pages/PatientTaskProcessingPage';
 import { TaskFollowUpRedirect } from './pages/TaskFollowUpRedirect';
 import { HospitalVisitRemindersPage } from './pages/HospitalVisitRemindersPage';
+import { ChronicLeadInvitationPage } from './pages/ChronicLeadInvitationPage';
 import {
   LoginPage,
   getRoleLabel,
@@ -42,6 +43,12 @@ const navItems: NavItem[] = [
     roles: ['ADMIN', 'NURSE'],
   },
   {
+    to: '/chronic-leads',
+    label: '高危线索',
+    hint: '出院 / 门诊 / 异常检验 邀约',
+    roles: ['ADMIN', 'NURSE', 'DOCTOR'],
+  },
+  {
     to: '/patients',
     label: '患者档案',
     hint: '慢病患者主索引',
@@ -62,8 +69,12 @@ const navItems: NavItem[] = [
   {
     to: '/integrations',
     label: '接口中心',
-    hint: 'HIS / EMR / LIS 同步',
-    roles: ['ADMIN', 'MANAGER'],
+    hint: 'HIS / EMR / LIS 同步 · 网关入库 / 冲突核验',
+    // conflict-resolution-ux-v1: 护士 / 医生需要进入查看「冲突」队列，
+    // 因为他们最了解患者；管理员只看配置，护士才知道这个院内号是不是
+    // 真的有过身份证变更。配置类按钮（一键批量、autoPromote 开关）
+    // 仍在页面内按 isAdmin 进行细粒度禁用。
+    roles: ['ADMIN', 'MANAGER', 'DOCTOR', 'NURSE'],
   },
 ];
 
@@ -204,6 +215,14 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
               }
             />
             <Route
+              path="/chronic-leads"
+              element={
+                <RoleRoute user={user} roles={['ADMIN', 'NURSE', 'DOCTOR']}>
+                  <ChronicLeadInvitationPage />
+                </RoleRoute>
+              }
+            />
+            <Route
               path="/clinical-rules"
               element={
                 <RoleRoute user={user} roles={['ADMIN', 'DOCTOR', 'NURSE']}>
@@ -215,7 +234,7 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
             <Route
               path="/integrations"
               element={
-                <RoleRoute user={user} roles={['ADMIN', 'MANAGER']}>
+                <RoleRoute user={user} roles={['ADMIN', 'MANAGER', 'DOCTOR', 'NURSE']}>
                   <IntegrationCenterPage user={user} />
                 </RoleRoute>
               }
@@ -321,3 +340,6 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+
+

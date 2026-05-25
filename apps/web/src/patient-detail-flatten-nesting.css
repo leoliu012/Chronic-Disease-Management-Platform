@@ -1,0 +1,82 @@
+/*
+ * patient-detail-flatten-nesting.css
+ *
+ * 患者详情页两类问题的统一修复：
+ *   1. 患者基本信息（及表单）栅格做成响应式 auto-fit，
+ *      适配面板宽度，窄屏自动换行，不再溢出/裁切内容。
+ *   2. 去掉「卡片套卡片」的过度套层：当一个内容分组本身已经在
+ *      panel（卡片）里时，不再给它单独套一层背景/边框。
+ *
+ * 本文件在 main.tsx 中最后引入，确保覆盖既有样式。
+ * 选择器特意比 previous-style-lock.css 多一层，以压过其 !important。
+ */
+
+/* ============================================================
+   1. 响应式栅格 —— 适配页面/面板宽度
+   ============================================================ */
+
+/* 患者基本信息：按可用宽度自动排列列数，绝不溢出 */
+.patient-detail-page .patient-info-card .patient-info-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)) !important;
+  gap: 14px !important;
+}
+
+/* 表单栅格同理，避免固定列数在窄面板里被裁切 */
+.patient-detail-page .hospital-form .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)) !important;
+}
+
+.patient-detail-page .hospital-form .form-grid-two {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)) !important;
+}
+
+/* ============================================================
+   2. 去掉过度套层 —— panel 已是卡片，内部分组不再单独套背景
+   ============================================================ */
+
+/* 2a. 通用规则：panel 直接嵌套 panel —— 内层去掉卡片外观 */
+.patient-detail-page .panel .panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* 2b. 近期健康指标：趋势图卡片在「健康指标与打卡计划」面板内
+       不再各自套边框/底色；面板本身就是那张卡片，
+       图与图之间用一条细分隔线区分即可。 */
+.patient-detail-page .record-list-panel .vital-trend-chart-container {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.patient-detail-page .record-list-panel .metric-trend-stack {
+  gap: 0;
+}
+
+.patient-detail-page .record-list-panel .metric-trend-stack > * + * {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eef2f7;
+}
+
+/* 2c. 新增健康指标等内嵌表单：去掉 collapsible-form-card 这层
+       额外的蓝色底纹与边框，与外层 panel 合为同一层。 */
+.patient-detail-page .collapsible-form-card {
+  background: #ffffff;
+  border-color: #dbe7f3;
+}
+
+/* 2d. 内嵌列表/分组容器（task-inline-list 等）只作分隔，不套背景 */
+.patient-detail-page .panel .task-inline-list,
+.patient-detail-page .panel .medication-inline-list {
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  box-shadow: none;
+  border-radius: 0;
+}

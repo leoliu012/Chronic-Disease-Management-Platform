@@ -197,3 +197,24 @@ page {
 .safe-bottom {
   height: 40rpx;
 }
+
+/* 允许把原生 <button> 替换成 <view> 实现点击，避免开发者工具偶发 button 安全 SDK 报错。 */
+.primary-btn,
+.secondary-btn,
+.danger-btn {
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.tap-btn {
+  user-select: none;
+}
+
+.tap-btn-hover {
+  opacity: 0.78;
+  transform: scale(0.98);
+}
+
+.btn-row .tap-btn {
+  flex: 1;
+}

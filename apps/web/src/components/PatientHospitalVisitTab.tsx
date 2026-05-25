@@ -187,6 +187,11 @@ export function PatientHospitalVisitTab({
   const [submittingCreate, setSubmittingCreate] = useState(false);
   const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [actionDrafts, setActionDrafts] = useState<Record<string, ActionDraft>>({});
+  // 顶部“当前到院提醒”横幅内的撤销表单（原因 + 工号，记录全程留存）。
+  const [bannerRevokeOpen, setBannerRevokeOpen] = useState(false);
+  const [bannerRevokeNote, setBannerRevokeNote] = useState('');
+  const [bannerRevokeSignature, setBannerRevokeSignature] = useState('');
+  const [bannerRevokeSubmitting, setBannerRevokeSubmitting] = useState(false);
   const hasActiveVisitReminder = activeHospitalVisitReminders.length > 0;
 
   useEffect(() => {
@@ -206,6 +211,16 @@ export function PatientHospitalVisitTab({
       setActiveForm(null);
     }
   }, [activeForm?.kind, hasActiveVisitReminder]);
+
+  // Collapse the top-banner revoke form whenever the patient no longer has an
+  // active reminder (e.g. it was just revoked or resolved elsewhere).
+  useEffect(() => {
+    if (!hasActiveVisitReminder && bannerRevokeOpen) {
+      setBannerRevokeOpen(false);
+      setBannerRevokeNote('');
+      setBannerRevokeSignature('');
+    }
+  }, [hasActiveVisitReminder, bannerRevokeOpen]);
 
   function notify(type: 'success' | 'error' | 'warning', title: string, message: string) {
     emitOperationNotice({ type, title, message, operationKey: `hospital-visit-${Date.now()}` });
@@ -316,6 +331,113 @@ export function PatientHospitalVisitTab({
     } finally {
       setSubmittingAction(null);
     }
+  }
+
+  async function submitBannerRevoke(event: FormEvent<HTMLFormElement>, reminder?: HospitalVisitReminder) {
+    event.preventDefault();
+    if (!reminder) return;
+    if (!bannerRevokeNote.trim()) {
+      notify('warning', '信息不完整', '请填写撤销原因后再撤销到院提醒。');
+      return;
+    }
+    if (!bannerRevokeSignature.trim()) {
+      notify('warning', '信息不完整', '请填写工号 / 电子签名后再撤销到院提醒。');
+      return;
+    }
+    setBannerRevokeSubmitting(true);
+    try {
+      await api.patch(`/hospital-visit-reminders/${reminder.id}/revoke`, {
+        note: bannerRevokeNote.trim(),
+        electronicSignature: bannerRevokeSignature.trim(),
+      });
+      notify('success', '撤销提醒已提交', '到院提醒已撤销；撤销原因、工号与时间已全程留存，并同步进入处置流程。');
+      setBannerRevokeOpen(false);
+      setBannerRevokeNote('');
+      setBannerRevokeSignature('');
+      await onChanged();
+    } catch (err) {
+      console.error(err);
+      notify('error', '撤销提醒失败', getApiErrorMessage(err, '撤销到院提醒失败，请稍后重试。'));
+    } finally {
+      setBannerRevokeSubmitting(false);
+    }
+  }
+
+  function renderVisitReminderBanner() {
+    if (!hasActiveVisitReminder) return null;
+    const primary = activeHospitalVisitReminders[0];
+    return (
+      <div className="follow-up-next-visit-banner is-imminent visit-reminder-top-banner" role="status">
+        <div className="follow-up-next-visit-banner-main">
+          <span className="follow-up-next-visit-banner-label">当前到院提醒</span>
+          <strong className="follow-up-next-visit-banner-time">已存在有效到院提醒</strong>
+          <span className="follow-up-next-visit-banner-hint">
+            为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。撤销需填写原因与工号，记录全程留存。
+          </span>
+          {primary && (
+            <span className="follow-up-next-visit-banner-task-badge" title={primary.id}>
+              {activeHospitalVisitReminders.length > 1
+                ? `共 ${activeHospitalVisitReminders.length} 条有效提醒 · 最近通知 ${formatTime(primary.remindedAt)}`
+                : `${localizeBackendText(primary.reason)} · 最近通知 ${formatTime(primary.remindedAt)}`}
+            </span>
+          )}
+        </div>
+        <div className="follow-up-next-visit-banner-actions">
+          {bannerRevokeOpen ? (
+            <form
+              className="follow-up-next-visit-banner-edit visit-banner-revoke-form"
+              onSubmit={(event) => submitBannerRevoke(event, primary)}
+            >
+              <label className="visit-banner-revoke-field">
+                <span>撤销原因 <span className="required-mark">*</span></span>
+                <textarea
+                  value={bannerRevokeNote}
+                  onChange={(event) => setBannerRevokeNote(event.target.value)}
+                  rows={2}
+                  placeholder="请说明撤销该到院提醒的原因"
+                  disabled={bannerRevokeSubmitting}
+                />
+              </label>
+              <label className="visit-banner-revoke-field">
+                <span>工号 / 电子签名 <span className="required-mark">*</span></span>
+                <input
+                  value={bannerRevokeSignature}
+                  onChange={(event) => setBannerRevokeSignature(event.target.value)}
+                  placeholder="请输入护士姓名 / 工号"
+                  disabled={bannerRevokeSubmitting}
+                />
+              </label>
+              <div className="visit-banner-revoke-actions">
+                <button className="button" type="submit" disabled={bannerRevokeSubmitting}>
+                  {bannerRevokeSubmitting ? '撤销中…' : '确认撤销'}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    setBannerRevokeOpen(false);
+                    setBannerRevokeNote('');
+                    setBannerRevokeSignature('');
+                  }}
+                  disabled={bannerRevokeSubmitting}
+                >
+                  放弃
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setBannerRevokeOpen(true)}
+              disabled={Boolean(submittingAction)}
+            >
+              撤销提醒
+            </button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   function renderCreateForm() {
@@ -432,6 +554,8 @@ export function PatientHospitalVisitTab({
         </button>
       </div>
 
+      {renderVisitReminderBanner()}
+
       <section className="visit-patient-detail-card" aria-label="患者到院提醒联系信息">
         <div className="visit-patient-detail-identity">
           <div>
@@ -469,29 +593,6 @@ export function PatientHospitalVisitTab({
           </div>
         </div>
 
-        {hasActiveVisitReminder && (() => {
-          // Unified with the phone follow-up "下次随访时间" banner so the
-          // "已存在有效到院提醒" state reads the same across both tabs.
-          const primary = activeHospitalVisitReminders[0];
-          return (
-            <div className="follow-up-next-visit-banner is-imminent" role="status">
-              <div className="follow-up-next-visit-banner-main">
-                <span className="follow-up-next-visit-banner-label">当前到院提醒</span>
-                <strong className="follow-up-next-visit-banner-time">已存在有效到院提醒</strong>
-                <span className="follow-up-next-visit-banner-hint">
-                  为避免患者端重复收到冲突提醒，请先处理或撤销当前提醒，再新建下一条。
-                </span>
-                {primary && (
-                  <span className="follow-up-next-visit-banner-task-badge" title={primary.id}>
-                    {activeHospitalVisitReminders.length > 1
-                      ? `共 ${activeHospitalVisitReminders.length} 条有效提醒 · 最近通知 ${formatTime(primary.remindedAt)}`
-                      : `${localizeBackendText(primary.reason)} · 最近通知 ${formatTime(primary.remindedAt)}`}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })()}
       </section>
 
       {renderCreateForm()}

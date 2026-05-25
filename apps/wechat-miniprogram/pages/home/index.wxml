@@ -2,7 +2,7 @@
   <view wx:if="{{!patientId}}" class="card unbound-card">
     <view class="card-title">请先绑定患者档案</view>
     <view class="card-subtitle">绑定后可进行院外血压、血糖、血氧等数据上报，并查看用药打卡、健康问卷、护士提醒和风险预警。</view>
-    <button class="primary-btn bind-btn" bindtap="goBind">立即绑定</button>
+    <view class="primary-btn bind-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">立即绑定</view>
   </view>
 
   <block wx:else>
@@ -12,7 +12,7 @@
           <view class="hello">您好，{{patient.name || '慢病患者'}}</view>
           <view class="card-subtitle">{{patientDesc}}</view>
         </view>
-        <button class="switch-btn" bindtap="goBind">切换</button>
+        <view class="switch-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">切换</view>
       </view>
     </view>
 
@@ -98,5 +98,3 @@
 
   <view class="safe-bottom" />
 </view>
-
-

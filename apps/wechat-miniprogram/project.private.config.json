@@ -1,7 +1,19 @@
 {
   "libVersion": "3.16.0",
   "projectname": "wechat-miniprogram",
-  "condition": {},
+  "condition": {
+    "miniprogram": {
+      "list": [
+        {
+          "name": "测试知情同意签约",
+          "pathName": "pages/consent-sign/index",
+          "query": "h=TEST_HPID_002",
+          "scene": null,
+          "launchMode": "default"
+        }
+      ]
+    }
+  },
   "setting": {
     "urlCheck": false,
     "coverView": false,

@@ -29,6 +29,10 @@ import './task-workbench-pro.css';
 import './task-workbench-pro-v2.css';
 import './patient-entry-detail-fix.css';
 import './patient-intake-legacy-polish.css';
+import './patient-detail-flatten-nesting.css';
+import './entity-name-chip-v1.css';
+import './chronic-lead-invitation.css';
+import './gateway-promote-conflict-v1.css';
 import App from './App.tsx';
 
 createRoot(document.getElementById('root')!).render(
@@ -36,3 +40,5 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
+
+

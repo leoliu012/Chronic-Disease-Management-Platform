@@ -1,0 +1,10 @@
+# 样例 HL7 v2.5 消息：ORU^R01 (检验结果)
+# 包含 2 个 OBX 段：空腹血糖 (高) + 糖化血红蛋白 (高)
+# 网关会拆成 2 个 NormalizedEvent 入库。
+# 实际通过 MLLP 发送时，段分隔符必须是 \r (0x0D)。
+
+MSH|^~\&|LIS|HOSPITAL_A|GATEWAY|PUHUI|20260522080000||ORU^R01|MSG00002|P|2.5
+PID|1||MZ20260520002^^^HOSPITAL_A^MR||CHEN^XIUYING^^^^^L||19550308|F
+OBR|1|LAB20260522001||GLU^Fasting glucose panel|||20260522073000
+OBX|1|NM|1558-6^Fasting glucose^LN||8.7|mmol/L|3.9-6.1|H|||F|||20260522073000
+OBX|2|NM|4548-4^Hemoglobin A1c^LN||7.4|%|4.0-6.0|H|||F|||20260522073000

@@ -1,4 +1,4 @@
-const { patientRequest } = require('../../utils/request');
+const { patientRequest, openMiniProgramPage } = require('../../utils/request');
 const {
   riskLabels,
   taskStatusLabels,
@@ -33,10 +33,35 @@ Page({
 
   onShow() {
     this.initAndLoad();
+    // 停留在首页期间自动刷新看板，新任务 / 预警无需手动下拉或退出重进。
+    this.startDashboardPolling();
+  },
+
+  onHide() {
+    this.stopDashboardPolling();
+  },
+
+  onUnload() {
+    this.stopDashboardPolling();
   },
 
   onPullDownRefresh() {
     this.loadDashboard().finally(() => wx.stopPullDownRefresh());
+  },
+
+  startDashboardPolling() {
+    if (this._dashboardPollTimer) return;
+    this._dashboardPollTimer = setInterval(() => {
+      // silent：轮询刷新不显示 loading，避免每 30 秒闪一次。
+      this.loadDashboard({ silent: true });
+    }, 30000);
+  },
+
+  stopDashboardPolling() {
+    if (this._dashboardPollTimer) {
+      clearInterval(this._dashboardPollTimer);
+      this._dashboardPollTimer = null;
+    }
   },
 
   initAndLoad() {
@@ -50,9 +75,10 @@ Page({
     }
   },
 
-  async loadDashboard() {
+  async loadDashboard(options) {
     if (!this.data.patientId) return;
-    this.setData({ loading: true });
+    const silent = options && options.silent;
+    if (!silent) this.setData({ loading: true });
 
     try {
       const [me, vitals, alerts, tasks, medications, questionnaires, vitalPlans, hospitalVisitReminders] = await Promise.all([
@@ -119,9 +145,9 @@ Page({
         recentTasks
       });
     } catch (error) {
-      wx.showToast({ title: error.message, icon: 'none' });
+      if (!silent) wx.showToast({ title: error.message, icon: 'none' });
     } finally {
-      this.setData({ loading: false });
+      if (!silent) this.setData({ loading: false });
     }
   },
 
@@ -211,7 +237,14 @@ Page({
   },
 
   goBind() {
-    wx.navigateTo({ url: '/pages/bind/index' });
+    openMiniProgramPage('/pages/bind/index', {
+      onFail(err) {
+        wx.showToast({
+          title: (err && err.errMsg) || '无法打开绑定页，请确认 app.json 包含 pages/bind/index',
+          icon: 'none'
+        });
+      }
+    });
   },
 
   goVitals() {
@@ -243,6 +276,8 @@ Page({
     if (target === 'records') this.goRecords();
   }
 });
+
+
 
 
 

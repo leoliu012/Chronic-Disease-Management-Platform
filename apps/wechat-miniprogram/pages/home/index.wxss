@@ -23,16 +23,32 @@
 .switch-btn {
   width: 130rpx;
   min-width: 130rpx;
+  height: 56rpx;
+  line-height: 56rpx;
   border-radius: 999rpx;
   background: rgba(255, 255, 255, 0.92);
   color: #0b63ce;
   font-size: 24rpx;
   font-weight: 700;
   margin: 0;
+  text-align: center;
 }
 
 .bind-btn {
   margin-top: 28rpx;
+  height: 88rpx;
+  line-height: 88rpx;
+  text-align: center;
+}
+
+.tap-btn {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.tap-btn-hover {
+  opacity: 0.78;
+  transform: scale(0.98);
 }
 
 .todo-card {

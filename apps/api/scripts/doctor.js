@@ -65,6 +65,16 @@ async function main() {
     fail('JWT_SECRET is missing', 'Auth/RBAC login cannot safely sign tokens.');
   }
 
+  if (process.env.GATEWAY_API_KEY) {
+    if (process.env.GATEWAY_API_KEY === 'dev_gateway_key_change_in_prod') {
+      warn('GATEWAY_API_KEY is using the demo value', 'OK for local demo; change before any real deployment.');
+    } else {
+      pass('GATEWAY_API_KEY is configured');
+    }
+  } else {
+    fail('GATEWAY_API_KEY is missing', 'FHIR/HIS REST endpoints will reject all requests (fail-closed).');
+  }
+
   let PrismaClient;
   try {
     ({ PrismaClient } = require('@prisma/client'));
@@ -101,6 +111,9 @@ async function main() {
       'IntegrationSyncBatch',
       'IntegrationSyncRecord',
       'IntegrationFieldMapping',
+      'EncounterRecord',
+      'MedicalRecordSummary',
+      'HospitalMedicationOrder',
     ];
 
     const rows = await prisma.$queryRawUnsafe(
@@ -113,6 +126,35 @@ async function main() {
       pass('Critical database tables exist', `${requiredTables.length} tables checked`);
     } else {
       fail('Critical database tables are missing', missing.join(', '));
+    }
+
+    // gateway-promote-pipeline columns
+    try {
+      const cols = await prisma.$queryRawUnsafe(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='IntegrationSyncRecord' AND column_name IN ('promotionStatus','promotionMessage','promotedAt')`,
+      );
+      const colNames = cols.map((c) => c.column_name);
+      const missingCols = ['promotionStatus', 'promotionMessage', 'promotedAt'].filter((c) => !colNames.includes(c));
+      if (missingCols.length === 0) {
+        pass('Gateway promote columns exist', 'IntegrationSyncRecord.{promotionStatus, promotionMessage, promotedAt}');
+      } else {
+        fail('Gateway promote columns missing', `Run "npx prisma migrate dev". Missing: ${missingCols.join(', ')}`);
+      }
+    } catch (error) {
+      fail('Could not introspect IntegrationSyncRecord columns', describePrismaError(error));
+    }
+
+    try {
+      const cols = await prisma.$queryRawUnsafe(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='IntegrationSource' AND column_name='autoPromote'`,
+      );
+      if (cols.length === 1) {
+        pass('IntegrationSource.autoPromote column exists');
+      } else {
+        fail('IntegrationSource.autoPromote column missing', 'Run "npx prisma migrate dev".');
+      }
+    } catch (error) {
+      fail('Could not introspect IntegrationSource columns', describePrismaError(error));
     }
 
     try {
@@ -141,6 +183,30 @@ async function main() {
       sourceCount > 0 ? pass('Integration sources exist', `${sourceCount} sources`) : warn('No integration sources found', 'Run: node prisma/seed-all.js');
     } catch (error) {
       fail('Cannot query IntegrationSource table', describePrismaError(error));
+    }
+
+    // gateway sources should be auto-upserted by GatewaySourceRegistry on module init,
+    // but we can warn here if they're missing — that means the api process never started.
+    try {
+      const gatewayCodes = [
+        'GATEWAY_FHIR_REST',
+        'GATEWAY_HIS_EVENT_REST',
+        'GATEWAY_HL7_MLLP',
+        'GATEWAY_INTERMEDIATE_DB',
+      ];
+      const existing = await prisma.integrationSource.findMany({
+        where: { code: { in: gatewayCodes } },
+        select: { code: true },
+      });
+      const seen = new Set(existing.map((s) => s.code));
+      const missing = gatewayCodes.filter((c) => !seen.has(c));
+      if (missing.length === 0) {
+        pass('Gateway IntegrationSource rows seeded', `${gatewayCodes.length} channels registered`);
+      } else {
+        warn('Some gateway IntegrationSource rows missing', `Start the API at least once. Missing: ${missing.join(', ')}`);
+      }
+    } catch (error) {
+      warn('Could not check gateway IntegrationSource rows', describePrismaError(error));
     }
   } catch (error) {
     fail('Database connection failed', error.message || String(error));

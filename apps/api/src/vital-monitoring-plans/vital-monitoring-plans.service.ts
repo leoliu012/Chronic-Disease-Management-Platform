@@ -500,7 +500,7 @@ export class VitalMonitoringPlansService {
       ...this.decoratePlan(updated),
       deleted: false,
       deactivated: true,
-      message: `监测计划「${plan.displayName}」已有历史记录，已停用并保留历史。`,
+      message: `监测计划⟦${plan.displayName}⟧已有历史记录，已停用并保留历史。`,
     };
   }
 
@@ -535,3 +535,5 @@ export class VitalMonitoringPlansService {
     };
   }
 }
+
+

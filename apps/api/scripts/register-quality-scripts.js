@@ -14,6 +14,10 @@ const additions = {
   doctor: 'node scripts/doctor.js',
   'demo:init': 'node scripts/demo-init.js',
   smoke: 'node scripts/smoke.js',
+  // gateway-promote-pipeline acceptance gate
+  'smoke:gateway': 'node scripts/smoke-gateway.js',
+  // 一次性同时跑业务流 + 网关流，作为每次 patch 之后固定的质量门槛
+  'smoke:all': 'node scripts/smoke.js && node scripts/smoke-gateway.js',
   'seed:all': 'node prisma/seed-all.js',
   'quality:register': 'node scripts/register-quality-scripts.js',
 };

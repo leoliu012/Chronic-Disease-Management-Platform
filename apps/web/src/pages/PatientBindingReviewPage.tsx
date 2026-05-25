@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
 
 type BindingStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -56,8 +57,8 @@ export function PatientBindingReviewPage() {
     return requests.filter((item) => item.status === statusFilter);
   }, [requests, statusFilter]);
 
-  async function loadRequests(nextStatus = statusFilter) {
-    setLoading(true);
+  async function loadRequests(nextStatus = statusFilter, opts?: { silent?: boolean }) {
+    if (!opts?.silent) setLoading(true);
     setError('');
     try {
       const res = await api.get<PatientBindingRequest[]>('/patient-binding-requests', {
@@ -67,7 +68,7 @@ export function PatientBindingReviewPage() {
     } catch {
       setError('加载患者绑定申请失败，请确认已登录护士或管理员账号。');
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }
 
@@ -75,6 +76,9 @@ export function PatientBindingReviewPage() {
     loadRequests();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 患者绑定申请每 15 秒自动刷新，护士端无需手动点「刷新申请」。
+  usePolling(() => loadRequests(undefined, { silent: true }), 15000);
 
   async function approve(id: string) {
     setUpdatingId(id);
@@ -205,5 +209,6 @@ export function PatientBindingReviewPage() {
     </div>
   );
 }
+
 
 

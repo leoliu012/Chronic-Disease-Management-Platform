@@ -1,3 +1,4 @@
+
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,7 +72,9 @@ export class FollowUpsService {
    */
   private async lockPatientFollowUp(patientId: string, client: DbClient) {
     try {
-      await client.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${patientId}, 0))`;
+      // pg_advisory_xact_lock() 返回 void —— Prisma 6.x 无法反序列化 void 列，
+      // 直接 SELECT 会抛 P2010。用 `IS NOT NULL` 把结果转成 boolean 列即可正常返回。
+      await client.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${patientId}, 0)) IS NOT NULL AS locked`;
     } catch (err) {
       console.warn('Advisory lock for phone follow-up sync unavailable.', err);
     }
@@ -626,3 +629,5 @@ export class FollowUpsService {
     return deleted;
   }
 }
+
+

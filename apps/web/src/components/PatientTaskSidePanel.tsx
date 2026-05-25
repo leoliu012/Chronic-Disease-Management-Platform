@@ -1,10 +1,23 @@
+
+
+
 import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { api, getApiErrorMessage } from '../api/client';
 import {
+  showFeedbackError,
+  showFeedbackSuccess,
+  showRequiredFieldMissing,
+} from '../utils/feedbackMessage';
+import {
   clearActiveTaskProcessingSession,
   setActiveTaskProcessingSession,
 } from '../utils/taskProcessingContext';
+// entity-name-chip-v1: render `⟦name⟧` markers carried by audit-log
+// descriptions and titles as styled pill chips instead of leaking the
+// Unicode brackets through to the DOM as raw text.
+import { renderWithNameChips } from './EntityName';
+import { usePolling } from '../hooks/usePolling';
 
 type Patient = {
   id: string;
@@ -56,17 +69,15 @@ type TaskPanelProps = {
 
 type PanelMode = 'CLOSE';
 
-const taskTypeLabelMap: Record<string, string> = {
-  FOLLOW_UP: '随访任务',
-  RISK_ALERT_FOLLOW_UP: '风险预警处理',
-  RECHECK_REMINDER: '复查提醒',
-  MEDICATION_REMINDER: '用药提醒',
-  MEDICATION_ADHERENCE_FOLLOW_UP: '用药依从性随访',
-  VITAL_MEASUREMENT_MISSED: '指标漏测复核',
-  QUESTIONNAIRE_REVIEW: '问卷复核',
-  LAB_TEST_REMINDER: '检查提醒',
-  HOSPITAL_VISIT_FOLLOW_UP: '到院提醒任务',
-};
+/**
+ * 任务不再绑定/设定固定的处理方式 tag（例如旧的“到院提醒任务”）。
+ * 一个待办任务可以有电话随访、用药调整、复测计划、到院提醒等多种处理动作。
+ * 这里只根据“是否由风险预警触发”给出一个中性描述，不代表唯一处理方式。
+ */
+function getTaskKindLabel(task: TimelineEvent | null | undefined, timeline: TimelineEvent[]) {
+  if (!task) return '护理待办任务';
+  return getRelatedAlertForTask(task, timeline) ? '风险预警处理' : '护理待办任务';
+}
 
 const statusLabelMap: Record<string, string> = {
   PENDING: '待开始',
@@ -120,10 +131,6 @@ function getTaskStatus(task?: TimelineEvent | null) {
   return String(task?.data?.status ?? '');
 }
 
-function getTaskType(task?: TimelineEvent | null) {
-  return String(task?.data?.type ?? '');
-}
-
 function getTaskDueAt(task?: TimelineEvent | null) {
   return task?.data?.dueAt ?? task?.data?.dueDate ?? undefined;
 }
@@ -158,12 +165,13 @@ function getRelatedAlertForTask(task: TimelineEvent | null | undefined, timeline
   return timeline.find((item) => item.type === 'RISK_ALERT' && item.data?.id === relatedAlertId) ?? null;
 }
 
-// isActionableTask-orphan-fix-v1: a PENDING/IN_PROGRESS task is always actionable, even
-// if its related alert has already been resolved/dismissed. Hiding such
-// tasks was the root cause of the "sidebar 空 but 全部记录 still shows
-// 待办任务" inconsistency reported by clinical users.
-function isActionableTask(task: TimelineEvent, _timeline: TimelineEvent[]) {
-  return isOpenTask(task);
+function isActionableTask(task: TimelineEvent, timeline: TimelineEvent[]) {
+  if (!isOpenTask(task)) return false;
+
+  const relatedAlert = getRelatedAlertForTask(task, timeline);
+  if (!relatedAlert) return true;
+
+  return !isClosedAlertStatus(relatedAlert.data?.status);
 }
 
 
@@ -243,30 +251,34 @@ function renderFlowDescription(description: string, localizeBackendText: (value?
   const localized = localizeBackendText(description);
   const parsed = parseStructuredDescription(localized);
 
-  if (!parsed) return <p>{localized}</p>;
+  // entity-name-chip-v1: descriptions emitted by taskProcessingContext.ts
+  // (e.g. `更新用药计划⟦二甲双胍片⟧：剂量：100mg → 200mg`) carry chip
+  // markers in the summary AND inside `before/after/raw/value`. Wrap every
+  // text slot with renderWithNameChips so the brackets become styled pills.
+  if (!parsed) return <p>{renderWithNameChips(localized)}</p>;
 
   return (
     <div className="task-flow-node-description">
       <p className="task-flow-node-summary">
-        <strong>{parsed.summary}</strong>
+        <strong>{renderWithNameChips(parsed.summary)}</strong>
       </p>
       <dl className="task-flow-node-detail-list">
         {parsed.rows.map((row) => (
           <div key={row.id} className="task-flow-node-detail-row">
             {row.raw ? (
-              <dd className="task-flow-node-detail-value task-flow-node-detail-raw">{row.raw}</dd>
+              <dd className="task-flow-node-detail-value task-flow-node-detail-raw">{renderWithNameChips(row.raw)}</dd>
             ) : (
               <>
-                <dt className="task-flow-node-detail-label">{row.label}</dt>
+                <dt className="task-flow-node-detail-label">{renderWithNameChips(row.label)}</dt>
                 <dd className="task-flow-node-detail-value">
                   {row.before !== undefined && row.after !== undefined ? (
                     <span className="task-flow-node-change">
-                      <span className="task-flow-node-before">{row.before || '未填写'}</span>
+                      <span className="task-flow-node-before">{row.before ? renderWithNameChips(row.before) : '未填写'}</span>
                       <span className="task-flow-node-arrow">→</span>
-                      <strong className="task-flow-node-after">{row.after || '未填写'}</strong>
+                      <strong className="task-flow-node-after">{row.after ? renderWithNameChips(row.after) : '未填写'}</strong>
                     </span>
                   ) : (
-                    <strong>{row.value}</strong>
+                    <strong>{renderWithNameChips(row.value)}</strong>
                   )}
                 </dd>
               </>
@@ -314,10 +326,10 @@ function ProcessingFlowChart({
             <div className="task-flow-node-index">{index + 1}</div>
             <div className="task-flow-node-body">
               <div className="task-flow-node-topline">
-                <strong>{eventTypeLabelMap[node.eventType] ?? node.title}</strong>
+                <strong>{eventTypeLabelMap[node.eventType] ?? renderWithNameChips(node.title)}</strong>
                 <span>{formatTime(node.createdAt)}</span>
               </div>
-              <h4>{localizeBackendText(node.title)}</h4>
+              <h4>{renderWithNameChips(localizeBackendText(node.title))}</h4>
               {node.description && renderFlowDescription(node.description, localizeBackendText)}
               {(node.sourceType || node.electronicSignature) && (
                 <div className="task-flow-node-meta">
@@ -369,25 +381,22 @@ export function PatientTaskSidePanel({
   const taskIsProcessing = selectedTaskStatus === 'IN_PROGRESS';
   const taskCanStart = selectedTaskStatus === 'PENDING';
 
-  const [activeMode, setActiveMode] = useState<PanelMode>('CLOSE');
+  const [closeFormOpen, setCloseFormOpen] = useState(false);
   const [closeStatus, setCloseStatus] = useState<'DONE' | 'CANCELED'>('DONE');
   const [closeNote, setCloseNote] = useState('');
   const [syncRelatedAlert, setSyncRelatedAlert] = useState(true);
   const [closeSignature, setCloseSignature] = useState('');
   const [submittingMode, setSubmittingMode] = useState<PanelMode | 'START' | null>(null);
-  const [panelMessage, setPanelMessage] = useState('');
-  const [panelError, setPanelError] = useState('');
   const [processingEvents, setProcessingEvents] = useState<TaskProcessingEvent[]>([]);
   const [processingEventsLoading, setProcessingEventsLoading] = useState(false);
 
-  const availableModes = useMemo<PanelMode[]>(() => ['CLOSE'], []);
-
   const flowHasStarted = processingEvents.some((item) => item.eventType === 'START_PROCESSING') || taskIsProcessing;
-  const shouldShowPreStartOnly = taskCanStart && !flowHasStarted && !taskIsClosed;
+  // 选中任务尚未开始：工作区只展示「相关预警 + 醒目开始按钮」，让护士清楚下一步该做什么。
+  const showPreStartWorkspace = taskCanStart && !flowHasStarted && !taskIsClosed;
 
-  async function loadProcessingEvents() {
+  async function loadProcessingEvents(opts?: { silent?: boolean }) {
     if (!selectedTaskStableId) return;
-    setProcessingEventsLoading(true);
+    if (!opts?.silent) setProcessingEventsLoading(true);
     try {
       const response = await api.get<TaskProcessingEvent[]>(`/tasks/${selectedTaskStableId}/processing-events`);
       setProcessingEvents(Array.isArray(response.data) ? response.data : []);
@@ -395,14 +404,14 @@ export function PatientTaskSidePanel({
       console.warn('Processing events failed to load', err);
       setProcessingEvents([]);
     } finally {
-      setProcessingEventsLoading(false);
+      if (!opts?.silent) setProcessingEventsLoading(false);
     }
   }
 
   useEffect(() => {
-    const requested = normalizeMode(requestedMode);
-    if (requested && availableModes.includes(requested)) setActiveMode(requested);
-  }, [availableModes, requestedMode]);
+    // 带 ?mode=close 等参数进入时，自动展开任务总结表。
+    if (normalizeMode(requestedMode)) setCloseFormOpen(true);
+  }, [requestedMode]);
 
   useEffect(() => {
     function handleTaskProcessingEventsUpdated(event: Event) {
@@ -415,21 +424,27 @@ export function PatientTaskSidePanel({
   }, [selectedTaskStableId]);
 
   useEffect(() => {
-    if (!selectedTask) return;
-    setPanelMessage('');
-    setPanelError('');
+    if (!selectedTaskStableId) return;
     setProcessingEvents([]);
     void loadProcessingEvents();
 
-    if (getTaskStatus(selectedTask) === 'IN_PROGRESS') {
+    if (selectedTaskStatus === 'IN_PROGRESS' && selectedTask) {
       setActiveTaskProcessingSession({
         patientId,
-        taskId: getTaskId(selectedTask),
+        taskId: selectedTaskStableId,
         taskTitle: localizeBackendText(selectedTask.title),
         startedAt: new Date().toISOString(),
       });
     }
-  }, [patientId, localizeBackendText, relatedAlert, selectedTask, selectedTaskRelatedAlertId, selectedTaskStableId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId, selectedTaskStableId]);
+
+  // 选中任务的处理流程每 15 秒静默刷新，其它医护新增的处理节点会自动出现。
+  usePolling(
+    () => loadProcessingEvents({ silent: true }),
+    15000,
+    Boolean(selectedTaskStableId) && !taskIsClosed,
+  );
 
   async function refreshPanelState() {
     await loadProcessingEvents();
@@ -438,29 +453,16 @@ export function PatientTaskSidePanel({
 
   function requireStarted() {
     if (taskIsProcessing || flowHasStarted) return true;
-    setPanelError('请先点击“开始处理”，系统才会把后续动作自动归入该任务流程。');
-    return false;
-  }
-
-  async function recordProcessingEvent(event: Omit<TaskProcessingEvent, 'id' | 'taskId' | 'patientId' | 'createdAt'>) {
-    if (!selectedTaskStableId) return;
-    await api.post(
-      `/tasks/${selectedTaskStableId}/processing-events`,
-      event,
-      {
-        headers: {
-          'X-Suppress-Operation-Notice': '1',
-          'X-Suppress-Task-Processing-Event': '1',
-        },
-      },
+    showFeedbackError(
+      '请先点击“开始处理”，系统才会把后续动作自动归入该任务流程。',
+      '任务尚未开始',
     );
+    return false;
   }
 
   async function startProcessing() {
     if (!selectedTask || !selectedTaskStableId || taskIsClosed || submittingMode) return;
     setSubmittingMode('START');
-    setPanelError('');
-    setPanelMessage('');
 
     try {
       await api.patch(
@@ -481,11 +483,14 @@ export function PatientTaskSidePanel({
         taskTitle: localizeBackendText(selectedTask.title),
         startedAt: new Date().toISOString(),
       });
-      setPanelMessage('已开始处理。后续患者档案内保存的操作会自动进入该任务流程。');
+      showFeedbackSuccess(
+        '已开始处理。后续患者档案内保存的操作会自动进入该任务流程。',
+        '任务已开始',
+      );
       await refreshPanelState();
     } catch (err) {
       console.error(err);
-      setPanelError(getApiErrorMessage(err, '开始处理失败，请稍后重试。'));
+      showFeedbackError(getApiErrorMessage(err, '开始处理失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -495,17 +500,15 @@ export function PatientTaskSidePanel({
     event.preventDefault();
     if (!selectedTask || submittingMode || taskIsClosed || !requireStarted()) return;
     if (!closeNote.trim()) {
-      setPanelError('请填写本次任务处理总结。');
+      showRequiredFieldMissing('请填写本次任务处理总结后再提交。', '处理总结未填写');
       return;
     }
     if (!closeSignature.trim()) {
-      setPanelError('请填写电子签名后再提交处理完成。');
+      showRequiredFieldMissing('请填写电子签名后再提交处理完成。', '电子签名未填写');
       return;
     }
 
     setSubmittingMode('CLOSE');
-    setPanelError('');
-    setPanelMessage('');
 
     try {
       await api.patch(
@@ -524,11 +527,16 @@ export function PatientTaskSidePanel({
         },
       );
       clearActiveTaskProcessingSession(patientId, selectedTaskStableId);
-      setPanelMessage(closeStatus === 'DONE' ? '任务已处理完成，并写入流程总结。' : '任务已取消/误报结案，并写入流程总结。');
+      showFeedbackSuccess(
+        closeStatus === 'DONE'
+          ? '任务已处理完成，并写入流程总结。'
+          : '任务已取消/误报结案，并写入流程总结。',
+        closeStatus === 'DONE' ? '处理完成' : '已结案',
+      );
       await refreshPanelState();
     } catch (err) {
       console.error(err);
-      setPanelError(getApiErrorMessage(err, '任务处理完成提交失败，请稍后重试。'));
+      showFeedbackError(getApiErrorMessage(err, '任务处理完成提交失败，请稍后重试。'));
     } finally {
       setSubmittingMode(null);
     }
@@ -552,9 +560,9 @@ export function PatientTaskSidePanel({
   const renderRelatedAlertCard = (extraClassName = '') => relatedAlert ? (
     <div className={`task-panel-related-alert ${extraClassName}`.trim()}>
       <span className={getRiskClass(relatedAlert.data?.riskLevel)}>{riskLabelMap[relatedAlert.data?.riskLevel] ?? relatedAlert.data?.riskLevel}</span>
-      <strong>{localizeBackendText(relatedAlert.title)}</strong>
-      <p>{localizeBackendText(relatedAlert.description)}</p>
-      {relatedAlert.data?.triggerRule && <small>触发规则：{localizeBackendText(relatedAlert.data.triggerRule)}</small>}
+      <strong>{renderWithNameChips(localizeBackendText(relatedAlert.title))}</strong>
+      <p>{renderWithNameChips(localizeBackendText(relatedAlert.description))}</p>
+      {relatedAlert.data?.triggerRule && <small>触发规则：{renderWithNameChips(localizeBackendText(relatedAlert.data.triggerRule))}</small>}
     </div>
   ) : null;
 
@@ -569,78 +577,13 @@ export function PatientTaskSidePanel({
     </header>
   );
 
-  const renderPanelNotices = () => (
-    <>
-      {panelMessage && <div className="notice-success task-panel-notice" role="status">{panelMessage}</div>}
-      {panelError && <div className="notice-error task-panel-notice" role="alert">{panelError}</div>}
-    </>
-  );
-
-  if (shouldShowPreStartOnly) {
-    // prestart-task-list-v1: before the task is started, show task selection + related risk alert + start button only.
-    return (
-      <aside className="patient-task-side-panel" aria-label="患者任务处置面板">
-        {renderPanelHeader()}
-        {renderPanelNotices()}
-
-        <section className="task-panel-section task-panel-queue-section task-panel-prestart-task-list">
-          <div className="task-panel-section-title task-panel-prestart-task-list-title">
-            <span>选择任务</span>
-            <strong>{openTasks.length} 条待处理</strong>
-          </div>
-          <div className="task-panel-task-list">
-            {sortedTasks.map((task) => {
-              const taskId = getTaskId(task);
-              const selected = taskId === selectedTaskStableId;
-              const status = getTaskStatus(task);
-              return (
-                <button
-                  key={taskId || `${task.time}-${task.title}`}
-                  type="button"
-                  className={selected ? 'task-panel-task-card active' : 'task-panel-task-card'}
-                  onClick={() => onSelectTask(taskId, 'close')}
-                >
-                  <span>{taskTypeLabelMap[getTaskType(task)] ?? getTaskType(task)}</span>
-                  <strong>{localizeBackendText(task.title)}</strong>
-                  <small>截止：{formatTime(getTaskDueAt(task))}</small>
-                  <em className={getStatusClass(status)}>{statusLabelMap[status] ?? status}</em>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="task-panel-section task-panel-prestart-gate">
-          {relatedAlert ? (
-            renderRelatedAlertCard('prestart-related-alert')
-          ) : (
-            <div className="task-panel-current-task prestart-current-task">
-              <div className="task-panel-current-task-topline">
-                <span className="badge">{taskTypeLabelMap[getTaskType(selectedTask)] ?? getTaskType(selectedTask)}</span>
-                <em className={getStatusClass(selectedTaskStatus)}>{statusLabelMap[selectedTaskStatus] ?? selectedTaskStatus}</em>
-              </div>
-              <h3>{localizeBackendText(selectedTask.title)}</h3>
-              <p>截止：{formatTime(getTaskDueAt(selectedTask))}</p>
-            </div>
-          )}
-
-          <button
-            className="button task-panel-start-primary-button"
-            type="button"
-            onClick={startProcessing}
-            disabled={submittingMode === 'START'}
-          >
-            {submittingMode === 'START' ? '正在开始处理...' : '开始处理'}
-          </button>
-        </section>
-      </aside>
-    );
-  }
+  // 不再为「任务未开始」单独渲染只有「开始处理」按钮的精简视图——那会隐藏
+  // 「选择任务」列表，护士在任务开始前无法切换/选择其它待办任务。现在统一走
+  // 下方完整面板：始终展示任务选择列表 + 当前任务处理区。
 
   return (
     <aside className="patient-task-side-panel" aria-label="患者任务处置面板">
       {renderPanelHeader()}
-      {renderPanelNotices()}
 
       <section className="task-panel-section task-panel-queue-section">
         <div className="task-panel-section-title">
@@ -659,8 +602,8 @@ export function PatientTaskSidePanel({
                 className={selected ? 'task-panel-task-card active' : 'task-panel-task-card'}
                 onClick={() => onSelectTask(taskId, 'close')}
               >
-                <span>{taskTypeLabelMap[getTaskType(task)] ?? getTaskType(task)}</span>
-                <strong>{localizeBackendText(task.title)}</strong>
+                <span>{getTaskKindLabel(task, timeline)}</span>
+                <strong>{renderWithNameChips(localizeBackendText(task.title))}</strong>
                 <small>截止：{formatTime(getTaskDueAt(task))}</small>
                 <em className={getStatusClass(status)}>{statusLabelMap[status] ?? status}</em>
               </button>
@@ -669,13 +612,40 @@ export function PatientTaskSidePanel({
         </div>
       </section>
 
+      {/* 任务处理工作区：与上方“选择任务”区域明确分隔，承载当前任务的信息与操作。 */}
+      <div className="task-panel-workspace">
+        <div className="task-panel-workspace-label">
+          <span className="task-panel-workspace-label-text">当前任务处理区</span>
+        </div>
+
+      {showPreStartWorkspace ? (
+        <section className="task-panel-section task-panel-prestart-gate">
+          {relatedAlert ? (
+            renderRelatedAlertCard('prestart-related-alert')
+          ) : (
+            <div className="task-panel-current-task prestart-current-task">
+              <h3>{renderWithNameChips(localizeBackendText(selectedTask.title))}</h3>
+              <p>截止：{formatTime(getTaskDueAt(selectedTask))}</p>
+            </div>
+          )}
+          <button
+            className="button task-panel-start-primary-button"
+            type="button"
+            onClick={startProcessing}
+            disabled={submittingMode === 'START'}
+          >
+            {submittingMode === 'START' ? '正在开始处理...' : '开始处理'}
+          </button>
+        </section>
+      ) : (
+        <>
       <section className="task-panel-section task-panel-summary-section">
         <div className="task-panel-current-task">
           <div className="task-panel-current-task-topline">
-            <span className="badge">{taskTypeLabelMap[getTaskType(selectedTask)] ?? getTaskType(selectedTask)}</span>
+            <span className="badge">{getTaskKindLabel(selectedTask, timeline)}</span>
             <em className={getStatusClass(selectedTaskStatus)}>{statusLabelMap[selectedTaskStatus] ?? selectedTaskStatus}</em>
           </div>
-          <h3>{localizeBackendText(selectedTask.title)}</h3>
+          <h3>{renderWithNameChips(localizeBackendText(selectedTask.title))}</h3>
           <p>截止：{formatTime(getTaskDueAt(selectedTask))}</p>
           <div className="task-processing-session-actions">
             {taskCanStart && (
@@ -705,51 +675,50 @@ export function PatientTaskSidePanel({
         />
       </section>
 
-      {!flowHasStarted && !taskIsClosed && (
-        <section className="task-panel-section task-start-guidance-card">
-          <strong>先开始，再处理</strong>
-          <p>点击“开始处理”后，系统会把该任务切换为“处理中”。之后在患者档案内新增用药、修改复测计划、保存随访记录、发送到院提醒等动作，都会自动进入上方流程图。</p>
-        </section>
-      )}
-
-
       <section className="task-panel-section task-panel-mode-section">
-        <div className="task-panel-mode-tabs" role="tablist" aria-label="任务处置动作">
-          {availableModes.map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={activeMode === mode ? 'active' : ''}
-              onClick={() => setActiveMode(mode)}
-              disabled={!flowHasStarted || taskIsClosed}
-            >
-              {modeMeta[mode].title}
-            </button>
-          ))}
-        </div>
+        {/*
+          “处理完成”是一个可展开/折叠的按钮：
+          点击展开任务总结表，再次点击折叠。任务未开始或已结案时按钮禁用。
+        */}
+        <button
+          type="button"
+          className={`task-complete-toggle${closeFormOpen ? ' open' : ''}`}
+          onClick={() => setCloseFormOpen((open) => !open)}
+          disabled={!flowHasStarted || taskIsClosed}
+          aria-expanded={closeFormOpen}
+          aria-controls="task-complete-collapsible"
+        >
+          <span className="task-complete-toggle-label">
+            <strong>{modeMeta.CLOSE.title}</strong>
+            <em>
+              {taskIsClosed
+                ? '任务已结案，处理流程只读'
+                : !flowHasStarted
+                  ? '请先开始处理，再填写任务总结'
+                  : closeFormOpen
+                    ? '点击折叠任务总结表'
+                    : '点击展开任务总结表'}
+            </em>
+          </span>
+          <span className="task-complete-toggle-caret" aria-hidden="true">
+            {closeFormOpen ? '收起 ▲' : '展开 ▼'}
+          </span>
+        </button>
 
-        <div className="task-panel-mode-body">
-          <div className="task-panel-mode-hint">
-            <strong>{modeMeta[activeMode].title}</strong>
-            <p>{modeMeta[activeMode].hint}</p>
+        {taskIsClosed && (
+          <div className="task-complete-locked-card completed">
+            <strong>当前任务已经结案</strong>
+            <p>该任务的处理流程只读展示，不能重复提交处理完成。</p>
           </div>
+        )}
 
-          {activeMode === 'CLOSE' && !flowHasStarted && !taskIsClosed && (
-            <div className="task-complete-locked-card">
-              <strong>请先开始处理</strong>
-              <p>任务开始后，左侧患者档案中的到院提醒、用药调整、复测计划、随访记录等操作会自动进入上方流程图。完成表格会在开始处理后显示。</p>
-              <button className="button" type="button" disabled>确认处理完成</button>
+        {closeFormOpen && flowHasStarted && !taskIsClosed && (
+          <div className="task-panel-mode-body" id="task-complete-collapsible">
+            <div className="task-panel-mode-hint">
+              <strong>{modeMeta.CLOSE.title}</strong>
+              <p>{modeMeta.CLOSE.hint}</p>
             </div>
-          )}
 
-          {activeMode === 'CLOSE' && taskIsClosed && (
-            <div className="task-complete-locked-card completed">
-              <strong>当前任务已经结案</strong>
-              <p>该任务的处理流程只读展示，不能重复提交处理完成。</p>
-            </div>
-          )}
-
-          {activeMode === 'CLOSE' && flowHasStarted && !taskIsClosed && (
             <form className="hospital-form task-panel-form task-complete-form" onSubmit={submitCloseTask}>
               <div className="task-complete-flow-reminder">
                 <strong>结案前请复核上方流程图</strong>
@@ -780,12 +749,19 @@ export function PatientTaskSidePanel({
                 <button className="button" type="submit" disabled={submittingMode === 'CLOSE'}>{submittingMode === 'CLOSE' ? '提交中...' : '确认处理完成'}</button>
               </div>
             </form>
-          )}
-        </div>
+          </div>
+        )}
       </section>
+        </>
+      )}
+      </div>
     </aside>
   );
 }
+
+
+
+
 
 
 

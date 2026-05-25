@@ -29,6 +29,8 @@ import { EncounterRecordsModule } from './encounter-records/encounter-records.mo
 import { MedicalRecordSummariesModule } from './medical-record-summaries/medical-record-summaries.module';
 import { ExamReportsModule } from './exam-reports/exam-reports.module';
 import { HospitalMedicationsModule } from './hospital-medications/hospital-medications.module';
+import { GatewayModule } from './gateway/gateway.module';
+import { ChronicLeadsModule } from './chronic-leads/chronic-leads.module';
 
 const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
@@ -56,6 +58,8 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
     PatientTimelineModule,
     ReportsModule,
     HisIntegrationModule,
+    GatewayModule,
+    ChronicLeadsModule,
     ...developmentOnlyModules,
     MedicationsModule,
     QuestionnairesModule,
@@ -77,5 +81,3 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
   ],
 })
 export class AppModule {}
-
-

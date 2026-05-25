@@ -5,12 +5,15 @@ import { api, getApiErrorMessage } from '../api/client';
 import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
 import { HospitalRecordsView } from '../components/HospitalRecordsView';
 import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';
+import { usePolling } from '../hooks/usePolling';
 import { PatientHandlingHistoryView } from '../components/PatientHandlingHistoryView';
 import { PatientHospitalVisitTab } from '../components/PatientHospitalVisitTab';
 // trend-range-filter-import-v1
 import { BloodPressureTrendChart, VitalTrendChart, TrendRangeFilterBar, filterVitalsByTrendRange, describeTrendRange, DEFAULT_TREND_RANGE } from '../components/VitalTrendChart';
 import { buildLatestVitalDisplayItemsByMetric } from '../utils/vitalDisplay';
 import { useFeedbackMessageBridge } from '../utils/feedbackMessage';
+import { nameToken } from '../utils/entityNameToken';
+import { EntityName } from '../components/EntityName';
 import '../patient-snapshot.css';
 import '../problem-list.css';
 import '../closed-loop-events.css';
@@ -579,7 +582,7 @@ export function PatientDetailPage() {
     next: string;
   } | null>(null);
 
-  async function loadTimeline() {
+  async function loadTimeline(opts?: { silent?: boolean }) {
     if (!patientId) {
       setData(null);
       setActiveHospitalVisitReminders([]);
@@ -588,7 +591,7 @@ export function PatientDetailPage() {
       return;
     }
 
-    setLoading(true);
+    if (!opts?.silent) setLoading(true);
     setError('');
 
     try {
@@ -615,7 +618,7 @@ export function PatientDetailPage() {
       setActiveHospitalVisitReminders([]);
       setError(getApiErrorMessage(err, '未找到该患者档案，或患者详情接口暂时不可用。请从患者主索引重新进入。'));
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }
 
@@ -672,6 +675,10 @@ export function PatientDetailPage() {
   useEffect(() => {
     loadTimeline();
   }, [patientId]);
+
+  // 患者详情（时间线 / 任务 / 风险预警）每 15 秒自动刷新：患者上传异常数据后
+  // 新生成的任务、预警无需护士手动刷新即可出现。
+  usePolling(() => loadTimeline({ silent: true }), 15000, Boolean(patientId));
 
   useEffect(() => {
     if (activeWorkspace !== 'follow-up' || followUpHistoryLoaded || followUpHistoryLoading) return;
@@ -1016,7 +1023,9 @@ export function PatientDetailPage() {
 
   function startEditMonitoringPlan(plan: any) {
     resetNotice();
-    setEditingMonitoringPlanId(plan?.id ?? null);
+    // entity-name-chip-v1: toggle inline edit on the matching card.
+    // Clicking 修改计划 again on the same card collapses the inline form.
+    setEditingMonitoringPlanId((current) => (current === (plan?.id ?? null) ? null : (plan?.id ?? null)));
     setMonitoringVitalType(plan?.vitalType ?? 'BLOOD_PRESSURE');
     setMonitoringDisplayName(plan?.displayName ?? vitalTypeLabelMap[plan?.vitalType] ?? '');
     setMonitoringUnit(plan?.unit ?? vitalUnitMap[plan?.vitalType] ?? '');
@@ -1025,8 +1034,9 @@ export function PatientDetailPage() {
     setMonitoringCustomMeasureTimes(Array.isArray(plan?.customMeasureTimes) ? plan.customMeasureTimes.join(', ') : '');
     setMonitoringCustomMeasureDays(Array.isArray(plan?.customMeasureDays) ? plan.customMeasureDays.join(', ') : '');
     setMonitoringEvidenceBasis(plan?.evidenceBasis ?? '');
-    setShowMonitoringPlanForm(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Do NOT toggle the bottom "create-new" form here, and do NOT scroll
+    // to page-top — the inline form expands beneath the card the user
+    // just clicked, so the click anchor stays in view.
   }
 
   async function loadMonitoringRecommendations() {
@@ -1092,10 +1102,10 @@ export function PatientDetailPage() {
 
       if (editingMonitoringPlanId) {
         await api.patch(`/vital-monitoring-plans/${editingMonitoringPlanId}`, payload);
-        setMessage('指标打卡计划已更新，患者端会同步新的下次打卡时间。');
+        setMessage(`指标打卡计划${nameToken(monitoringDisplayName)}已更新，患者端会同步新的下次打卡时间。`);
       } else {
         await api.post(`/patients/${patientId}/vital-monitoring-plans`, payload);
-        setMessage('指标打卡计划已新增，患者小程序将按计划提醒打卡。');
+        setMessage(`指标打卡计划${nameToken(monitoringDisplayName)}已新增，患者小程序将按计划提醒打卡。`);
       }
 
       resetMonitoringPlanForm();
@@ -1115,7 +1125,9 @@ export function PatientDetailPage() {
     if (!planId || monitoringPlanActionId) return;
 
     const confirmed = window.confirm(
-      `确认删除/停用指标打卡计划「${plan?.displayName ?? '该指标'}」吗？
+      `确认删除/停用指标打卡计划？
+
+指标名称：${plan?.displayName ?? '该指标'}
 
 如果已有打卡记录，系统会停用并保留历史；如果没有历史记录，则直接删除。`,
     );
@@ -1151,7 +1163,9 @@ export function PatientDetailPage() {
 
   function startEditMedication(medication: any) {
     resetNotice();
-    setEditingMedicationId(medication?.id ?? null);
+    // entity-name-chip-v1: toggle inline edit on the matching card.
+    // Clicking 修改计划 again on the same card collapses the inline form.
+    setEditingMedicationId((current) => (current === (medication?.id ?? null) ? null : (medication?.id ?? null)));
     setMedicationName(medication?.medicationName ?? '');
     setMedicationDosage(medication?.dosage ?? '');
     setMedicationFrequencyUnit(medication?.frequencyUnit ?? 'DAY');
@@ -1161,8 +1175,9 @@ export function PatientDetailPage() {
     setMedicationCustomDoseDays(Array.isArray(medication?.customDoseDays) ? medication.customDoseDays.join(', ') : '');
     setMedicationInstructions(medication?.instructions ?? '');
     setMedicationDataSource(medication?.dataSource ?? 'NURSE_INPUT');
-    setShowMedicationForm(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Do NOT toggle the bottom "create-new" form here, and do NOT scroll
+    // to page-top — the inline form expands beneath the card the user
+    // just clicked, so the click anchor stays in view.
   }
 
   async function submitMedication(event: FormEvent) {
@@ -1192,10 +1207,10 @@ export function PatientDetailPage() {
 
       if (editingMedicationId) {
         await api.patch(`/medications/${editingMedicationId}`, payload);
-        setMessage('用药计划已更新，患者小程序将同步新的提醒和打卡规则。');
+        setMessage(`用药计划${nameToken(medicationName)}已更新，患者小程序将同步新的提醒和打卡规则。`);
       } else {
         await api.post(`/patients/${patientId}/medications`, payload);
-        setMessage('用药计划已由医院端新增，患者小程序将同步显示并可进行每日打卡。');
+        setMessage(`用药计划${nameToken(medicationName)}已由医院端新增，患者小程序将同步显示并可进行每日打卡。`);
       }
 
       resetMedicationForm();
@@ -1216,7 +1231,7 @@ export function PatientDetailPage() {
     if (!medicationId || medicationActionId) return;
 
     const confirmed = window.confirm(
-      `确认删除/停用用药计划「${medication?.medicationName ?? '该药品'}」吗？\n\n如果该计划已经有患者打卡记录，系统会停用并保留历史；如果还没有历史记录，则会直接删除。`,
+      `确认删除/停用用药计划？\n\n药品名称：${medication?.medicationName ?? '该药品'}\n\n如果该计划已经有患者打卡记录，系统会停用并保留历史；如果还没有历史记录，则会直接删除。`,
     );
 
     if (!confirmed) return;
@@ -1583,7 +1598,7 @@ export function PatientDetailPage() {
         });
         setMessage('电话随访记录已保存，原下次随访时间已被本次记录覆盖。');
       } else if (generatedReminder) {
-        setMessage('电话随访记录已保存，已自动生成「电话随访」提醒任务。');
+        setMessage(`电话随访记录已保存，已自动生成${nameToken('电话随访')}提醒任务。`);
       } else {
         setMessage('电话随访记录已保存。');
       }
@@ -1891,6 +1906,116 @@ export function PatientDetailPage() {
     if (key === 'handling-history') return handlingHistoryTimeline.length;
     if (key === 'care') return activeTaskCount + followUpCount;
     return visibleTimeline.length;
+  }
+
+  // ===================================================================
+  // entity-name-chip-v1: inline-edit form renderers.
+  //
+  // The medication and monitoring-plan forms used to live ONLY in a
+  // dedicated bottom panel that opened on click of "修改计划" together
+  // with a `window.scrollTo({ top: 0 })`. We now keep the bottom panel
+  // for the *new-plan* flow and render the same form body INLINE inside
+  // the editing card (full-row span via .is-inline-editing). These
+  // helpers are defined inside the component so they can close over all
+  // state and handlers without prop-drilling.
+  // ===================================================================
+
+  function renderMonitoringPlanFormBody(options: { inline: boolean }) {
+    const { inline } = options;
+    return (
+      <>
+        {inline && (
+          <div className="edit-mode-banner">正在修改已有指标打卡计划。保存后会同步患者端下次打卡时间。</div>
+        )}
+        {!inline && editingMonitoringPlanId && (
+          <div className="edit-mode-banner">正在修改已有指标打卡计划。保存后会同步患者端下次打卡时间。</div>
+        )}
+        <form className="hospital-form" onSubmit={submitMonitoringPlan} aria-busy={savingMonitoringPlan}>
+          <div className="form-grid">
+            <div className="form-row">
+              <label>指标类型</label>
+              <select value={monitoringVitalType} onChange={(event) => handleMonitoringVitalTypeChange(event.target.value)}>
+                <option value="BLOOD_PRESSURE">血压（收缩压/舒张压）</option>
+                <option value="BLOOD_GLUCOSE">血糖</option>
+                <option value="WEIGHT">体重</option>
+                <option value="HEART_RATE">心率</option>
+                <option value="SPO2">血氧</option>
+              </select>
+            </div>
+            <div className="form-row"><label>显示名称</label><input value={monitoringDisplayName} onChange={(event) => setMonitoringDisplayName(event.target.value)} required /></div>
+            <div className="form-row"><label>单位</label><input value={monitoringUnit} onChange={(event) => setMonitoringUnit(event.target.value)} required /></div>
+            <div className="form-row">
+              <label>频次单位</label>
+              <select value={monitoringFrequencyUnit} onChange={(event) => setMonitoringFrequencyUnit(event.target.value)}>
+                <option value="DAY">日</option><option value="WEEK">周</option><option value="MONTH">月</option>
+              </select>
+            </div>
+            <div className="form-row"><label>每单位次数</label><input type="number" min="1" max={monitoringFrequencyUnit === 'DAY' ? 12 : monitoringFrequencyUnit === 'WEEK' ? 7 : 31} value={monitoringTimesPerUnit} onChange={(event) => setMonitoringTimesPerUnit(event.target.value)} required /></div>
+            <div className="form-row"><label>自定义测量时间</label><input value={monitoringCustomMeasureTimes} onChange={(event) => setMonitoringCustomMeasureTimes(event.target.value)} placeholder="例如：07:30, 19:30" /></div>
+            <div className="form-row"><label>{monitoringFrequencyUnit === 'WEEK' ? '自定义测量星期' : monitoringFrequencyUnit === 'MONTH' ? '自定义测量日期' : '自定义测量日'}</label><input disabled={monitoringFrequencyUnit === 'DAY'} value={monitoringCustomMeasureDays} onChange={(event) => setMonitoringCustomMeasureDays(event.target.value)} placeholder={monitoringFrequencyUnit === 'WEEK' ? '1=周一，7=周日；例如：1,4' : monitoringFrequencyUnit === 'MONTH' ? '1-31；例如：1,15' : '每日监测无需填写'} /></div>
+          </div>
+          <div className="form-row"><label>配置依据 / 医嘱说明</label><textarea value={monitoringEvidenceBasis} onChange={(event) => setMonitoringEvidenceBasis(event.target.value)} placeholder="例如：高血压患者早晚各监测 1 次" /></div>
+          <div className="form-actions">
+            <button className="button" type="submit" disabled={savingMonitoringPlan}>{savingMonitoringPlan ? '保存中，请勿重复提交...' : editingMonitoringPlanId ? '保存修改' : '保存打卡计划'}</button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                resetMonitoringPlanForm();
+                if (!inline) setShowMonitoringPlanForm(false);
+              }}
+              disabled={savingMonitoringPlan}
+            >
+              取消
+            </button>
+          </div>
+        </form>
+      </>
+    );
+  }
+
+  function renderMedicationFormBody(options: { inline: boolean }) {
+    const { inline } = options;
+    return (
+      <>
+        {inline && (
+          <div className="edit-mode-banner">正在修改已有用药计划。保存后会同步患者端下次用药时间；历史打卡记录会保留。</div>
+        )}
+        {!inline && editingMedicationId && (
+          <div className="edit-mode-banner">正在修改已有用药计划。保存后会同步患者端下次用药时间；历史打卡记录会保留。</div>
+        )}
+        <form className="hospital-form" onSubmit={submitMedication} aria-busy={savingMedication}>
+          <div className="form-grid">
+            <div className="form-row"><label>药品名称</label><input value={medicationName} onChange={(event) => setMedicationName(event.target.value)} placeholder="例如：二甲双胍" required /></div>
+            <div className="form-row"><label>剂量</label><input value={medicationDosage} onChange={(event) => setMedicationDosage(event.target.value)} placeholder="例如：500mg" required /></div>
+            <div className="form-row"><label>频次单位</label><select value={medicationFrequencyUnit} onChange={(event) => setMedicationFrequencyUnit(event.target.value)}><option value="DAY">日</option><option value="WEEK">周</option><option value="MONTH">月</option></select></div>
+            <div className="form-row"><label>每单位次数</label><input type="number" min="1" max={medicationFrequencyUnit === 'DAY' ? 8 : medicationFrequencyUnit === 'WEEK' ? 7 : 31} value={medicationTimesPerUnit} onChange={(event) => setMedicationTimesPerUnit(event.target.value)} required /></div>
+            <div className="form-row"><label>服用时机</label><select value={medicationTimingRelation} onChange={(event) => setMedicationTimingRelation(event.target.value)}><option value="NONE">不限定</option><option value="BEFORE_MEAL">饭前服用</option><option value="AFTER_MEAL">饭后服用</option><option value="WITH_MEAL">随餐服用</option></select></div>
+            <div className="form-row"><label>来源</label><select value={medicationDataSource} onChange={(event) => setMedicationDataSource(event.target.value)}><option value="NURSE_INPUT">护士录入</option><option value="HIS">HIS/处方同步</option><option value="EMR">EMR</option><option value="MANUAL_IMPORT">人工导入</option></select></div>
+          </div>
+          <div className="form-grid">
+            <div className="form-row"><label>自定义服用时间（可选）</label><input value={medicationCustomDoseTimes} onChange={(event) => setMedicationCustomDoseTimes(event.target.value)} placeholder="例如：08:00, 18:00；留空则白天自动均摊" /></div>
+            <div className="form-row"><label>{medicationFrequencyUnit === 'WEEK' ? '自定义服用星期（可选）' : medicationFrequencyUnit === 'MONTH' ? '自定义服用日期（可选）' : '自定义服用日'}</label><input disabled={medicationFrequencyUnit === 'DAY'} value={medicationCustomDoseDays} onChange={(event) => setMedicationCustomDoseDays(event.target.value)} placeholder={medicationFrequencyUnit === 'WEEK' ? '1=周一，7=周日；例如：1,4' : medicationFrequencyUnit === 'MONTH' ? '1-31；例如：1,15' : '每日用药无需填写'} /></div>
+          </div>
+          <div className="form-row"><label>用药说明</label><textarea value={medicationInstructions} onChange={(event) => setMedicationInstructions(event.target.value)} placeholder="例如：如出现明显不适，请联系护士或复诊" /></div>
+          <div className="form-actions">
+            <button className="button" type="submit" disabled={savingMedication}>{savingMedication ? '保存中，请勿重复提交...' : editingMedicationId ? '保存修改' : '保存用药计划'}</button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => {
+                resetMedicationForm();
+                if (!inline) setShowMedicationForm(false);
+              }}
+              disabled={savingMedication}
+            >
+              取消
+            </button>
+            <span className="operation-form-hint">保存成功后表单会自动收起，并同步患者端提醒和打卡规则。</span>
+          </div>
+        </form>
+      </>
+    );
   }
 
   return (
@@ -2553,8 +2678,18 @@ export function PatientDetailPage() {
                 <button className="button" type="button" onClick={() => setShowVitalForm((value) => !value)}>
                   {showVitalForm ? '收起新增健康指标' : '新增健康指标'}
                 </button>
-                <button className="secondary-button" type="button" onClick={() => setShowMonitoringPlanForm((value) => !value)}>
-                  {showMonitoringPlanForm ? '收起打卡计划表单' : '配置指标打卡计划'}
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    // entity-name-chip-v1: starting a "new plan" flow must
+                    // clear any in-progress inline edit so the bottom panel
+                    // form actually renders and prefilled values are reset.
+                    if (editingMonitoringPlanId) resetMonitoringPlanForm();
+                    setShowMonitoringPlanForm((value) => !value);
+                  }}
+                >
+                  {showMonitoringPlanForm && !editingMonitoringPlanId ? '收起打卡计划表单' : '配置指标打卡计划'}
                 </button>
               </div>
             </div>
@@ -2741,12 +2876,12 @@ export function PatientDetailPage() {
             </section>
           )}
 
-          {showMonitoringPlanForm && (
+          {showMonitoringPlanForm && !editingMonitoringPlanId && (
             <section className="panel form-panel collapsible-form-card">
               <div className="hospital-section-header">
                 <div>
                   <span>指标打卡计划</span>
-                  <h2>{editingMonitoringPlanId ? '修改指标打卡计划' : '配置指标打卡计划'}</h2>
+                  <h2>配置指标打卡计划</h2>
                 </div>
                 <div className="patient-hero-actions">
                   <button className="secondary-button" type="button" onClick={loadMonitoringRecommendations} disabled={loadingRecommendations}>{loadingRecommendations ? '生成中...' : '根据慢病档案推荐'}</button>
@@ -2771,40 +2906,7 @@ export function PatientDetailPage() {
                 </div>
               )}
 
-              {editingMonitoringPlanId && <div className="edit-mode-banner">正在修改已有指标打卡计划。保存后会同步患者端下次打卡时间。</div>}
-
-              <form className="hospital-form" onSubmit={submitMonitoringPlan} aria-busy={savingMonitoringPlan}>
-                <div className="form-grid">
-                  <div className="form-row">
-                    <label>指标类型</label>
-                    <select value={monitoringVitalType} onChange={(event) => handleMonitoringVitalTypeChange(event.target.value)}>
-                      <option value="BLOOD_PRESSURE">血压（收缩压/舒张压）</option>
-                      <option value="BLOOD_GLUCOSE">血糖</option>
-                      <option value="WEIGHT">体重</option>
-                      <option value="HEART_RATE">心率</option>
-                      <option value="SPO2">血氧</option>
-                    </select>
-                  </div>
-                  <div className="form-row"><label>显示名称</label><input value={monitoringDisplayName} onChange={(event) => setMonitoringDisplayName(event.target.value)} required /></div>
-                  <div className="form-row"><label>单位</label><input value={monitoringUnit} onChange={(event) => setMonitoringUnit(event.target.value)} required /></div>
-                  <div className="form-row">
-                    <label>频次单位</label>
-                    <select value={monitoringFrequencyUnit} onChange={(event) => setMonitoringFrequencyUnit(event.target.value)}>
-                      <option value="DAY">日</option><option value="WEEK">周</option><option value="MONTH">月</option>
-                    </select>
-                  </div>
-                  <div className="form-row"><label>每单位次数</label><input type="number" min="1" max={monitoringFrequencyUnit === 'DAY' ? 12 : monitoringFrequencyUnit === 'WEEK' ? 7 : 31} value={monitoringTimesPerUnit} onChange={(event) => setMonitoringTimesPerUnit(event.target.value)} required /></div>
-                  <div className="form-row"><label>自定义测量时间</label><input value={monitoringCustomMeasureTimes} onChange={(event) => setMonitoringCustomMeasureTimes(event.target.value)} placeholder="例如：07:30, 19:30" /></div>
-                  <div className="form-row"><label>{monitoringFrequencyUnit === 'WEEK' ? '自定义测量星期' : monitoringFrequencyUnit === 'MONTH' ? '自定义测量日期' : '自定义测量日'}</label><input disabled={monitoringFrequencyUnit === 'DAY'} value={monitoringCustomMeasureDays} onChange={(event) => setMonitoringCustomMeasureDays(event.target.value)} placeholder={monitoringFrequencyUnit === 'WEEK' ? '1=周一，7=周日；例如：1,4' : monitoringFrequencyUnit === 'MONTH' ? '1-31；例如：1,15' : '每日监测无需填写'} /></div>
-                </div>
-
-                <div className="form-row"><label>配置依据 / 医嘱说明</label><textarea value={monitoringEvidenceBasis} onChange={(event) => setMonitoringEvidenceBasis(event.target.value)} placeholder="例如：高血压患者早晚各监测 1 次" /></div>
-
-                <div className="form-actions">
-                  <button className="button" type="submit" disabled={savingMonitoringPlan}>{savingMonitoringPlan ? '保存中，请勿重复提交...' : editingMonitoringPlanId ? '保存修改' : '保存打卡计划'}</button>
-                  <button className="secondary-button" type="button" onClick={() => { resetMonitoringPlanForm(); setShowMonitoringPlanForm(false); }} disabled={savingMonitoringPlan}>取消</button>
-                </div>
-              </form>
+              {renderMonitoringPlanFormBody({ inline: false })}
             </section>
           )}
 
@@ -2823,23 +2925,43 @@ export function PatientDetailPage() {
                 <div className="empty-state task-empty-state">当前患者暂无指标打卡计划。</div>
               ) : (
                 <div className="task-inline-grid">
-                  {visibleMonitoringPlanTimeline.map((item) => (
-                    <article className="task-inline-card medication-inline-card" key={item.data?.id ?? `${item.time}-${item.title}`}>
+                  {visibleMonitoringPlanTimeline.map((item) => {
+                    const isInlineEditing = !!item.data?.id && editingMonitoringPlanId === item.data?.id;
+                    return (
+                    <article
+                      className={`task-inline-card medication-inline-card${isInlineEditing ? ' is-inline-editing' : ''}`}
+                      key={item.data?.id ?? `${item.time}-${item.title}`}
+                    >
                       <div className="task-inline-card-topline">
                         <span className="badge">{item.data?.sourcePreset ? diseaseLabelMap[item.data.sourcePreset] ?? item.data.sourcePreset : '医院配置'}</span>
                         <span className="task-status-chip">{item.data?.isActive ? '启用' : '停用'}</span>
                       </div>
-                      <h4>{item.data?.displayName ?? item.title}</h4>
+                      <h4>
+                        <EntityName kind="vital">{item.data?.displayName ?? item.title}</EntityName>
+                      </h4>
                       <p>频率：每{vitalFrequencyUnitLabelMap[item.data?.frequencyUnit] ?? '日'} {item.data?.timesPerUnit ?? 1} 次 · 单位：{item.data?.unit ?? '-'}</p>
                       <p>测量时间：{Array.isArray(item.data?.customMeasureTimes) && item.data.customMeasureTimes.length ? item.data.customMeasureTimes.join('、') : '系统自动均摊'}</p>
                       {item.data?.evidenceBasis && <p>依据：{item.data.evidenceBasis}</p>}
                       <div className="timeline-extra">最近打卡：{formatTime(item.data?.lastCheckInAt)}</div>
                       <div className="medication-card-actions">
-                        <button className="secondary-button compact-button" type="button" onClick={() => startEditMonitoringPlan(item.data)}>修改计划</button>
+                        <button
+                          className={`secondary-button compact-button${isInlineEditing ? ' inline-edit-toggle-active' : ''}`}
+                          type="button"
+                          onClick={() => startEditMonitoringPlan(item.data)}
+                          aria-expanded={isInlineEditing}
+                        >
+                          {isInlineEditing ? '收起修改表单' : '修改计划'}
+                        </button>
                         <button className="danger-outline-button compact-button" type="button" disabled={monitoringPlanActionId === item.data?.id} onClick={() => deleteMonitoringPlan(item.data)}>{monitoringPlanActionId === item.data?.id ? '处理中...' : '删除/停用'}</button>
                       </div>
+                      {isInlineEditing && (
+                        <div className="task-inline-card-inline-form">
+                          {renderMonitoringPlanFormBody({ inline: true })}
+                        </div>
+                      )}
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2855,8 +2977,18 @@ export function PatientDetailPage() {
                 <span>院内用药计划</span>
                 <h2>当前用药计划</h2>
               </div>
-              <button className="button" type="button" onClick={() => { resetMedicationForm(); setShowMedicationForm((value) => !value); }}>
-                {showMedicationForm ? '收起新增用药计划' : '新增用药计划'}
+              <button
+                className="button"
+                type="button"
+                onClick={() => {
+                  // entity-name-chip-v1: starting a "new plan" flow must
+                  // clear any in-progress inline edit so the bottom panel
+                  // form actually renders.
+                  resetMedicationForm();
+                  setShowMedicationForm((value) => !value);
+                }}
+              >
+                {showMedicationForm && !editingMedicationId ? '收起新增用药计划' : '新增用药计划'}
               </button>
             </div>
 
@@ -2875,62 +3007,58 @@ export function PatientDetailPage() {
                 <div className="empty-state task-empty-state">当前患者暂无启用中的用药计划。</div>
               ) : (
                 <div className="task-inline-grid">
-                  {visibleMedicationTimeline.map((item) => (
-                    <article className="task-inline-card medication-inline-card" key={item.data?.id ?? `${item.time}-${item.title}`}>
+                  {visibleMedicationTimeline.map((item) => {
+                    const isInlineEditing = !!item.data?.id && editingMedicationId === item.data?.id;
+                    return (
+                    <article
+                      className={`task-inline-card medication-inline-card${isInlineEditing ? ' is-inline-editing' : ''}`}
+                      key={item.data?.id ?? `${item.time}-${item.title}`}
+                    >
                       <div className="task-inline-card-topline">
                         <span className="badge">{dataSourceLabelMap[item.data?.dataSource] ?? item.data?.dataSource ?? '医院端'}</span>
                         <span className="task-status-chip">{item.data?.isActive ? '启用' : '停用'}</span>
                       </div>
-                      <h4>{item.data?.medicationName ?? item.title}</h4>
+                      <h4>
+                        <EntityName kind="medication">{item.data?.medicationName ?? item.title}</EntityName>
+                      </h4>
                       <p>剂量：{item.data?.dosage ?? '-'} · 频次：{item.data?.frequency ?? '-'}</p>
                       <p>结构化规则：每{medicationFrequencyUnitLabelMap[item.data?.frequencyUnit] ?? '日'} {item.data?.timesPerUnit ?? 1} 次 · {medicationTimingRelationLabelMap[item.data?.timingRelation] ?? '不限定'}</p>
                       {item.data?.instructions && <p>说明：{item.data.instructions}</p>}
                       <div className="timeline-extra">下次用药：{formatNextDose(item.data?.nextDose?.scheduledAt)} · 最近打卡：{formatTime(item.data?.lastCheckInAt)}</div>
                       <div className="medication-card-actions">
-                        <button className="secondary-button compact-button" type="button" onClick={() => startEditMedication(item.data)}>修改计划</button>
+                        <button
+                          className={`secondary-button compact-button${isInlineEditing ? ' inline-edit-toggle-active' : ''}`}
+                          type="button"
+                          onClick={() => startEditMedication(item.data)}
+                          aria-expanded={isInlineEditing}
+                        >
+                          {isInlineEditing ? '收起修改表单' : '修改计划'}
+                        </button>
                         <button className="danger-outline-button compact-button" type="button" disabled={medicationActionId === item.data?.id} onClick={() => deleteMedication(item.data)}>{medicationActionId === item.data?.id ? '处理中...' : '删除/停用'}</button>
                       </div>
+                      {isInlineEditing && (
+                        <div className="task-inline-card-inline-form">
+                          {renderMedicationFormBody({ inline: true })}
+                        </div>
+                      )}
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
           </section>
 
-          {showMedicationForm && (
+          {showMedicationForm && !editingMedicationId && (
             <section className="panel form-panel collapsible-form-card">
               <div className="hospital-section-header">
                 <div>
                   <span>院内用药计划</span>
-                  <h2>{editingMedicationId ? '修改用药计划' : '新增用药计划'}</h2>
+                  <h2>新增用药计划</h2>
                 </div>
               </div>
 
-              {editingMedicationId && <div className="edit-mode-banner">正在修改已有用药计划。保存后会同步患者端下次用药时间；历史打卡记录会保留。</div>}
-
-              <form className="hospital-form" onSubmit={submitMedication} aria-busy={savingMedication}>
-                <div className="form-grid">
-                  <div className="form-row"><label>药品名称</label><input value={medicationName} onChange={(event) => setMedicationName(event.target.value)} placeholder="例如：二甲双胍" required /></div>
-                  <div className="form-row"><label>剂量</label><input value={medicationDosage} onChange={(event) => setMedicationDosage(event.target.value)} placeholder="例如：500mg" required /></div>
-                  <div className="form-row"><label>频次单位</label><select value={medicationFrequencyUnit} onChange={(event) => setMedicationFrequencyUnit(event.target.value)}><option value="DAY">日</option><option value="WEEK">周</option><option value="MONTH">月</option></select></div>
-                  <div className="form-row"><label>每单位次数</label><input type="number" min="1" max={medicationFrequencyUnit === 'DAY' ? 8 : medicationFrequencyUnit === 'WEEK' ? 7 : 31} value={medicationTimesPerUnit} onChange={(event) => setMedicationTimesPerUnit(event.target.value)} required /></div>
-                  <div className="form-row"><label>服用时机</label><select value={medicationTimingRelation} onChange={(event) => setMedicationTimingRelation(event.target.value)}><option value="NONE">不限定</option><option value="BEFORE_MEAL">饭前服用</option><option value="AFTER_MEAL">饭后服用</option><option value="WITH_MEAL">随餐服用</option></select></div>
-                  <div className="form-row"><label>来源</label><select value={medicationDataSource} onChange={(event) => setMedicationDataSource(event.target.value)}><option value="NURSE_INPUT">护士录入</option><option value="HIS">HIS/处方同步</option><option value="EMR">EMR</option><option value="MANUAL_IMPORT">人工导入</option></select></div>
-                </div>
-
-                <div className="form-grid">
-                  <div className="form-row"><label>自定义服用时间（可选）</label><input value={medicationCustomDoseTimes} onChange={(event) => setMedicationCustomDoseTimes(event.target.value)} placeholder="例如：08:00, 18:00；留空则白天自动均摊" /></div>
-                  <div className="form-row"><label>{medicationFrequencyUnit === 'WEEK' ? '自定义服用星期（可选）' : medicationFrequencyUnit === 'MONTH' ? '自定义服用日期（可选）' : '自定义服用日'}</label><input disabled={medicationFrequencyUnit === 'DAY'} value={medicationCustomDoseDays} onChange={(event) => setMedicationCustomDoseDays(event.target.value)} placeholder={medicationFrequencyUnit === 'WEEK' ? '1=周一，7=周日；例如：1,4' : medicationFrequencyUnit === 'MONTH' ? '1-31；例如：1,15' : '每日用药无需填写'} /></div>
-                </div>
-
-                <div className="form-row"><label>用药说明</label><textarea value={medicationInstructions} onChange={(event) => setMedicationInstructions(event.target.value)} placeholder="例如：如出现明显不适，请联系护士或复诊" /></div>
-
-                <div className="form-actions">
-                  <button className="button" type="submit" disabled={savingMedication}>{savingMedication ? '保存中，请勿重复提交...' : editingMedicationId ? '保存修改' : '保存用药计划'}</button>
-                  <button className="secondary-button" type="button" onClick={() => { resetMedicationForm(); setShowMedicationForm(false); }} disabled={savingMedication}>取消</button>
-                  <span className="operation-form-hint">保存成功后表单会自动收起，并同步患者端提醒和打卡规则。</span>
-                </div>
-              </form>
+              {renderMedicationFormBody({ inline: false })}
             </section>
           )}
         </>
@@ -3128,7 +3256,7 @@ export function PatientDetailPage() {
                   <div className="follow-up-next-visit-banner-main">
                     <span className="follow-up-next-visit-banner-label">下次随访时间</span>
                     <strong className="follow-up-next-visit-banner-time placeholder">尚未设置</strong>
-                    <span className="follow-up-next-visit-banner-hint">在新建电话沟通记录时填写「下次随访时间」即可启用。系统会在到期前 2 天自动生成「电话随访」提醒任务。</span>
+                    <span className="follow-up-next-visit-banner-hint">在新建电话沟通记录时填写<EntityName kind="field">下次随访时间</EntityName>即可启用。系统会在到期前 2 天自动生成<EntityName kind="task">电话随访</EntityName>提醒任务。</span>
                   </div>
                 </div>
               );
@@ -3151,7 +3279,7 @@ export function PatientDetailPage() {
                     {isOverdue
                       ? '该时间已过期，请尽快与患者确认随访或重新安排时间。'
                       : isImminent
-                        ? '距离下次随访不足 2 天，系统已自动生成「电话随访」提醒任务。'
+                        ? <>距离下次随访不足 2 天，系统已自动生成<EntityName kind="task">电话随访</EntityName>提醒任务。</>
                         : '距离下次随访 ≥ 2 天，到期前 2 天系统会自动生成提醒任务。'}
                   </span>
                   {activeNextFollowUpTask && (
@@ -3702,5 +3830,9 @@ export function PatientDetailPage() {
     </div>
   );
 }
+
+
+
+
 
 

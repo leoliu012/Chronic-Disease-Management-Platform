@@ -1,0 +1,343 @@
+/* =================================================================
+ * chronic-lead-invitation.css
+ *
+ * 高危慢病线索邀约中心 —— 护士工作台第二大主入口。
+ *
+ * 设计原则：
+ *   - 复用现有 .data-table / .filter-chip / .primary-btn / .status-badge 等基础类
+ *   - 仅在本页面特有的视觉元素上新增类（病种/风险/来源 pill、证据单元、行内表单展开）
+ *   - 不覆盖任何全局基础样式；通过类名前缀 .chronic-lead-* 隔离
+ * ================================================================= */
+
+/* ------------------------------- Page intro card --------------------- */
+
+.chronic-lead-invitation-page .page-intro-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 16px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #f1f7ff 0%, #fff8f1 100%);
+  border: 1px solid #d8e6f8;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgba(13, 71, 161, 0.04);
+}
+
+.chronic-lead-invitation-page .page-intro-title {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #14406f;
+}
+
+.chronic-lead-invitation-page .page-intro-subtitle {
+  margin: 0;
+  max-width: 720px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #4a5d75;
+}
+
+.chronic-lead-invitation-page .page-intro-subtitle strong {
+  color: #b94a14;
+  font-weight: 600;
+}
+
+.chronic-lead-invitation-page .page-intro-meta {
+  display: flex;
+  gap: 18px;
+  flex-shrink: 0;
+}
+
+.chronic-lead-invitation-page .page-intro-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+
+.chronic-lead-invitation-page .page-intro-stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: #14406f;
+  line-height: 1.1;
+}
+
+.chronic-lead-invitation-page .page-intro-stat-label {
+  font-size: 12px;
+  color: #6b7a8e;
+  margin-top: 2px;
+}
+
+/* ------------------------------- Toolbar ----------------------------- */
+
+.chronic-lead-invitation-page .filter-group-secondary {
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.chronic-lead-invitation-page .filter-chip-small {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.chronic-lead-invitation-page .search-input {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  min-width: 220px;
+  outline: none;
+  background: #fff;
+}
+
+.chronic-lead-invitation-page .search-input:focus {
+  border-color: #4a8fea;
+  box-shadow: 0 0 0 3px rgba(74, 143, 234, 0.15);
+}
+
+/* ------------------------------- Table cells ------------------------- */
+
+.chronic-lead-table-card {
+  overflow-x: auto;
+}
+
+.chronic-lead-table .primary-cell {
+  font-weight: 600;
+  color: #1a2a40;
+  margin-bottom: 2px;
+}
+
+/* Risk pills — color-coded by risk level */
+.risk-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.risk-pill-low {
+  background: #eaf3ea;
+  color: #2e7a3a;
+}
+
+.risk-pill-medium {
+  background: #fdf3dd;
+  color: #8a5a00;
+}
+
+.risk-pill-high {
+  background: #fde2da;
+  color: #b94a14;
+}
+
+.risk-pill-critical {
+  background: #5b1a1a;
+  color: #fff;
+}
+
+/* Source pill — neutral muted tag */
+.source-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #f0f3f7;
+  color: #4a5d75;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: 'PingFang SC', -apple-system, sans-serif;
+}
+
+/* Evidence cell */
+.evidence-cell {
+  max-width: 340px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.evidence-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #e8f0fa;
+  color: #14406f;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'SF Mono', Consolas, monospace;
+  margin-right: 4px;
+}
+
+.evidence-summary {
+  color: #4a5d75;
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+/* SIGNED → patient detail link */
+.lead-promoted-link {
+  margin-top: 4px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #1f6feb;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: #14406f;
+}
+
+/* Action buttons row */
+.chronic-lead-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chronic-lead-actions .primary-btn,
+.chronic-lead-actions .secondary-btn,
+.chronic-lead-actions .ghost-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  height: auto;
+  min-height: 28px;
+}
+
+.ghost-btn-danger {
+  color: #b94a14;
+}
+
+.ghost-btn-danger:hover {
+  background: #fde2da;
+}
+
+.primary-btn-danger {
+  background: #b94a14 !important;
+}
+
+.primary-btn-danger:hover:not(:disabled) {
+  background: #8a3408 !important;
+}
+
+/* Expanded row highlight */
+.chronic-lead-table .row-expanded > td {
+  background: #f7faff !important;
+  border-bottom: none;
+}
+
+.chronic-lead-table .row-action-form > td {
+  background: #f7faff;
+  padding: 14px 20px;
+  border-top: none;
+  border-bottom: 2px solid #d8e6f8;
+}
+
+/* ------------------------------- Inline forms ----------------------- */
+
+.lead-action-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 920px;
+}
+
+.lead-action-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lead-action-header strong {
+  font-size: 14px;
+  color: #14406f;
+}
+
+.lead-action-form-sign .lead-action-header strong {
+  color: #2e7a3a;
+}
+
+.lead-action-form-reject .lead-action-header strong {
+  color: #b94a14;
+}
+
+.form-grid {
+  display: grid;
+  gap: 10px 14px;
+}
+
+.form-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field > span {
+  font-size: 12px;
+  color: #4a5d75;
+  font-weight: 500;
+}
+
+.form-field input[type='text'],
+.form-field textarea {
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  border: 1px solid #cfd6dd;
+  border-radius: 6px;
+  background: #fff;
+  outline: none;
+  font-family: inherit;
+}
+
+.form-field textarea {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+}
+
+.form-field input[type='text']:focus,
+.form-field textarea:focus {
+  border-color: #4a8fea;
+  box-shadow: 0 0 0 3px rgba(74, 143, 234, 0.15);
+}
+
+.form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.lead-action-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px dashed #d8e6f8;
+  padding-top: 12px;
+}
+
+/* ------------------------------- Status badge extensions ---------- */
+
+.status-badge.status-progress {
+  background: #e8f0fa;
+  color: #14406f;
+}

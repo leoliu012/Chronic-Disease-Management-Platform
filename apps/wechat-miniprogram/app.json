@@ -6,7 +6,8 @@
     "pages/questionnaire/index",
     "pages/records/index",
     "pages/tasks/index",
-    "pages/bind/index"
+    "pages/bind/index",
+    "pages/consent-sign/index"
   ],
   "window": {
     "navigationBarTitleText": "慢病健康管理",
