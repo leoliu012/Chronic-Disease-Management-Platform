@@ -24,7 +24,10 @@
     "seed:all": "node prisma/seed-all.js",
     "quality:register": "node scripts/register-quality-scripts.js",
     "smoke:gateway": "node scripts/smoke-gateway.js",
-    "smoke:all": "node scripts/smoke.js && node scripts/smoke-gateway.js"
+    "smoke:all": "node scripts/smoke.js && node scripts/smoke-gateway.js",
+    "check:patient-engagement": "node prisma/check-patient-engagement.js",
+    "smoke:patient-engagement": "node scripts/smoke-patient-engagement.js",
+    "smoke:care-reminders": "node scripts/smoke-care-reminders.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -84,5 +87,9 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "optionalDependencies": {
+    "mssql": "^11.0.1",
+    "oracledb": "^6.5.1"
   }
 }

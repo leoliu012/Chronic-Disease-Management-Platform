@@ -285,3 +285,111 @@ export class HisEncounterEventDto {
   @IsObject()
   extra?: Record<string, unknown>;
 }
+
+/* -------------------------------------------------------------------------- */
+/*  7. 病历文档 (HIS / EMR → 网关)                                              */
+/*                                                                            */
+/*  既支持出院小结(DISCHARGE_SUMMARY) 之外的所有病历文档类型, 例如门诊病历       */
+/*  (OUTPATIENT_NOTE)、住院病历首页(INPATIENT_RECORD)、病程记录(PROGRESS_NOTE)、 */
+/*  会诊记录(CONSULTATION_NOTE)。出院小结请继续用 /discharge 端点, 那条路径会   */
+/*  同时落 EncounterRecord 和 MedicalRecordSummary, 而 /document 只落摘要表。   */
+/* -------------------------------------------------------------------------- */
+
+export class HisDocumentEventDto {
+  @IsString()
+  @MaxLength(128)
+  eventId!: string;
+
+  @ValidateNested()
+  @Type(() => HisPatientIdentifierDto)
+  patient!: HisPatientIdentifierDto;
+
+  /** 病历文档类型: outpatient / inpatient / progress / consultation / discharge */
+  @IsIn(['outpatient', 'inpatient', 'progress', 'consultation', 'discharge'])
+  documentType!: 'outpatient' | 'inpatient' | 'progress' | 'consultation' | 'discharge';
+
+  @IsDateString()
+  createdAt!: string;
+
+  @IsString()
+  @MaxLength(256)
+  documentTitle!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  department?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  summary?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  diagnosisText?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  treatmentPlan?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  doctorAdvice?: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  8. 检查报告 (HIS / PACS / 心电 / 病理 → 网关)                                */
+/*                                                                            */
+/*  影像、心电、超声、肺功能、内镜、病理 等"以结论文本+影像链接为主"的报告。     */
+/*  纯数值类检验(空腹血糖、HbA1c、电解质 ...) 继续走 /lab-result，那条会进      */
+/*  VitalRecord 并走规则引擎产出 RiskAlert。这条不进规则引擎。                   */
+/* -------------------------------------------------------------------------- */
+
+export class HisExamReportEventDto {
+  @IsString()
+  @MaxLength(128)
+  eventId!: string;
+
+  @ValidateNested()
+  @Type(() => HisPatientIdentifierDto)
+  patient!: HisPatientIdentifierDto;
+
+  /** 检查类别: ECG / CT / MRI / XRAY / ULTRASOUND / ECHO / PFT / ANGIOGRAPHY / NCV / PATH / ENDO ... */
+  @IsString()
+  @MaxLength(32)
+  examType!: string;
+
+  @IsString()
+  @MaxLength(128)
+  examName!: string;
+
+  @IsDateString()
+  examTime!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  department?: string;
+
+  /** 影像所见 / 心电图描述 / 病理大体描述 等长文本 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  finding?: string;
+
+  /** 诊断结论 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  conclusion?: string;
+
+  /** PACS / 影像归档系统中的报告 URL */
+  @IsOptional()
+  @IsString()
+  @MaxLength(512)
+  reportUrl?: string;
+}

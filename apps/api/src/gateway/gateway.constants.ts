@@ -57,6 +57,7 @@ export const GATEWAY_RESOURCE = {
   ENCOUNTER: 'ENCOUNTER',     // 门急诊 / 住院记录
   DISCHARGE: 'DISCHARGE',     // 出院专用（含出院诊断 + 出院小结提示）
   DOCUMENT: 'DOCUMENT',       // 病历文档摘要
+  EXAM_REPORT: 'EXAM_REPORT', // 检查报告（影像 / 心电 / 病理 / 内镜 等，不走 LIS 的非数值结果）
 } as const;
 export type GatewayResourceType = (typeof GATEWAY_RESOURCE)[keyof typeof GATEWAY_RESOURCE];
 
@@ -96,6 +97,8 @@ export const FHIR_RESOURCE_TO_INTERNAL: Record<string, GatewayResourceType> = {
   Encounter: GATEWAY_RESOURCE.ENCOUNTER,
   DocumentReference: GATEWAY_RESOURCE.DOCUMENT,
   Composition: GATEWAY_RESOURCE.DOCUMENT,
+  // 影像 / 心电 / 病理 报告：FHIR R4 用 DiagnosticReport 表达非数值检查结果。
+  DiagnosticReport: GATEWAY_RESOURCE.EXAM_REPORT,
 };
 
 /**
@@ -134,3 +137,5 @@ export const MLLP = {
 
 /** 默认 MLLP 端口（HL7 v2 在国内集成平台几乎都用 2575） */
 export const DEFAULT_HL7_MLLP_PORT = 2575;
+
+

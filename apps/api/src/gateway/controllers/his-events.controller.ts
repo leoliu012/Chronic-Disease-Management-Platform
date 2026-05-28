@@ -28,7 +28,9 @@ import {
 } from '../gateway.constants';
 import {
   HisDischargeEventDto,
+  HisDocumentEventDto,
   HisEncounterEventDto,
+  HisExamReportEventDto,
   HisLabResultEventDto,
   HisPatientIdentifierDto,
   HisPatientUpdatedEventDto,
@@ -193,4 +195,49 @@ export class HisEventsController {
     );
     return this.inbound.ingestSingle(event);
   }
+
+  @Post('document')
+  @HttpCode(HttpStatus.OK)
+  async document(@Body() dto: HisDocumentEventDto) {
+    const event = makeEvent(
+      dto,
+      GATEWAY_RESOURCE.DOCUMENT,
+      mapPatient(dto.patient),
+      {
+        documentType: dto.documentType,
+        createdAt: dto.createdAt,
+        documentTitle: dto.documentTitle,
+        department: dto.department,
+        summary: dto.summary,
+        diagnosisText: dto.diagnosisText,
+        treatmentPlan: dto.treatmentPlan,
+        doctorAdvice: dto.doctorAdvice,
+      },
+      'HIS_EVENT.DOCUMENT',
+    );
+    return this.inbound.ingestSingle(event);
+  }
+
+  @Post('exam-report')
+  @HttpCode(HttpStatus.OK)
+  async examReport(@Body() dto: HisExamReportEventDto) {
+    const event = makeEvent(
+      dto,
+      GATEWAY_RESOURCE.EXAM_REPORT,
+      mapPatient(dto.patient),
+      {
+        examType: dto.examType,
+        examName: dto.examName,
+        examTime: dto.examTime,
+        department: dto.department,
+        finding: dto.finding,
+        conclusion: dto.conclusion,
+        reportUrl: dto.reportUrl,
+      },
+      'HIS_EVENT.EXAM_REPORT',
+    );
+    return this.inbound.ingestSingle(event);
+  }
 }
+
+

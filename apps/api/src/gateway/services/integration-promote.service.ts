@@ -18,6 +18,7 @@
  *   ENCOUNTER    → EncounterRecord
  *   DISCHARGE    → EncounterRecord + MedicalRecordSummary (DISCHARGE_SUMMARY)
  *   DOCUMENT     → MedicalRecordSummary
+ *   EXAM_REPORT  → ExamReportRecord  (影像 / 心电 / 病理 / 内镜 等非数值检查报告)
  *
  * 设计要点：
  *
@@ -51,12 +52,14 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { VitalRecordsService } from '../../vital-records/vital-records.service';
+import { DischargeFollowupPlanGeneratorService } from '../../follow-ups/discharge-followup-plan-generator.service';
 import {
   GATEWAY_RESOURCE,
   GatewayResourceType,
   mapIcd10ToDiseaseType,
 } from '../gateway.constants';
 import { PatientIdentifier } from '../interfaces/normalized-event.interface';
+import { FieldMappingResolverService } from './field-mapping-resolver.service';
 import {
   PromotionConflictError,
   PromotionUnsupportedError,
@@ -174,6 +177,8 @@ export class IntegrationPromoteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly vitalRecordsService: VitalRecordsService,
+    private readonly fieldMappingResolver: FieldMappingResolverService,
+    private readonly dischargeFollowupGenerator: DischargeFollowupPlanGeneratorService,
   ) {}
 
   /* ------------------------------------------------------------------------ */
@@ -226,6 +231,11 @@ export class IntegrationPromoteService {
           promotionStatus: IntegrationPromotionStatus.PROMOTED,
           promotionMessage: dispatched.message ?? null,
           promotedAt: new Date(),
+          // gateway-production-hardening: 成功 promote 后清空 retry 元数据,
+          // 防止 GatewayPromotionWorker 反复扫到一条已经成功的记录.
+          nextRetryAt: null,
+          lastFailedAt: null,
+          lastFailureReason: null,
         },
       });
       this.logger.log(
@@ -253,7 +263,7 @@ export class IntegrationPromoteService {
         return { recordId, outcome: 'FAILED', message };
       }
       const message = err instanceof Error ? err.message : String(err);
-      await this.markStatus(recordId, IntegrationPromotionStatus.FAILED, message);
+      await this.markStatusForRetry(recordId, IntegrationPromotionStatus.FAILED, message);
       this.logger.error(`Promote failed for record ${recordId}: ${message}`);
       return { recordId, outcome: 'FAILED', message };
     }
@@ -549,7 +559,35 @@ export class IntegrationPromoteService {
   ): Promise<DispatchSuccess> {
     const normalized = this.unwrapNormalized(record);
     const patientIdent = normalized.patient ?? {};
-    const payload = normalized.payload ?? {};
+    let payload = normalized.payload ?? {};
+
+    // gateway-production-hardening:
+    // 应用动态字段映射 (IntegrationFieldMapping) — 让 IntegrationCenter
+    // 上配置的 externalField -> localField + transformRule 真正生效.
+    // 静默吞错: 配置出问题不能把生产 promote 给阻塞.
+    try {
+      const targetModel = this.targetModelFor(record.externalRecordType);
+      if (targetModel) {
+        const applied = await this.fieldMappingResolver.applyToPayload(
+          record.sourceId,
+          targetModel,
+          payload,
+        );
+        if (applied.appliedCount > 0 || applied.defaulted.length > 0) {
+          payload = applied.payload;
+          this.logger.debug(
+            `dispatch field-mapping: source=${record.sourceId} model=${targetModel} ` +
+              `applied=${applied.appliedCount} defaulted=${applied.defaulted.join(',')}`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Field-mapping resolution failed (non-blocking) for record ${record.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
 
     switch (record.externalRecordType as GatewayResourceType) {
       case GATEWAY_RESOURCE.PATIENT:
@@ -566,8 +604,39 @@ export class IntegrationPromoteService {
         return this.promoteEncounter(patientIdent, payload, record, options, true);
       case GATEWAY_RESOURCE.DOCUMENT:
         return this.promoteDocument(patientIdent, payload, record, options);
+      case GATEWAY_RESOURCE.EXAM_REPORT:
+        return this.promoteExamReport(patientIdent, payload, record, options);
       default:
         throw new PromotionUnsupportedError(record.externalRecordType);
+    }
+  }
+
+  /**
+   * gateway-production-hardening:
+   * 资源类型 -> Prisma model 名 (= IntegrationFieldMapping.targetModel 的取值约定).
+   * 与既有 `seedDefaults` 中的 mapping 表保持一致 (Patient / DiseaseProfile /
+   * VitalRecord / MedicationRecord / EncounterRecord / MedicalRecordSummary /
+   * ExamReportRecord).
+   */
+  private targetModelFor(resourceType: string): string | null {
+    switch (resourceType) {
+      case GATEWAY_RESOURCE.PATIENT:
+        return 'Patient';
+      case GATEWAY_RESOURCE.DIAGNOSIS:
+        return 'DiseaseProfile';
+      case GATEWAY_RESOURCE.OBSERVATION:
+        return 'VitalRecord';
+      case GATEWAY_RESOURCE.MEDICATION:
+        return 'MedicationRecord';
+      case GATEWAY_RESOURCE.ENCOUNTER:
+      case GATEWAY_RESOURCE.DISCHARGE:
+        return 'EncounterRecord';
+      case GATEWAY_RESOURCE.DOCUMENT:
+        return 'MedicalRecordSummary';
+      case GATEWAY_RESOURCE.EXAM_REPORT:
+        return 'ExamReportRecord';
+      default:
+        return null;
     }
   }
 
@@ -940,7 +1009,7 @@ export class IntegrationPromoteService {
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
-    _options: PromoteOptions,
+    options: PromoteOptions,
     isDischarge: boolean,
   ): Promise<DispatchSuccess> {
     const patient = await this.requirePatient(ident);
@@ -1010,6 +1079,27 @@ export class IntegrationPromoteService {
           rawData: this.safeJson(payload),
         },
       });
+
+      // gateway-production-hardening:
+      // 出院后随访任务策略 — 生成 D+2/D+7/D+14/D+30 (高风险病种额外 D+3) 一组 Task.
+      // 完全 fail-safe: 内部 catch 任何错误, 不会让 promoteEncounter 主流程 500.
+      const dischargeDiseaseType = mapIcd10ToDiseaseType(
+        (payload['diagnosisIcd'] as string | undefined) ?? '',
+      );
+      await this.dischargeFollowupGenerator
+        .generateForDischarge({
+          patientId: patient.id,
+          dischargeRef: encounter.id,
+          diseaseType: dischargeDiseaseType,
+          dischargeTime: visitTime,
+          triggerSource: 'GATEWAY_PROMOTE_DISCHARGE',
+          assigneeId: options.operatorId ?? undefined,
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `dischargeFollowup generation failed (non-blocking): ${(err as Error).message}`,
+          );
+        });
     }
 
     return {
@@ -1056,6 +1146,73 @@ export class IntegrationPromoteService {
   }
 
   /* ------------------------------------------------------------------------ */
+  /*  EXAM_REPORT — 影像/心电/病理/内镜 等非数值结果                              */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Promote 一条 EXAM_REPORT 事件到 ExamReportRecord。
+   *
+   * 设计上与 promoteDocument 平行：DOCUMENT 走的是「文字病历摘要」表
+   * (MedicalRecordSummary)，这里走的是「结构化检查报告」表 (ExamReportRecord)。
+   * 上游 payload 期望:
+   *   { examType, examName, examTime, department?, finding?, conclusion?, reportUrl? }
+   *
+   * 幂等：按 (patientId, externalExamId) 防重。externalExamId 就是网关收到的
+   * IntegrationSyncRecord.externalRecordId（即上游 eventId）。
+   */
+  private async promoteExamReport(
+    ident: PatientIdentifier,
+    payload: Record<string, unknown>,
+    record: IntegrationSyncRecord,
+    _options: PromoteOptions,
+  ): Promise<DispatchSuccess> {
+    const patient = await this.requirePatient(ident);
+    const examType = (payload['examType'] as string | undefined) ?? '';
+    const examName = (payload['examName'] as string | undefined) ?? '';
+    if (!examType || !examName) {
+      throw new PromotionConflictError(
+        'MISSING_REQUIRED_FIELDS',
+        'EXAM_REPORT 事件缺少 examType / examName。',
+      );
+    }
+    const examTime = this.coerceDate(payload['examTime']) ?? new Date();
+    const externalExamId = record.externalRecordId;
+
+    const existing = await this.prisma.examReportRecord.findFirst({
+      where: { patientId: patient.id, externalExamId },
+    });
+    if (existing) {
+      return {
+        localTargetType: 'ExamReportRecord',
+        localTargetId: existing.id,
+        message: '同源检查报告已存在，仅刷新 localTargetId。',
+      };
+    }
+
+    const created = await this.prisma.examReportRecord.create({
+      data: {
+        patientId: patient.id,
+        externalExamId,
+        examType,
+        examName,
+        examTime,
+        departmentName: (payload['department'] as string | undefined) ?? undefined,
+        finding: (payload['finding'] as string | undefined) ?? undefined,
+        conclusion: (payload['conclusion'] as string | undefined) ?? undefined,
+        reportUrl: (payload['reportUrl'] as string | undefined) ?? undefined,
+        dataSource: DataSource.HIS,
+        sourceSystem: this.unwrapNormalized(record).channel,
+        rawData: this.safeJson(payload),
+      },
+    });
+    return {
+      localTargetType: 'ExamReportRecord',
+      localTargetId: created.id,
+      message: `已落检查报告：${examName}`,
+    };
+  }
+
+  /* ------------------------------------------------------------------------ */
   /*  小工具                                                                   */
   /* ------------------------------------------------------------------------ */
 
@@ -1067,6 +1224,41 @@ export class IntegrationPromoteService {
     await this.prisma.integrationSyncRecord.update({
       where: { id: recordId },
       data: { promotionStatus, promotionMessage },
+    });
+  }
+
+  /**
+   * gateway-production-hardening: 用于 catch-all 失败分支.
+   *
+   * 把 record 移到 FAILED 状态的同时, 安排首次重试 (60s 后) 并 +1 attempts.
+   * 后续的退避由 GatewayPromotionWorker 接管 — 这里只负责"打第一针".
+   *
+   * 注意区分:
+   *   - markStatus(): 给 CONFLICT / NOT_REQUIRED 用. 这两类是"主动 park",
+   *     不应该自动重试.
+   *   - markStatusForRetry(): 给真正崩溃的 FAILED 用. 默认 worker 会再试.
+   */
+  private async markStatusForRetry(
+    recordId: string,
+    promotionStatus: IntegrationPromotionStatus,
+    promotionMessage: string,
+  ) {
+    const existing = await this.prisma.integrationSyncRecord.findUnique({
+      where: { id: recordId },
+      select: { promotionAttempts: true },
+    });
+    const attempts = existing?.promotionAttempts ?? 0;
+    const isFirstFailure = attempts === 0;
+    await this.prisma.integrationSyncRecord.update({
+      where: { id: recordId },
+      data: {
+        promotionStatus,
+        promotionMessage,
+        promotionAttempts: isFirstFailure ? 1 : attempts,
+        nextRetryAt: isFirstFailure ? new Date(Date.now() + 60_000) : undefined,
+        lastFailedAt: new Date(),
+        lastFailureReason: promotionMessage.slice(0, 1000),
+      },
     });
   }
 
@@ -1196,3 +1388,9 @@ export class IntegrationPromoteService {
     }
   }
 }
+
+
+
+
+
+

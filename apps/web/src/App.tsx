@@ -21,7 +21,10 @@ import {
 import { AUTH_TOKEN_STORAGE_KEY, AUTH_USER_STORAGE_KEY } from './api/client';
 import { manualLogout, SESSION_EXPIRED_EVENT } from './api/auth-session';
 import { OperationToastHost } from './components/OperationToastHost';
+import { PublicFormPage } from './pages/PublicFormPage';
+import HospitalWechatAccountPage from './pages/HospitalWechatAccountPage';
 
+import CareRemindersPage from './pages/CareRemindersPage';
 type NavItem = {
   to: string;
   label: string;
@@ -75,6 +78,18 @@ const navItems: NavItem[] = [
     // 真的有过身份证变更。配置类按钮（一键批量、autoPromote 开关）
     // 仍在页面内按 isAdmin 进行细粒度禁用。
     roles: ['ADMIN', 'MANAGER', 'DOCTOR', 'NURSE'],
+  },
+  {
+    to: '/hospital-wechat/account',
+    label: '服务号配置',
+    hint: '本院公众号 / 模板消息',
+    roles: ['ADMIN'],
+  },
+  {
+    to: '/care-reminders',
+    label: '慢病提醒中心',
+    hint: '今日 / 未完成 / 主动消息',
+    roles: ['ADMIN', 'DOCTOR', 'NURSE'],
   },
 ];
 
@@ -280,6 +295,22 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
                 </RoleRoute>
               }
             />
+            <Route
+              path="/hospital-wechat/account"
+              element={
+                <RoleRoute user={user} roles={['ADMIN']}>
+                  <HospitalWechatAccountPage />
+                </RoleRoute>
+              }
+            />
+            <Route
+              path="/care-reminders"
+              element={
+                <RoleRoute user={user} roles={['ADMIN', 'DOCTOR', 'NURSE']}>
+                  <CareRemindersPage />
+                </RoleRoute>
+              }
+            />
             <Route path="/login" element={<Navigate to={fallbackPath} replace />} />
             <Route path="*" element={<Navigate to={fallbackPath} replace />} />
           </Routes>
@@ -290,17 +321,13 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
 }
 
 function AppContent() {
+  // hooks-first (Bug 2 fix) — every hook below MUST run on every render,
+  // including renders where we end up returning the public-route subtree.
+  // Doing the early `return <Routes>...</Routes>` before useState used to
+  // produce React's "Rendered fewer hooks than expected" error when a user
+  // navigated between /wx/form/... and the rest of the app.
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStoredUser());
 
-  // Bridge from the axios layer to React state.
-  //
-  // The axios 401 interceptor in `api/client.ts` calls
-  // `clearSession()` (in `api/auth-session.ts`), which dispatches
-  // this window event. We translate it into a React state update so
-  // the existing `if (!currentUser)` branch below kicks in and renders
-  // the login routes. The matching `<Route path="*" element={<Navigate
-  // to="/login" replace />} />` then updates the URL without a full
-  // page reload, preserving in-memory state in unrelated components.
   useEffect(() => {
     function handle() {
       setCurrentUser(null);
@@ -312,12 +339,19 @@ function AppContent() {
   }, []);
 
   function logout() {
-    // `manualLogout` clears localStorage + dispatches SESSION_EXPIRED.
-    // The listener above will set currentUser to null. Calling
-    // setCurrentUser(null) directly here too is harmless and keeps the
-    // logout button feeling synchronous.
     manualLogout();
     setCurrentUser(null);
+  }
+
+  // patient_engagement_hospital_wechat_v2:
+  // Patient-facing H5 form lives outside the auth wall and outside the
+  // AuthenticatedShell layout. We match AFTER the hooks have been declared.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/wx/form/')) {
+    return (
+      <Routes>
+        <Route path="/wx/form/:token" element={<PublicFormPage />} />
+      </Routes>
+    );
   }
 
   if (!currentUser) {

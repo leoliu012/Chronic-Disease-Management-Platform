@@ -173,6 +173,9 @@ function extractPayload(
       return extractEncounterPayload(resource);
     case GATEWAY_RESOURCE.DOCUMENT:
       return extractDocumentPayload(resource);
+    case GATEWAY_RESOURCE.EXAM_REPORT:
+      // FHIR DiagnosticReport — 影像 / 心电 / 病理 / 内镜 / 肺功能 等非数值检查报告
+      return extractDiagnosticReportPayload(resource);
     default:
       return {};
   }
@@ -292,6 +295,91 @@ function extractDocumentPayload(r: FhirResource): Record<string, unknown> {
   };
 }
 
+/**
+ * FHIR DiagnosticReport -> ExamReportRecord (EXAM_REPORT)
+ *
+ * 把影像 / 心电 / 病理 / 内镜 / 肺功能 等非数值检查报告抽成 IntegrationPromoteService
+ * 已支持的 EXAM_REPORT 形状: { examType, examName, examTime, department, finding, conclusion, reportUrl }
+ *
+ * FHIR R4 字段对照:
+ *   examType   <- category[0].coding[0].display | code | "RAD" / "CG" / "LAB" / ...
+ *   examName   <- code.text | code.coding[0].display | code.coding[0].code
+ *   examTime   <- effectiveDateTime | effectivePeriod.start | issued
+ *   department <- performer[*].display (取第一个有值的)
+ *   finding    <- presentedForm[0].title 或 result[*].display 拼接 (PDF 报告时为标题)
+ *   conclusion <- conclusion (FHIR 标准字段, R4 字符串)
+ *   reportUrl  <- presentedForm[0].url (PDF / DICOM 链接)
+ */
+function extractDiagnosticReportPayload(r: FhirResource): Record<string, unknown> {
+  const code = r.code as { coding?: Array<Record<string, unknown>>; text?: string } | undefined;
+  const examName =
+    (code?.text as string) ??
+    ((code?.coding?.[0]?.display as string) ?? (code?.coding?.[0]?.code as string) ?? '');
+
+  const category = r.category as Array<{ coding?: Array<{ code?: string; display?: string }>; text?: string }> | undefined;
+  let examType: string | undefined;
+  if (Array.isArray(category) && category.length > 0) {
+    const c = category[0];
+    examType =
+      (c.text as string | undefined) ??
+      (c.coding?.[0]?.display as string | undefined) ??
+      (c.coding?.[0]?.code as string | undefined);
+  }
+  if (!examType) examType = 'OTHER';
+
+  const examTime =
+    (r.effectiveDateTime as string) ||
+    ((r.effectivePeriod as { start?: string } | undefined)?.start) ||
+    (r.issued as string) ||
+    undefined;
+
+  // 多个 performer 取第一个 display 非空的
+  let department: string | undefined;
+  const performers = r.performer as Array<{ display?: string; reference?: string }> | undefined;
+  if (Array.isArray(performers)) {
+    for (const p of performers) {
+      if (p?.display) { department = p.display; break; }
+      if (p?.reference) { department = p.reference; break; }
+    }
+  }
+
+  // presentedForm 是 Attachment[]; 第一个非空的拿来当报告链接 + 备用 finding 标题
+  const presented = r.presentedForm as Array<{ url?: string; title?: string; contentType?: string }> | undefined;
+  let reportUrl: string | undefined;
+  let attachmentTitle: string | undefined;
+  if (Array.isArray(presented)) {
+    for (const a of presented) {
+      if (!reportUrl && a?.url) reportUrl = a.url;
+      if (!attachmentTitle && a?.title) attachmentTitle = a.title;
+      if (reportUrl && attachmentTitle) break;
+    }
+  }
+
+  // finding: R4 没有标准字符串字段, 我们尽量从 result[*].display 拼出来,
+  // 否则退到 presentedForm[0].title.
+  let finding: string | undefined;
+  const resultRefs = r.result as Array<{ display?: string }> | undefined;
+  if (Array.isArray(resultRefs)) {
+    const labels = resultRefs
+      .map((x) => x?.display)
+      .filter((s): s is string => typeof s === 'string' && s.length > 0);
+    if (labels.length > 0) finding = labels.join('; ');
+  }
+  if (!finding && attachmentTitle) finding = attachmentTitle;
+
+  const conclusion = (r.conclusion as string | undefined) ?? undefined;
+
+  return {
+    examType,
+    examName,
+    examTime,
+    department,
+    finding,
+    conclusion,
+    reportUrl,
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 
 function normalizeFhirGender(g: string | undefined): 'MALE' | 'FEMALE' | 'UNKNOWN' {
@@ -342,3 +430,5 @@ function extractServiceProvider(sp: Record<string, unknown> | undefined): string
   if (!sp) return undefined;
   return (sp.display as string) ?? (sp.reference as string) ?? undefined;
 }
+
+

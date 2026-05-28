@@ -31,6 +31,8 @@ import { ExamReportsModule } from './exam-reports/exam-reports.module';
 import { HospitalMedicationsModule } from './hospital-medications/hospital-medications.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { ChronicLeadsModule } from './chronic-leads/chronic-leads.module';
+import { PatientEngagementModule } from './patient-engagement/patient-engagement.module';
+import { CareRemindersModule } from './care-reminders/care-reminders.module';
 
 const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
@@ -60,6 +62,8 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
     HisIntegrationModule,
     GatewayModule,
     ChronicLeadsModule,
+    PatientEngagementModule,
+    CareRemindersModule,
     ...developmentOnlyModules,
     MedicationsModule,
     QuestionnairesModule,

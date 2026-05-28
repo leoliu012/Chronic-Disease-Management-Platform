@@ -5,6 +5,8 @@ import { api, getApiErrorMessage } from '../api/client';
 import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
 import { HospitalRecordsView } from '../components/HospitalRecordsView';
 import { PatientTaskSidePanel } from '../components/PatientTaskSidePanel';
+import { PatientEngagementTab } from '../components/PatientEngagementTab';
+import CareRemindersPanel from '../components/CareRemindersPanel';
 import { usePolling } from '../hooks/usePolling';
 import { PatientHandlingHistoryView } from '../components/PatientHandlingHistoryView';
 import { PatientHospitalVisitTab } from '../components/PatientHospitalVisitTab';
@@ -295,7 +297,7 @@ const timelineTabs = [
   'QUESTIONNAIRE_RESULT',
 ];
 
-type PatientDetailWorkspace = 'overview' | 'hospital-records' | 'actions' | 'disease' | 'monitoring' | 'medication' | 'follow-up' | 'hospital-visit' | 'handling-history' | 'care' | 'timeline';
+type PatientDetailWorkspace = 'overview' | 'hospital-records' | 'actions' | 'disease' | 'monitoring' | 'medication' | 'follow-up' | 'hospital-visit' | 'handling-history' | 'care' | 'patient-engagement' | 'care-reminders' | 'timeline';
 type TimelineSubsection = 'records' | 'vitals' | 'closedLoop';
 
 const patientDetailWorkspaceTabs: Array<{
@@ -311,6 +313,8 @@ const patientDetailWorkspaceTabs: Array<{
   { key: 'follow-up', title: '电话随访', description: '沟通记录与随访闭环' },
   { key: 'hospital-visit', title: '到院提醒', description: '生成提醒与到院结果' },
   { key: 'handling-history', title: '处置记录', description: '最近处理历史与签名' },
+  { key: 'patient-engagement', title: '微信随访', description: '本院服务号 / H5 链接 · 短信兜底' },
+  { key: 'care-reminders', title: '慢病提醒', description: '长期计划 / 今日提醒 / 主动消息' },
   { key: 'timeline', title: '全流程记录', description: '患者长期管理时间线' },
 ];
 
@@ -336,6 +340,8 @@ function isPatientDetailWorkspace(value: string | null): value is PatientDetailW
     value === 'hospital-visit' ||
     value === 'handling-history' ||
     value === 'care' ||
+    value === 'patient-engagement' ||
+    value === 'care-reminders' ||
     value === 'timeline'
   );
 }
@@ -1905,6 +1911,7 @@ export function PatientDetailPage() {
     if (key === 'hospital-visit') return activeHospitalVisitReminders.length;
     if (key === 'handling-history') return handlingHistoryTimeline.length;
     if (key === 'care') return activeTaskCount + followUpCount;
+    if (key === 'patient-engagement') return 0;
     return visibleTimeline.length;
   }
 
@@ -3550,6 +3557,28 @@ export function PatientDetailPage() {
         />
       )}
 
+
+      {/* patient-engagement-wechat-h5-v1 tab */}
+      {activeWorkspace === 'patient-engagement' && (
+        <section className="panel">
+          <PatientEngagementTab
+            patientId={patientId!}
+            medications={activeMedicationTimeline
+              .map((item: any) => item.data)
+              .filter((m: any) => m && m.id)
+              .map((m: any) => ({ id: m.id, medicationName: m.medicationName, dosage: m.dosage, frequency: m.frequency }))}
+
+      {/* care-reminders v3 */}
+      {activeWorkspace === 'care-reminders' && (
+        <section className="panel">
+          <CareRemindersPanel patientId={patientId!} canEdit={true} />
+        </section>
+      )}
+
+            hospitalVisitReminders={activeHospitalVisitReminders.map((r: any) => ({ id: r.id, title: r.title, reason: r.reason }))}
+          />
+        </section>
+      )}
 
       {activeWorkspace === 'timeline' && (
         <>

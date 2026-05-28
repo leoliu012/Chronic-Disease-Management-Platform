@@ -73,6 +73,14 @@ const authDemoUsers = [
     displayName: '慢病中心主任',
     role: UserRole.MANAGER,
   },
+  // patient_engagement_hospital_wechat_v2_1: second-tenant nurse for cross-tenant smoke
+  {
+    id: 'nurse-002',
+    username: 'nurse2',
+    password: 'nurse123',
+    displayName: '王护士 (示例三甲)',
+    role: UserRole.NURSE,
+  },
 ];
 
 async function seedAuth() {
@@ -1001,6 +1009,973 @@ const consentSeeds = [
   },
 ];
 
+
+// ============================================================================
+// 院内病历 demo 数据 (hospital-records-seed)
+//
+// 为 demo 病人补充从医院系统 (HIS / EMR / LIS) 获取的院内病历记录:
+//   - EncounterRecord         就诊记录 (门诊/住院/急诊/体检)
+//   - MedicalRecordSummary    病历摘要 (门诊病历/住院病历/出院小结/病程记录/会诊)
+//   - ExamReportRecord        检查报告 (影像/心电/超声/血液检验/肺功能等)
+//   - HospitalMedicationOrder 院内处方 (与就诊记录关联的药物医嘱)
+//
+// 每条记录都通过 patientId 关联到 demoPatients, 并与现有的临床叙事线吻合:
+//   - 王建国(001) 极高危高血压 → 心血管内科门诊 + 急诊高血压 + 头颅 CT + 乌拉地尔
+//   - 李秀兰(002) 极高危糖尿病 → 内分泌科住院 + 出院小结 + 血液检验 + 二甲双胍
+//   - 张德明(003) 慢阻肺急性加重风险 → 呼吸科门诊 + 肺功能 + 噻托溴铵吸入剂
+//   - 陈红(005)   冠心病二级预防 → 胸痛复核 + 心脏超声 + 冠脉造影 + 阿司匹林/他汀
+// ============================================================================
+
+const encounterSeeds = [
+  // ── 患者 001 王建国 (高血压 VERY_HIGH) ──
+  {
+    id: 'demo-encounter-001-a',
+    patientId: 'demo-patient-001',
+    hospitalPatientId: 'MZ20260519001',
+    externalVisitId: 'HIS-VISIT-20260318-0001',
+    visitType: 'OUTPATIENT',
+    departmentName: '心血管内科',
+    doctorName: '张主任',
+    visitTime: daysAgo(68, 9, 30),
+    chiefComplaint: '头晕、头痛反复发作 2 月余',
+    diagnosisSummary: '原发性高血压 2 级 (极高危); 高脂血症',
+    treatmentSummary: '调整降压方案: 苯磺酸氨氯地平 5mg qd → 联合缬沙坦 80mg qd。嘱规律监测家庭血压。',
+  },
+  {
+    id: 'demo-encounter-001-b',
+    patientId: 'demo-patient-001',
+    hospitalPatientId: 'MZ20260519001',
+    externalVisitId: 'HIS-VISIT-20260425-0019',
+    visitType: 'OUTPATIENT',
+    departmentName: '心血管内科',
+    doctorName: '张主任',
+    visitTime: daysAgo(30, 14, 0),
+    chiefComplaint: '门诊复诊: 血压控制情况评估',
+    diagnosisSummary: '高血压 2 级; 近期晨间血压有上升趋势',
+    treatmentSummary: '维持现有方案, 加强晨间血压监测频率。建议 4 周后复诊。',
+  },
+  {
+    id: 'demo-encounter-001-c',
+    patientId: 'demo-patient-001',
+    hospitalPatientId: 'MZ20260519001',
+    externalVisitId: 'HIS-VISIT-20260524-EM-0007',
+    visitType: 'EMERGENCY',
+    departmentName: '急诊内科',
+    doctorName: '急诊王医生',
+    visitTime: daysAgo(1, 8, 10),
+    chiefComplaint: '晨起测血压 188/112 mmHg, 伴头痛、视物模糊',
+    diagnosisSummary: '高血压急症; 高血压性脑病待排',
+    treatmentSummary: '急诊留观, 静脉乌拉地尔降压; 完善头颅 CT 排查脑出血; 病情稳定后转回心内科门诊随访。',
+  },
+
+  // ── 患者 002 李秀兰 (糖尿病 VERY_HIGH) ──
+  {
+    id: 'demo-encounter-002-a',
+    patientId: 'demo-patient-002',
+    hospitalPatientId: 'MZ20260519002',
+    externalVisitId: 'HIS-VISIT-20260408-IN-0003',
+    visitType: 'INPATIENT',
+    departmentName: '内分泌科',
+    doctorName: '李主任',
+    visitTime: daysAgo(47, 10, 0),
+    chiefComplaint: '多饮多尿乏力加重 1 周, 空腹血糖 15.8 mmol/L',
+    diagnosisSummary: '2 型糖尿病血糖控制不佳; 糖尿病周围神经病变 (早期)',
+    treatmentSummary: '住院 7 天进行血糖管理 + 营养教育, 出院时空腹血糖降至 7.2 mmol/L。',
+  },
+  {
+    id: 'demo-encounter-002-b',
+    patientId: 'demo-patient-002',
+    hospitalPatientId: 'MZ20260519002',
+    externalVisitId: 'HIS-VISIT-20260520-0042',
+    visitType: 'OUTPATIENT',
+    departmentName: '内分泌科',
+    doctorName: '李主任',
+    visitTime: daysAgo(5, 10, 30),
+    chiefComplaint: '门诊复诊: 空腹血糖反弹至 12.6 mmol/L',
+    diagnosisSummary: '2 型糖尿病, 血糖控制不佳',
+    treatmentSummary: '加量二甲双胍至 1000mg bid, 加用德谷胰岛素 10U 睡前皮下注射。',
+  },
+
+  // ── 患者 003 张德明 (慢阻肺 HIGH) ──
+  {
+    id: 'demo-encounter-003-a',
+    patientId: 'demo-patient-003',
+    hospitalPatientId: 'MZ20260519003',
+    externalVisitId: 'HIS-VISIT-20260510-0028',
+    visitType: 'OUTPATIENT',
+    departmentName: '呼吸与危重症医学科',
+    doctorName: '王主任',
+    visitTime: daysAgo(15, 9, 15),
+    chiefComplaint: '近 1 周活动后气促, 血氧波动 92~95%',
+    diagnosisSummary: '慢性阻塞性肺疾病稳定期, 急性加重风险增加',
+    treatmentSummary: '维持噻托溴铵 18μg qd; 加用沙美特罗替卡松吸入剂 50/250 bid。复查肺功能。',
+  },
+
+  // ── 患者 004 赵敏 (肥胖 MEDIUM) ──
+  {
+    id: 'demo-encounter-004-a',
+    patientId: 'demo-patient-004',
+    hospitalPatientId: 'MZ20260519004',
+    externalVisitId: 'HIS-VISIT-20260418-CH-0011',
+    visitType: 'CHECKUP',
+    departmentName: '健康管理中心',
+    doctorName: '体检中心',
+    visitTime: daysAgo(37, 8, 0),
+    chiefComplaint: '年度体检',
+    diagnosisSummary: '超重 (BMI 29.4); 血脂偏高 (TG 2.1 mmol/L)',
+    treatmentSummary: '建议生活方式干预: 减少精制碳水, 增加每周 150 分钟有氧运动。3 个月后复查。',
+  },
+
+  // ── 患者 005 陈红 (冠心病 HIGH) ──
+  {
+    id: 'demo-encounter-005-a',
+    patientId: 'demo-patient-005',
+    hospitalPatientId: 'MZ20260519005',
+    externalVisitId: 'HIS-VISIT-20260206-IN-0009',
+    visitType: 'INPATIENT',
+    departmentName: '心血管内科',
+    doctorName: '赵主任',
+    visitTime: daysAgo(109, 11, 0),
+    chiefComplaint: '反复胸闷胸痛 3 月, 加重 1 周',
+    diagnosisSummary: '冠心病 (不稳定型心绞痛); 冠脉造影示前降支 70% 狭窄',
+    treatmentSummary: '前降支 PCI 植入药物洗脱支架 1 枚; 术后双抗 + 他汀二级预防。',
+  },
+  {
+    id: 'demo-encounter-005-b',
+    patientId: 'demo-patient-005',
+    hospitalPatientId: 'MZ20260519005',
+    externalVisitId: 'HIS-VISIT-20260515-0033',
+    visitType: 'OUTPATIENT',
+    departmentName: '心血管内科',
+    doctorName: '赵主任',
+    visitTime: daysAgo(10, 14, 30),
+    chiefComplaint: '门诊复诊: 偶发胸闷, 心率偏快',
+    diagnosisSummary: 'PCI 术后随访, 心率控制不佳',
+    treatmentSummary: '加用美托洛尔缓释片 47.5mg qd; 继续阿司匹林 + 替格瑞洛 + 阿托伐他汀方案。',
+  },
+
+  // ── 患者 006 刘国强 (高血压 MEDIUM) ──
+  {
+    id: 'demo-encounter-006-a',
+    patientId: 'demo-patient-006',
+    hospitalPatientId: 'MZ20260519006',
+    externalVisitId: 'HIS-VISIT-20260502-0021',
+    visitType: 'OUTPATIENT',
+    departmentName: '心血管内科',
+    doctorName: '张主任',
+    visitTime: daysAgo(23, 9, 0),
+    chiefComplaint: '门诊常规复诊: 血压 132/79 mmHg, 控制平稳',
+    diagnosisSummary: '原发性高血压 1 级, 控制良好',
+    treatmentSummary: '维持当前方案 (氢氯噻嗪 12.5mg qd)。3 个月后复诊。',
+  },
+
+  // ── 患者 009 吴爱民 (高血压 LOW) ──
+  {
+    id: 'demo-encounter-009-a',
+    patientId: 'demo-patient-009',
+    hospitalPatientId: 'MZ20260519009',
+    externalVisitId: 'HIS-VISIT-20260512-CH-0014',
+    visitType: 'CHECKUP',
+    departmentName: '健康管理中心',
+    doctorName: '体检中心',
+    visitTime: daysAgo(13, 8, 30),
+    chiefComplaint: '年度体检',
+    diagnosisSummary: '高血压 1 级, 控制良好; 余无明显异常',
+    treatmentSummary: '继续生活方式管理 + 规律家庭血压监测。',
+  },
+];
+
+const medicalRecordSummarySeeds = [
+  // 王建国(001) 心内科门诊 + 急诊
+  {
+    id: 'demo-medrec-001-a',
+    patientId: 'demo-patient-001',
+    externalRecordId: 'EMR-NOTE-20260318-0001',
+    recordType: 'OUTPATIENT_NOTE',
+    recordTime: daysAgo(68, 9, 45),
+    departmentName: '心血管内科',
+    title: '门诊病历 - 高血压调药',
+    summary: '患者主诉头晕头痛 2 月, 自测血压晨间偏高 (155~165/95~100 mmHg)。',
+    diagnosisText: '原发性高血压 2 级 (极高危); 高脂血症',
+    treatmentPlan: '苯磺酸氨氯地平 5mg qd 联合缬沙坦 80mg qd; 1 个月后复诊评估。',
+    doctorAdvice: '低盐饮食, 戒酒, 每日规律家庭血压监测, 必要时即刻就诊。',
+  },
+  {
+    id: 'demo-medrec-001-b',
+    patientId: 'demo-patient-001',
+    externalRecordId: 'EMR-NOTE-20260524-EM-0007',
+    recordType: 'PROGRESS_NOTE',
+    recordTime: daysAgo(1, 9, 0),
+    departmentName: '急诊内科',
+    title: '急诊病程记录 - 高血压急症',
+    summary: '患者晨起血压 188/112 mmHg, 伴头痛、视物模糊。急诊查体神清, 心肺听诊无异常。完善头颅 CT 未见出血。',
+    diagnosisText: '高血压急症 (无靶器官损害)',
+    treatmentPlan: '静脉乌拉地尔降压, 监测血压每 15 分钟 1 次; 病情稳定后留观 4 小时。',
+    doctorAdvice: '出院后心内科门诊密切随访, 每日 2 次家庭血压监测并记录。',
+  },
+
+  // 李秀兰(002) 内分泌住院 + 出院小结
+  {
+    id: 'demo-medrec-002-a',
+    patientId: 'demo-patient-002',
+    externalRecordId: 'EMR-NOTE-20260408-IN-0003',
+    recordType: 'INPATIENT_RECORD',
+    recordTime: daysAgo(47, 14, 0),
+    departmentName: '内分泌科',
+    title: '住院病历 - 糖尿病血糖管理',
+    summary: '患者糖尿病病史 11 年, 近期多饮多尿乏力加重 1 周, 入院查空腹血糖 15.8 mmol/L, 糖化血红蛋白 9.8%。',
+    diagnosisText: '2 型糖尿病血糖控制不佳; 糖尿病周围神经病变 (早期)',
+    treatmentPlan: '住院期间予胰岛素强化方案; 营养科介入饮食指导; 完善并发症筛查。',
+    doctorAdvice: '住院期间每日 7 次血糖监测, 出院后改为每日 2 次。',
+  },
+  {
+    id: 'demo-medrec-002-b',
+    patientId: 'demo-patient-002',
+    externalRecordId: 'EMR-NOTE-20260415-DC-0003',
+    recordType: 'DISCHARGE_SUMMARY',
+    recordTime: daysAgo(40, 10, 0),
+    departmentName: '内分泌科',
+    title: '出院小结 - 2 型糖尿病',
+    summary: '住院 7 天后空腹血糖降至 7.2 mmol/L, 餐后 2h 血糖 9.4 mmol/L, 糖尿病周围神经病变筛查阳性。',
+    diagnosisText: '2 型糖尿病; 糖尿病周围神经病变 (早期); 高血压 1 级',
+    treatmentPlan: '出院方案: 二甲双胍 500mg bid + 甘精胰岛素 8U 睡前; 4 周后内分泌门诊复诊。',
+    doctorAdvice: '低糖饮食, 规律运动, 自我血糖监测每日 2 次, 关注足部皮肤变化。',
+  },
+
+  // 张德明(003) 呼吸科会诊
+  {
+    id: 'demo-medrec-003-a',
+    patientId: 'demo-patient-003',
+    externalRecordId: 'EMR-NOTE-20260510-0028',
+    recordType: 'OUTPATIENT_NOTE',
+    recordTime: daysAgo(15, 9, 35),
+    departmentName: '呼吸与危重症医学科',
+    title: '门诊病历 - 慢阻肺稳定期管理',
+    summary: '患者活动后气促加重 1 周, 血氧波动 92~95%, 听诊双肺可闻散在干啰音。',
+    diagnosisText: '慢性阻塞性肺疾病稳定期 GOLD II 级, 急性加重风险升高',
+    treatmentPlan: '维持噻托溴铵 18μg qd, 加用沙美特罗替卡松 50/250 bid; 4 周后复查肺功能。',
+    doctorAdvice: '避免冷空气和粉尘暴露; 每日血氧打卡; SpO2 < 92% 立即就诊。',
+  },
+
+  // 陈红(005) 心内科 PCI 出院小结 + 复诊
+  {
+    id: 'demo-medrec-005-a',
+    patientId: 'demo-patient-005',
+    externalRecordId: 'EMR-NOTE-20260213-DC-0009',
+    recordType: 'DISCHARGE_SUMMARY',
+    recordTime: daysAgo(102, 10, 30),
+    departmentName: '心血管内科',
+    title: '出院小结 - 冠心病 PCI 术后',
+    summary: '患者因反复胸闷胸痛入院, 冠脉造影示前降支近段 70% 狭窄, 行 PCI 植入药物洗脱支架 1 枚, 术后恢复良好。',
+    diagnosisText: '冠心病 (不稳定型心绞痛); PCI 术后 (LAD 支架)',
+    treatmentPlan: '阿司匹林 100mg qd + 替格瑞洛 90mg bid (双抗 12 个月) + 阿托伐他汀 20mg qn。',
+    doctorAdvice: '严格戒烟, 控制血压心率; 任何胸痛立即舌下含服硝酸甘油并就诊。',
+  },
+  {
+    id: 'demo-medrec-005-b',
+    patientId: 'demo-patient-005',
+    externalRecordId: 'EMR-NOTE-20260515-0033',
+    recordType: 'OUTPATIENT_NOTE',
+    recordTime: daysAgo(10, 14, 45),
+    departmentName: '心血管内科',
+    title: '门诊病历 - PCI 术后 3 月复诊',
+    summary: '患者偶发胸闷, 心率偏快 (静息 96~108 bpm), 无明显胸痛。复查心电图未见缺血改变。',
+    diagnosisText: 'PCI 术后随访期, 心率控制不佳',
+    treatmentPlan: '加用美托洛尔缓释片 47.5mg qd; 继续双抗 + 他汀方案。',
+    doctorAdvice: '继续戒烟, 心率目标 < 70 bpm; 1 个月后复诊。',
+  },
+];
+
+const examReportSeeds = [
+  // 王建国(001) 心电图 + 头颅 CT
+  {
+    id: 'demo-exam-001-a',
+    patientId: 'demo-patient-001',
+    externalExamId: 'EXAM-ECG-20260318-0001',
+    examType: 'ECG',
+    examName: '12 导联心电图',
+    examTime: daysAgo(68, 10, 0),
+    departmentName: '心电图室',
+    finding: '窦性心律, 心率 78 bpm, 电轴不偏。ST-T 段大致正常, 未见缺血改变。左心室高电压。',
+    conclusion: '窦性心律; 左心室高电压, 提示高血压性心脏改变可能。',
+    reportUrl: 'https://demo-hospital.example.com/reports/ecg-001-a.pdf',
+  },
+  {
+    id: 'demo-exam-001-b',
+    patientId: 'demo-patient-001',
+    externalExamId: 'EXAM-CT-20260524-0007',
+    examType: 'CT',
+    examName: '头颅 CT 平扫',
+    examTime: daysAgo(1, 8, 45),
+    departmentName: '影像科',
+    finding: '脑实质未见明显异常密度灶, 脑沟脑回未见明显增宽变浅, 中线结构居中。',
+    conclusion: '头颅 CT 未见明显异常, 未见急性脑出血及大面积脑梗死征象。',
+    reportUrl: 'https://demo-hospital.example.com/reports/ct-001-b.pdf',
+  },
+
+  // 李秀兰(002) 血液检验 (糖化 + 肾功)
+  {
+    id: 'demo-exam-002-a',
+    patientId: 'demo-patient-002',
+    externalExamId: 'EXAM-LAB-20260408-IN-0003',
+    examType: 'LAB',
+    examName: '血液检验: 糖化血红蛋白 + 肝肾功能',
+    examTime: daysAgo(47, 10, 30),
+    departmentName: '检验科',
+    finding: '糖化血红蛋白 9.8% (参考 4.0-6.0%); 空腹血糖 15.8 mmol/L; 肌酐 78 μmol/L; ALT 32 U/L。',
+    conclusion: '糖化血红蛋白显著升高, 提示长期血糖控制不佳; 肝肾功能正常。',
+    reportUrl: 'https://demo-hospital.example.com/reports/lab-002-a.pdf',
+  },
+  {
+    id: 'demo-exam-002-b',
+    patientId: 'demo-patient-002',
+    externalExamId: 'EXAM-NCV-20260411-0011',
+    examType: 'NCV',
+    examName: '神经传导速度 + 肌电图',
+    examTime: daysAgo(44, 11, 0),
+    departmentName: '神经电生理',
+    finding: '双下肢腓肠神经传导速度轻度减慢, 波幅尚可; 双正中神经感觉传导速度正常。',
+    conclusion: '提示糖尿病周围神经病变早期改变 (下肢感觉神经)。',
+    reportUrl: 'https://demo-hospital.example.com/reports/ncv-002-b.pdf',
+  },
+
+  // 张德明(003) 胸片 + 肺功能
+  {
+    id: 'demo-exam-003-a',
+    patientId: 'demo-patient-003',
+    externalExamId: 'EXAM-XRAY-20260510-0028',
+    examType: 'XRAY',
+    examName: '胸部正侧位 X 线',
+    examTime: daysAgo(15, 9, 50),
+    departmentName: '影像科',
+    finding: '双肺纹理增多紊乱, 肺气肿征象; 心影未见明显增大, 膈面光整。',
+    conclusion: '双肺慢性炎症伴肺气肿征象, 符合慢阻肺改变。',
+    reportUrl: 'https://demo-hospital.example.com/reports/xray-003-a.pdf',
+  },
+  {
+    id: 'demo-exam-003-b',
+    patientId: 'demo-patient-003',
+    externalExamId: 'EXAM-PFT-20260511-0014',
+    examType: 'PFT',
+    examName: '肺功能检查',
+    examTime: daysAgo(14, 10, 30),
+    departmentName: '呼吸功能室',
+    finding: 'FEV1 占预计值 58%; FEV1/FVC 0.62; 支气管舒张试验阴性。',
+    conclusion: '中度阻塞性通气功能障碍 (GOLD II 级), 支气管舒张试验阴性, 符合慢阻肺。',
+    reportUrl: 'https://demo-hospital.example.com/reports/pft-003-b.pdf',
+  },
+
+  // 赵敏(004) 体检超声 + 血脂
+  {
+    id: 'demo-exam-004-a',
+    patientId: 'demo-patient-004',
+    externalExamId: 'EXAM-US-20260418-0011',
+    examType: 'ULTRASOUND',
+    examName: '腹部超声',
+    examTime: daysAgo(37, 8, 30),
+    departmentName: '超声科',
+    finding: '肝脏体积稍大, 回声增粗增强, 肝内血管走形正常; 胆囊壁光滑; 双肾未见明显异常。',
+    conclusion: '轻度脂肪肝。',
+    reportUrl: 'https://demo-hospital.example.com/reports/us-004-a.pdf',
+  },
+
+  // 陈红(005) 心脏超声 + 冠脉造影 + 复诊心电图
+  {
+    id: 'demo-exam-005-a',
+    patientId: 'demo-patient-005',
+    externalExamId: 'EXAM-ECHO-20260206-IN-0009',
+    examType: 'ECHO',
+    examName: '经胸超声心动图',
+    examTime: daysAgo(109, 11, 30),
+    departmentName: '超声科',
+    finding: '左室壁运动节段性减弱 (前壁中段), LVEF 53%; 各瓣膜未见明显异常; 主动脉根部内径正常。',
+    conclusion: '左室前壁节段性运动减弱; 左室收缩功能轻度降低 (LVEF 53%)。',
+    reportUrl: 'https://demo-hospital.example.com/reports/echo-005-a.pdf',
+  },
+  {
+    id: 'demo-exam-005-b',
+    patientId: 'demo-patient-005',
+    externalExamId: 'EXAM-CAG-20260207-IN-0009',
+    examType: 'ANGIOGRAPHY',
+    examName: '冠状动脉造影',
+    examTime: daysAgo(108, 9, 0),
+    departmentName: '心血管介入中心',
+    finding: '左前降支近段 70% 局限性狭窄; 回旋支及右冠未见明显狭窄。已于前降支植入药物洗脱支架 1 枚, 术后造影 TIMI 3 级血流。',
+    conclusion: '冠状动脉单支病变 (LAD); PCI 成功植入支架 1 枚。',
+    reportUrl: 'https://demo-hospital.example.com/reports/cag-005-b.pdf',
+  },
+  {
+    id: 'demo-exam-005-c',
+    patientId: 'demo-patient-005',
+    externalExamId: 'EXAM-ECG-20260515-0033',
+    examType: 'ECG',
+    examName: '12 导联心电图',
+    examTime: daysAgo(10, 15, 0),
+    departmentName: '心电图室',
+    finding: '窦性心律, 心率 102 bpm。胸前导联未见 ST 段动态变化, 与术前对比无新发缺血改变。',
+    conclusion: '窦性心动过速; PCI 术后随访, 未见新发缺血。',
+    reportUrl: 'https://demo-hospital.example.com/reports/ecg-005-c.pdf',
+  },
+];
+
+const hospitalMedicationOrderSeeds = [
+  // 王建国(001) 心内科门诊 + 急诊处方
+  {
+    id: 'demo-rx-001-a',
+    patientId: 'demo-patient-001',
+    externalOrderId: 'RX-20260318-0001-1',
+    encounterRecordId: 'demo-encounter-001-a',
+    medicationName: '苯磺酸氨氯地平片',
+    dosage: '5mg',
+    frequency: '每日 1 次',
+    route: '口服',
+    duration: '30 天',
+    prescribedBy: '张主任',
+    prescribedAt: daysAgo(68, 10, 15),
+  },
+  {
+    id: 'demo-rx-001-b',
+    patientId: 'demo-patient-001',
+    externalOrderId: 'RX-20260318-0001-2',
+    encounterRecordId: 'demo-encounter-001-a',
+    medicationName: '缬沙坦胶囊',
+    dosage: '80mg',
+    frequency: '每日 1 次',
+    route: '口服',
+    duration: '30 天',
+    prescribedBy: '张主任',
+    prescribedAt: daysAgo(68, 10, 16),
+  },
+  {
+    id: 'demo-rx-001-c',
+    patientId: 'demo-patient-001',
+    externalOrderId: 'RX-20260524-EM-0007-1',
+    encounterRecordId: 'demo-encounter-001-c',
+    medicationName: '盐酸乌拉地尔注射液',
+    dosage: '25mg',
+    frequency: '静脉缓慢推注 1 次, 必要时重复',
+    route: '静脉注射',
+    duration: '急诊单次医嘱',
+    prescribedBy: '急诊王医生',
+    prescribedAt: daysAgo(1, 8, 25),
+  },
+
+  // 李秀兰(002) 住院 + 出院 + 复诊
+  {
+    id: 'demo-rx-002-a',
+    patientId: 'demo-patient-002',
+    externalOrderId: 'RX-20260408-IN-0003-1',
+    encounterRecordId: 'demo-encounter-002-a',
+    medicationName: '二甲双胍片',
+    dosage: '500mg',
+    frequency: '每日 2 次, 随餐服用',
+    route: '口服',
+    duration: '住院期间',
+    prescribedBy: '李主任',
+    prescribedAt: daysAgo(47, 10, 30),
+  },
+  {
+    id: 'demo-rx-002-b',
+    patientId: 'demo-patient-002',
+    externalOrderId: 'RX-20260415-DC-0003-1',
+    encounterRecordId: 'demo-encounter-002-a',
+    medicationName: '甘精胰岛素注射液',
+    dosage: '8U',
+    frequency: '每日 1 次, 睡前皮下注射',
+    route: '皮下注射',
+    duration: '出院后长期',
+    prescribedBy: '李主任',
+    prescribedAt: daysAgo(40, 10, 10),
+  },
+  {
+    id: 'demo-rx-002-c',
+    patientId: 'demo-patient-002',
+    externalOrderId: 'RX-20260520-0042-1',
+    encounterRecordId: 'demo-encounter-002-b',
+    medicationName: '二甲双胍片',
+    dosage: '1000mg',
+    frequency: '每日 2 次, 随餐服用',
+    route: '口服',
+    duration: '30 天',
+    prescribedBy: '李主任',
+    prescribedAt: daysAgo(5, 10, 45),
+  },
+  {
+    id: 'demo-rx-002-d',
+    patientId: 'demo-patient-002',
+    externalOrderId: 'RX-20260520-0042-2',
+    encounterRecordId: 'demo-encounter-002-b',
+    medicationName: '德谷胰岛素注射液',
+    dosage: '10U',
+    frequency: '每日 1 次, 睡前皮下注射',
+    route: '皮下注射',
+    duration: '30 天',
+    prescribedBy: '李主任',
+    prescribedAt: daysAgo(5, 10, 46),
+  },
+
+  // 张德明(003) 呼吸科吸入剂
+  {
+    id: 'demo-rx-003-a',
+    patientId: 'demo-patient-003',
+    externalOrderId: 'RX-20260510-0028-1',
+    encounterRecordId: 'demo-encounter-003-a',
+    medicationName: '噻托溴铵粉吸入剂',
+    dosage: '18μg',
+    frequency: '每日 1 次',
+    route: '吸入',
+    duration: '30 天',
+    prescribedBy: '王主任',
+    prescribedAt: daysAgo(15, 9, 50),
+  },
+  {
+    id: 'demo-rx-003-b',
+    patientId: 'demo-patient-003',
+    externalOrderId: 'RX-20260510-0028-2',
+    encounterRecordId: 'demo-encounter-003-a',
+    medicationName: '沙美特罗替卡松吸入剂',
+    dosage: '50μg/250μg',
+    frequency: '每日 2 次',
+    route: '吸入',
+    duration: '30 天',
+    prescribedBy: '王主任',
+    prescribedAt: daysAgo(15, 9, 51),
+  },
+
+  // 陈红(005) PCI 出院双抗 + 他汀 + 加用美托洛尔
+  {
+    id: 'demo-rx-005-a',
+    patientId: 'demo-patient-005',
+    externalOrderId: 'RX-20260213-DC-0009-1',
+    encounterRecordId: 'demo-encounter-005-a',
+    medicationName: '阿司匹林肠溶片',
+    dosage: '100mg',
+    frequency: '每日 1 次, 饭后服用',
+    route: '口服',
+    duration: '长期',
+    prescribedBy: '赵主任',
+    prescribedAt: daysAgo(102, 10, 40),
+  },
+  {
+    id: 'demo-rx-005-b',
+    patientId: 'demo-patient-005',
+    externalOrderId: 'RX-20260213-DC-0009-2',
+    encounterRecordId: 'demo-encounter-005-a',
+    medicationName: '替格瑞洛片',
+    dosage: '90mg',
+    frequency: '每日 2 次',
+    route: '口服',
+    duration: '12 个月 (双抗疗程)',
+    prescribedBy: '赵主任',
+    prescribedAt: daysAgo(102, 10, 41),
+  },
+  {
+    id: 'demo-rx-005-c',
+    patientId: 'demo-patient-005',
+    externalOrderId: 'RX-20260213-DC-0009-3',
+    encounterRecordId: 'demo-encounter-005-a',
+    medicationName: '阿托伐他汀钙片',
+    dosage: '20mg',
+    frequency: '每日 1 次, 睡前服用',
+    route: '口服',
+    duration: '长期',
+    prescribedBy: '赵主任',
+    prescribedAt: daysAgo(102, 10, 42),
+  },
+  {
+    id: 'demo-rx-005-d',
+    patientId: 'demo-patient-005',
+    externalOrderId: 'RX-20260515-0033-1',
+    encounterRecordId: 'demo-encounter-005-b',
+    medicationName: '美托洛尔缓释片',
+    dosage: '47.5mg',
+    frequency: '每日 1 次',
+    route: '口服',
+    duration: '30 天',
+    prescribedBy: '赵主任',
+    prescribedAt: daysAgo(10, 14, 50),
+  },
+  {
+    id: 'demo-rx-005-e',
+    patientId: 'demo-patient-005',
+    externalOrderId: 'RX-20260515-0033-2',
+    encounterRecordId: 'demo-encounter-005-b',
+    medicationName: '硝酸甘油片',
+    dosage: '0.5mg',
+    frequency: '胸痛时舌下含服, 必要时 5 分钟后重复 1 次, 最多 3 次',
+    route: '舌下含服',
+    duration: '随身备用',
+    prescribedBy: '赵主任',
+    prescribedAt: daysAgo(10, 14, 51),
+  },
+];
+
+
+// ============================================================================
+// hospital-records-seed (gateway-driven)
+//
+// Background:
+//   生产环境中, 医院 HIS / EMR / LIS 通过下面四个通道把就诊 / 病历 / 检查 / 处方
+//   推到我们的网关:
+//
+//     1) POST /gateway/his/events/*     (简化 REST,本 seed 模拟的是这条)
+//     2) POST /gateway/fhir/* (FHIR R4 资源)
+//     3) HL7 v2 over MLLP TCP
+//     4) 中间表 / 前置机 cron 拉取
+//
+//   网关收到事件后:
+//     - InboundEventService 写 IntegrationSyncBatch + IntegrationSyncRecord
+//       (审计层, promotionStatus = PENDING)
+//     - IntegrationPromoteService 读审计层, 落到正式业务表
+//       (EncounterRecord / MedicalRecordSummary / ExamReportRecord /
+//        HospitalMedicationOrder), 并回写 localTargetType / localTargetId /
+//       promotionStatus = PROMOTED
+//
+//   之前的 seed 直接 prisma.encounterRecord.createMany(...) 绕过了这条链路,
+//   导致【接口中心】里看不到对应的网关流水, 也无法演示「审计 + promote 双状态」。
+//
+// 这个 helper 重现生产行为:
+//   每条 encounterSeeds / medicalRecordSummarySeeds / examReportSeeds /
+//   hospitalMedicationOrderSeeds 都会被翻译成一个 NormalizedEvent, 然后:
+//     (a) upsert 一条 IntegrationSyncBatch (单条记录批次, 对应 REST 一次性推送)
+//     (b) 写 IntegrationSyncRecord, 状态 SUCCESS + PROMOTED
+//     (c) 写业务表行
+//     (d) 回填审计行的 localTargetType + localTargetId + promotedAt
+//   最终 demo 数据库的"端到端形状"和生产跑了一阵子后完全一致。
+//
+//   注意: 我们不走真实的 InboundEventService / IntegrationPromoteService TS 代码,
+//   因为 seed 是脱离 NestJS 上下文的纯 Node 脚本, 拉 DI 容器代价过大。
+//   这里手动复刻了 promote 流水线在 happy-path 下的最终落库形状, FK / 字段映射
+//   都和 integration-promote.service.ts 中的 promoteEncounter / promoteDocument /
+//   promoteExamReport / promoteMedication 严格对齐。
+// ============================================================================
+
+const GATEWAY_CHANNEL_HIS_EVENT_REST = 'GATEWAY_HIS_EVENT_REST';
+const GATEWAY_SOURCE_CODE_HIS_EVENT_REST = 'GATEWAY_HIS_EVENT_REST';
+const GATEWAY_RESOURCE_ENCOUNTER = 'ENCOUNTER';
+const GATEWAY_RESOURCE_DOCUMENT = 'DOCUMENT';
+const GATEWAY_RESOURCE_EXAM_REPORT = 'EXAM_REPORT';
+const GATEWAY_RESOURCE_MEDICATION = 'MEDICATION';
+
+// 用于事务清理 + 反查校验: 所有 demo 院内病历事件的 externalRecordId 全量集合。
+// 注意 hospitalMedicationOrderSeeds 的 externalOrderId 同时是 IntegrationSyncRecord
+// 的 externalRecordId, 所以一并放进来。
+const HOSPITAL_RECORD_DEMO_EXTERNAL_IDS = [
+  ...encounterSeeds.map((s) => s.externalVisitId),
+  ...medicalRecordSummarySeeds.map((s) => s.externalRecordId),
+  ...examReportSeeds.map((s) => s.externalExamId),
+  ...hospitalMedicationOrderSeeds.map((s) => s.externalOrderId),
+].filter(Boolean);
+
+/**
+ * 网关在 InboundEventService 启动时会 upsert 一条 GATEWAY_HIS_EVENT_REST
+ * 的 IntegrationSource 行 (见 GatewaySourceRegistryService.onModuleInit)。
+ * 但 seed-all.js 是脱离 NestJS 的脚本, 那段 init 不会跑, 所以这里手动复刻。
+ */
+async function getOrSeedGatewayHisEventSource() {
+  return prisma.integrationSource.upsert({
+    where: { code: GATEWAY_SOURCE_CODE_HIS_EVENT_REST },
+    update: {},
+    create: {
+      code: GATEWAY_SOURCE_CODE_HIS_EVENT_REST,
+      name: '数据接入网关 - 简化 HIS 事件 REST',
+      systemType: IntegrationSystemType.HIS,
+      description:
+        '医院端在患者出院 / 开具处方 / 检查报告等事件触发时通过 HTTPS JSON 调用 /gateway/his/events/*。',
+      isEnabled: true,
+      // demo 默认 false (手动 promote), 但 seed 在这里同步完成了 promote 工作。
+      // 上线时管理员在【接口中心】勾选 autoPromote 即可改为自动。
+      autoPromote: false,
+    },
+  });
+}
+
+/**
+ * 把一条 NormalizedEvent 走完"审计 + promote"的最终形状:
+ *   batch (1 record) → syncRecord (PROMOTED) → business row → 回写 localTarget*
+ *
+ * @param {object} args
+ * @param {object} args.source       - IntegrationSource row
+ * @param {string} args.resourceType - GATEWAY_RESOURCE_* 常量值
+ * @param {string} args.triggerEvent - 触发事件标签, 例如 "HIS_EVENT.ENCOUNTER"
+ * @param {string} args.externalRecordId - 上游 eventId = 业务表里的 externalVisitId/...
+ * @param {object} args.patientIdentifier - { hospitalPatientId, idCardNo?, phone? }
+ * @param {object} args.normalizedPayload - 规范化后的业务字段
+ * @param {Date}   args.receivedAt   - 网关接收事件的时间 (用于 batch + audit 行)
+ * @param {(prismaClient) => Promise<{type: string, id: string}>} args.writeBusinessRow
+ *        创建业务表行的 callback, 返回 { type: 'EncounterRecord', id: '...' }
+ */
+async function emitGatewayEvent({
+  source,
+  resourceType,
+  triggerEvent,
+  externalRecordId,
+  patientIdentifier,
+  normalizedPayload,
+  receivedAt,
+  writeBusinessRow,
+}) {
+  return prisma.$transaction(async (tx) => {
+    const batch = await tx.integrationSyncBatch.create({
+      data: {
+        sourceId: source.id,
+        batchType: GATEWAY_CHANNEL_HIS_EVENT_REST,
+        status: 'SUCCESS',
+        startedAt: receivedAt,
+        finishedAt: receivedAt,
+        totalCount: 1,
+        successCount: 1,
+        failedCount: 0,
+      },
+    });
+
+    // normalizedData 形状必须和 InboundEventService.writeRecord 一致, 否则
+    // IntegrationPromoteService.unwrapNormalized 解包时会拿不到 patient / payload。
+    const normalizedData = {
+      channel: GATEWAY_CHANNEL_HIS_EVENT_REST,
+      triggerEvent,
+      patient: patientIdentifier,
+      payload: normalizedPayload,
+      receivedAt: receivedAt.toISOString(),
+    };
+
+    const auditRow = await tx.integrationSyncRecord.create({
+      data: {
+        sourceId: source.id,
+        batchId: batch.id,
+        externalRecordType: resourceType,
+        externalRecordId,
+        status: 'SUCCESS',
+        rawData: normalizedPayload, // 简化:不再造一份外层 DTO, 用 normalizedPayload 充当
+        normalizedData,
+        promotionStatus: 'PROMOTED',
+        promotionMessage: 'demo seed: 模拟生产链路, 审计 + promote 同步完成。',
+        promotedAt: receivedAt,
+        createdAt: receivedAt,
+      },
+    });
+
+    const businessRow = await writeBusinessRow(tx);
+
+    // 回写 localTargetType / localTargetId, 完成"审计 → 业务"的双向追溯。
+    await tx.integrationSyncRecord.update({
+      where: { id: auditRow.id },
+      data: {
+        localTargetType: businessRow.type,
+        localTargetId: businessRow.id,
+      },
+    });
+
+    return { batchId: batch.id, auditRowId: auditRow.id, businessRow };
+  });
+}
+
+/**
+ * 把 encounterSeeds / medicalRecordSummarySeeds / examReportSeeds /
+ * hospitalMedicationOrderSeeds 4 组数据全部通过网关流水线落库。
+ * 与生产的差别仅在于:
+ *   - 没有走真实 HTTP POST 到 /gateway/his/events/* (省掉网络一跳)
+ *   - autoPromote 被 seed 主动当作 true 处理 (生产中默认 false, 由管理员入库)
+ *
+ * 行为差别:
+ *   - 业务表行的 sourceSystem 字段从 'HIS_DEMO' 改成 'GATEWAY_HIS_EVENT_REST',
+ *     表示"这条数据是通过网关流水线进来的", 和 IntegrationSyncRecord 上的
+ *     normalizedData.channel 完全对齐, 在接口中心点 audit 行能跳回业务表。
+ */
+async function seedHospitalRecordsViaGateway() {
+  const source = await getOrSeedGatewayHisEventSource();
+  let events = 0;
+  let promoted = 0;
+
+  // ── 1) Encounter events ──────────────────────────────────────────────────
+  for (const s of encounterSeeds) {
+    await emitGatewayEvent({
+      source,
+      resourceType: GATEWAY_RESOURCE_ENCOUNTER,
+      triggerEvent: 'HIS_EVENT.ENCOUNTER',
+      externalRecordId: s.externalVisitId,
+      patientIdentifier: { hospitalPatientId: s.hospitalPatientId },
+      normalizedPayload: {
+        encounterType: s.visitType,
+        startedAt: s.visitTime.toISOString(),
+        department: s.departmentName,
+        doctor: s.doctorName,
+        chiefComplaint: s.chiefComplaint,
+        diagnosisText: s.diagnosisSummary,
+        summary: s.treatmentSummary,
+      },
+      receivedAt: s.visitTime,
+      writeBusinessRow: async (tx) => {
+        const row = await tx.encounterRecord.create({
+          data: {
+            id: s.id,
+            patientId: s.patientId,
+            hospitalPatientId: s.hospitalPatientId,
+            externalVisitId: s.externalVisitId,
+            visitType: s.visitType,
+            departmentName: s.departmentName,
+            doctorName: s.doctorName,
+            visitTime: s.visitTime,
+            chiefComplaint: s.chiefComplaint,
+            diagnosisSummary: s.diagnosisSummary,
+            treatmentSummary: s.treatmentSummary,
+            dataSource: 'HIS',
+            sourceSystem: GATEWAY_CHANNEL_HIS_EVENT_REST,
+          },
+        });
+        return { type: 'EncounterRecord', id: row.id };
+      },
+    });
+    events += 1;
+    promoted += 1;
+  }
+
+  // ── 2) Document events → MedicalRecordSummary ────────────────────────────
+  // documentType keyword 用于在 promote 流程里映射 MedicalRecordType:
+  //   discharge → DISCHARGE_SUMMARY, inpatient → INPATIENT_RECORD,
+  //   progress  → PROGRESS_NOTE,     consult   → CONSULTATION_NOTE,
+  //   其余       → OUTPATIENT_NOTE
+  const RECORD_TYPE_TO_DOC_KEYWORD = {
+    OUTPATIENT_NOTE: 'outpatient',
+    INPATIENT_RECORD: 'inpatient',
+    DISCHARGE_SUMMARY: 'discharge',
+    PROGRESS_NOTE: 'progress',
+    CONSULTATION_NOTE: 'consultation',
+  };
+  for (const s of medicalRecordSummarySeeds) {
+    const hpId = demoPatients.find((p) => p.id === s.patientId)?.hospitalPatientId;
+    await emitGatewayEvent({
+      source,
+      resourceType: GATEWAY_RESOURCE_DOCUMENT,
+      triggerEvent: 'HIS_EVENT.DOCUMENT',
+      externalRecordId: s.externalRecordId,
+      patientIdentifier: { hospitalPatientId: hpId },
+      normalizedPayload: {
+        documentType: RECORD_TYPE_TO_DOC_KEYWORD[s.recordType] || 'outpatient',
+        createdAt: s.recordTime.toISOString(),
+        documentTitle: s.title,
+        department: s.departmentName,
+        summary: s.summary,
+        diagnosisText: s.diagnosisText,
+        treatmentPlan: s.treatmentPlan,
+        doctorAdvice: s.doctorAdvice,
+      },
+      receivedAt: s.recordTime,
+      writeBusinessRow: async (tx) => {
+        const row = await tx.medicalRecordSummary.create({
+          data: {
+            id: s.id,
+            patientId: s.patientId,
+            externalRecordId: s.externalRecordId,
+            recordType: s.recordType,
+            recordTime: s.recordTime,
+            departmentName: s.departmentName,
+            title: s.title,
+            summary: s.summary,
+            diagnosisText: s.diagnosisText,
+            treatmentPlan: s.treatmentPlan,
+            doctorAdvice: s.doctorAdvice,
+            dataSource: 'EMR',
+            sourceSystem: GATEWAY_CHANNEL_HIS_EVENT_REST,
+          },
+        });
+        return { type: 'MedicalRecordSummary', id: row.id };
+      },
+    });
+    events += 1;
+    promoted += 1;
+  }
+
+  // ── 3) Exam-report events → ExamReportRecord ─────────────────────────────
+  for (const s of examReportSeeds) {
+    const hpId = demoPatients.find((p) => p.id === s.patientId)?.hospitalPatientId;
+    await emitGatewayEvent({
+      source,
+      resourceType: GATEWAY_RESOURCE_EXAM_REPORT,
+      triggerEvent: 'HIS_EVENT.EXAM_REPORT',
+      externalRecordId: s.externalExamId,
+      patientIdentifier: { hospitalPatientId: hpId },
+      normalizedPayload: {
+        examType: s.examType,
+        examName: s.examName,
+        examTime: s.examTime.toISOString(),
+        department: s.departmentName,
+        finding: s.finding,
+        conclusion: s.conclusion,
+        reportUrl: s.reportUrl,
+      },
+      receivedAt: s.examTime,
+      writeBusinessRow: async (tx) => {
+        const row = await tx.examReportRecord.create({
+          data: {
+            id: s.id,
+            patientId: s.patientId,
+            externalExamId: s.externalExamId,
+            examType: s.examType,
+            examName: s.examName,
+            examTime: s.examTime,
+            departmentName: s.departmentName,
+            finding: s.finding,
+            conclusion: s.conclusion,
+            reportUrl: s.reportUrl,
+            dataSource: 'HIS',
+            sourceSystem: GATEWAY_CHANNEL_HIS_EVENT_REST,
+          },
+        });
+        return { type: 'ExamReportRecord', id: row.id };
+      },
+    });
+    events += 1;
+    promoted += 1;
+  }
+
+  // ── 4) Medication events → HospitalMedicationOrder ───────────────────────
+  // 注意: 处方有 FK 引用 encounterRecord, 而 encounter 已在第 1 步建好,
+  // 所以这一步可以直接引用 encounterRecordId。
+  for (const s of hospitalMedicationOrderSeeds) {
+    const hpId = demoPatients.find((p) => p.id === s.patientId)?.hospitalPatientId;
+    await emitGatewayEvent({
+      source,
+      resourceType: GATEWAY_RESOURCE_MEDICATION,
+      triggerEvent: 'HIS_EVENT.PRESCRIPTION',
+      externalRecordId: s.externalOrderId,
+      patientIdentifier: { hospitalPatientId: hpId },
+      normalizedPayload: {
+        drugName: s.medicationName,
+        dosage: s.dosage,
+        frequency: s.frequency,
+        instructions: `${s.route ?? ''} ${s.duration ?? ''}`.trim() || undefined,
+        startDate: s.prescribedAt.toISOString(),
+      },
+      receivedAt: s.prescribedAt,
+      writeBusinessRow: async (tx) => {
+        const row = await tx.hospitalMedicationOrder.create({
+          data: {
+            id: s.id,
+            patientId: s.patientId,
+            externalOrderId: s.externalOrderId,
+            encounterRecordId: s.encounterRecordId,
+            medicationName: s.medicationName,
+            dosage: s.dosage,
+            frequency: s.frequency,
+            route: s.route,
+            duration: s.duration,
+            prescribedBy: s.prescribedBy,
+            prescribedAt: s.prescribedAt,
+            dataSource: 'HIS',
+            sourceSystem: GATEWAY_CHANNEL_HIS_EVENT_REST,
+          },
+        });
+        return { type: 'HospitalMedicationOrder', id: row.id };
+      },
+    });
+    events += 1;
+    promoted += 1;
+  }
+
+  return { events, promoted };
+}
+
 async function seedClinicalDemo() {
   const patientIds = demoPatients.map((p) => p.id);
   const chronicLeadIds = chronicLeadSeeds.map((l) => l.id);
@@ -1011,6 +1986,20 @@ async function seedClinicalDemo() {
     prisma.medicationCheckIn.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.questionnaireResult.deleteMany({ where: { patientId: { in: patientIds } } }),
     prisma.patientSession.deleteMany({ where: { patientId: { in: patientIds } } }),
+
+    // hospital-records-seed (gateway-driven): 删除顺序很关键。
+    //   1. 先删审计层 IntegrationSyncRecord, 因为他们携带 localTargetId 指向业务表;
+    //      留下来会出现"审计在但主数据没了"的悬挂引用, 导致【接口中心】点详情时 500。
+    //   2. HospitalMedicationOrder 有 FK → EncounterRecord, 先删处方再删就诊。
+    //   3. 业务表按 patientId 清, 跟之前一致。
+    prisma.integrationSyncRecord.deleteMany({
+      where: { externalRecordId: { in: HOSPITAL_RECORD_DEMO_EXTERNAL_IDS } },
+    }),
+    prisma.hospitalMedicationOrder.deleteMany({ where: { patientId: { in: patientIds } } }),
+    prisma.encounterRecord.deleteMany({ where: { patientId: { in: patientIds } } }),
+    prisma.medicalRecordSummary.deleteMany({ where: { patientId: { in: patientIds } } }),
+    prisma.examReportRecord.deleteMany({ where: { patientId: { in: patientIds } } }),
+
 
     // patient-self-consent-bind: PatientConsent 没有 FK，按 demoOpenId / id / patientId
     // 三个维度兜底清理，保证多次跑 seed 不残留旧 demo 数据。
@@ -1139,6 +2128,36 @@ async function seedClinicalDemo() {
   // 这样 chronicLeadId / bindingRequestId 的反向链都不会变成悬挂引用。
   await prisma.patientConsent.createMany({ data: consentSeeds });
 
+  // hospital-records-seed (gateway-driven):
+  // 不再绕过网关直接 createMany 院内病历表 — 改为模拟「医院 HIS 通过
+  // POST /gateway/his/events/* 把事件推到网关 → 审计层落库 → promote 到主数据」
+  // 这条生产链路，让 demo 行为和真实接入一致。详见 seedHospitalRecordsViaGateway。
+  const gatewayCounts = await seedHospitalRecordsViaGateway();
+  console.log(
+    `  ✓ Gateway-driven hospital records: ${gatewayCounts.events} events ingested, `
+    + `${gatewayCounts.promoted} promoted to business tables`,
+  );
+
+  // 落库后立即按 demo-patient-001 (王建国) 反查 4 张业务表 + 审计表, 确认前端
+  // GET /patients/demo-patient-001/encounter-records 等接口能拿到数据。
+  const verifyPatientId = 'demo-patient-001';
+  const [vEnc, vMed, vExm, vRx, vAudit] = await Promise.all([
+    prisma.encounterRecord.findMany({ where: { patientId: verifyPatientId }, orderBy: { visitTime: 'desc' } }),
+    prisma.medicalRecordSummary.findMany({ where: { patientId: verifyPatientId }, orderBy: { recordTime: 'desc' } }),
+    prisma.examReportRecord.findMany({ where: { patientId: verifyPatientId }, orderBy: { examTime: 'desc' } }),
+    prisma.hospitalMedicationOrder.findMany({ where: { patientId: verifyPatientId }, orderBy: { prescribedAt: 'desc' } }),
+    prisma.integrationSyncRecord.count({
+      where: {
+        promotionStatus: 'PROMOTED',
+        externalRecordId: { in: HOSPITAL_RECORD_DEMO_EXTERNAL_IDS },
+      },
+    }),
+  ]);
+  console.log(
+    `  ✓ Verify ${verifyPatientId} (王建国): enc=${vEnc.length} medrec=${vMed.length} `
+    + `exam=${vExm.length} rx=${vRx.length}  |  audit-rows PROMOTED=${vAudit}`,
+  );
+
   console.log('Clinical demo v2 seed completed:');
   console.log(`- ${demoPatients.length} patients`);
   console.log(`- ${profileSeeds.length} disease profiles`);
@@ -1151,10 +2170,556 @@ async function seedClinicalDemo() {
     `- ${chronicLeadSeeds.length} chronic leads (pending/contacted/deferred/signed/rejected/expired)`,
   );
   console.log(
+    `- ${encounterSeeds.length} encounter records (就诊记录)`,
+  );
+  console.log(
+    `- ${medicalRecordSummarySeeds.length} medical record summaries (病历摘要)`,
+  );
+  console.log(
+    `- ${examReportSeeds.length} exam reports (检查报告)`,
+  );
+  console.log(
+    `- ${hospitalMedicationOrderSeeds.length} hospital medication orders (院内处方)`,
+  );
+  console.log(
     `- ${consentSeeds.length} patient consents (consent version ${PATIENT_CONSENT_VERSION})`,
   );
 }
 
+
+
+// patient-engagement-wechat-h5-v1 seed
+//
+// 创建 demo HospitalTenant, 把现有 demo users/patients 归到该 tenant,
+// 给前 2 个 patient 创建 PatientWechatIdentity (本院服务号已关注),
+// 给若干 patient 创建 PatientFormLink + PatientOutboundMessage 演示数据。
+async function seedPatientEngagement() {
+  const cryptoLib = require('crypto');
+
+  function tokenHashFor(token) {
+    return cryptoLib.createHash('sha256').update(token, 'utf8').digest('hex');
+  }
+
+  const tenant = await prisma.hospitalTenant.upsert({
+    where: { code: 'demo-hospital' },
+    update: {
+      name: '某某市人民医院慢病中心',
+      displayName: '某某市人民医院 · 慢病管理中心',
+      isActive: true,
+    },
+    create: {
+      id: 'demo-tenant-001',
+      code: 'demo-hospital',
+      name: '某某市人民医院慢病中心',
+      displayName: '某某市人民医院 · 慢病管理中心',
+      isActive: true,
+    },
+  });
+
+  // Backfill users / patients that don't yet have a tenant.
+  await prisma.user.updateMany({
+    where: { hospitalTenantId: null },
+    data: { hospitalTenantId: tenant.id },
+  });
+  await prisma.patient.updateMany({
+    where: { hospitalTenantId: null },
+    data: { hospitalTenantId: tenant.id },
+  });
+
+  // patient_engagement_hospital_wechat_v2:
+  //   per-hospital WeChat 服务号. dev 用 mock 配置 + dev-encrypted secret.
+  //   secret-crypto.util 使用相同的 PATIENT_ENGAGEMENT_SECRET_KEY 派生密钥.
+  //   这里手写一份 envelope (v1.<iv>.<ct>.<tag>) 太脆弱 — 改在 patient-engagement
+  //   service 启动时再加密一次也行; 但 seed 想 idempotent 不依赖运行时, 所以
+  //   存一段 base64 marker "dev-encrypted-secret" 占位, 让 decryptSecret 安全失败
+  //   回退到"请重新设置". 真实开发只要在 UI 上重新填写 appSecret 即可.
+  await prisma.hospitalWechatOfficialAccount.upsert({
+    where: { hospitalTenantId: tenant.id },
+    update: {
+      accountName: '某某市人民医院 · 健康随访',
+      appId: 'wx_demo_hospital_001',
+      isEnabled: true,
+      isVerified: true,
+      templateQuestionnaireId: 'tmpl_demo_questionnaire',
+      templateVitalId: 'tmpl_demo_vital',
+      templateMedicationId: 'tmpl_demo_medication',
+      templateHospitalVisitId: 'tmpl_demo_hospital_visit',
+    },
+    create: {
+      hospitalTenantId: tenant.id,
+      accountName: '某某市人民医院 · 健康随访',
+      originalId: 'gh_demo_hospital_001',
+      appId: 'wx_demo_hospital_001',
+      // Placeholder ciphertext — decryptSecret will gracefully return null;
+      // hospital admin should re-enter the appSecret in the UI on first use.
+      appSecretEncrypted: 'v1.AAAA.AAAA.AAAA',
+      qrCodeUrl: null,
+      h5BaseUrl: process.env.PATIENT_ENGAGEMENT_BASE_URL || 'http://localhost:5173',
+      oauthCallbackDomain: 'localhost:3000',
+      templateQuestionnaireId: 'tmpl_demo_questionnaire',
+      templateVitalId: 'tmpl_demo_vital',
+      templateMedicationId: 'tmpl_demo_medication',
+      templateHospitalVisitId: 'tmpl_demo_hospital_visit',
+      isEnabled: true,
+      isVerified: true,
+    },
+  });
+
+
+  const wechatIdentities = [
+    { patientId: 'demo-patient-001', openId: 'demo-openid-wjg-001' },
+    { patientId: 'demo-patient-002', openId: 'demo-openid-lxl-002' },
+  ];
+  // patient_engagement_hospital_wechat_v2_1: second tenant + bindings
+  const tenant2 = await prisma.hospitalTenant.upsert({
+    where: { code: 'demo-clinic-2' },
+    update: { name: '示例三甲医院 · 慢病随访', displayName: '示例三甲医院 · 慢病随访', isActive: true },
+    create: {
+      id: 'demo-tenant-002',
+      code: 'demo-clinic-2',
+      name: '示例三甲医院 · 慢病随访',
+      displayName: '示例三甲医院 · 慢病随访',
+      isActive: true,
+    },
+  });
+  await prisma.user.update({
+    where: { username: 'nurse2' },
+    data: { hospitalTenantId: tenant2.id },
+  });
+  await prisma.hospitalWechatOfficialAccount.upsert({
+    where: { hospitalTenantId: tenant2.id },
+    update: {
+      accountName: '示例三甲医院 · 健康随访',
+      appId: 'wx_demo_hospital_002',
+      isEnabled: true,
+      isVerified: true,
+      templateQuestionnaireId: 'tmpl_demo_questionnaire_2',
+      templateVitalId: 'tmpl_demo_vital_2',
+      templateMedicationId: 'tmpl_demo_medication_2',
+      templateHospitalVisitId: 'tmpl_demo_hospital_visit_2',
+    },
+    create: {
+      hospitalTenantId: tenant2.id,
+      accountName: '示例三甲医院 · 健康随访',
+      originalId: 'gh_demo_hospital_002',
+      appId: 'wx_demo_hospital_002',
+      appSecretEncrypted: 'v1.AAAA.AAAA.AAAA',
+      h5BaseUrl: process.env.PATIENT_ENGAGEMENT_BASE_URL || 'http://localhost:5173',
+      oauthCallbackDomain: 'localhost:3000',
+      templateQuestionnaireId: 'tmpl_demo_questionnaire_2',
+      templateVitalId: 'tmpl_demo_vital_2',
+      templateMedicationId: 'tmpl_demo_medication_2',
+      templateHospitalVisitId: 'tmpl_demo_hospital_visit_2',
+      isEnabled: true,
+      isVerified: true,
+    },
+  });
+  await prisma.patient.upsert({
+    where: { id: 'demo-patient-101' },
+    update: {
+      hospitalTenant: { connect: { id: tenant2.id } },
+      name: '示例患者 · 三甲',
+      phone: '13700001011',
+    },
+    create: {
+      id: 'demo-patient-101',
+      hospitalPatientId: 'CLINIC2-001',
+      hospitalTenant: { connect: { id: tenant2.id } },
+      name: '示例患者 · 三甲',
+      gender: 'MALE',
+      birthDate: new Date('1965-03-20'),
+      phone: '13700001011',
+    },
+  });
+
+  for (const ident of wechatIdentities) {
+    // patient_engagement_hospital_wechat_v2: openId 归属到具体医院.
+    await prisma.patientWechatIdentity.upsert({
+      where: {
+        hospitalTenantId_appId_openId: {
+          hospitalTenantId: 'demo-tenant-001',
+          appId: 'wx_demo_hospital_001',
+          openId: ident.openId,
+        },
+      },
+      update: {
+        patientId: ident.patientId,
+        hospitalTenantId: 'demo-tenant-001',
+        isVerified: true,
+        verifiedAt: new Date(),
+        source: 'OFFICIAL_ACCOUNT_H5',
+      },
+      create: {
+        patientId: ident.patientId,
+        hospitalTenantId: 'demo-tenant-001',
+        appId: 'wx_demo_hospital_001',
+        openId: ident.openId,
+        source: 'OFFICIAL_ACCOUNT_H5',
+        isVerified: true,
+        verifiedAt: new Date(),
+      },
+    });
+  }
+
+  // Sample form links + matching outbound messages covering each state.
+  const linkSeeds = [
+    {
+      id: 'demo-formlink-sent-001',
+      patientId: 'demo-patient-003',
+      type: 'QUESTIONNAIRE',
+      title: '请填写本周血压管理问卷',
+      status: 'ACTIVE',
+      hoursToExpire: 72,
+      submitCount: 0,
+      tokenSeed: 'demo-formlink-sent-001-token',
+      message: { channel: 'SMS', messageType: 'QUESTIONNAIRE_REMINDER', status: 'SENT', sentAtOffsetHours: -2 },
+    },
+    {
+      id: 'demo-formlink-clicked-001',
+      patientId: 'demo-patient-001',
+      type: 'VITAL_RECHECK',
+      title: '请提交本次血压复测',
+      status: 'ACTIVE',
+      hoursToExpire: 72,
+      submitCount: 0,
+      tokenSeed: 'demo-formlink-clicked-001-token',
+      message: {
+        channel: 'WECHAT_OFFICIAL_ACCOUNT',
+        messageType: 'VITAL_RECHECK_REMINDER',
+        status: 'CLICKED',
+        sentAtOffsetHours: -6,
+        clickedAtOffsetHours: -5,
+      },
+    },
+    {
+      id: 'demo-formlink-submitted-001',
+      patientId: 'demo-patient-002',
+      type: 'MEDICATION_CHECKIN',
+      title: '请完成用药打卡',
+      status: 'USED',
+      hoursToExpire: 72,
+      submitCount: 1,
+      tokenSeed: 'demo-formlink-submitted-001-token',
+      message: {
+        channel: 'WECHAT_OFFICIAL_ACCOUNT',
+        messageType: 'MEDICATION_REMINDER',
+        status: 'SUBMITTED',
+        sentAtOffsetHours: -10,
+        clickedAtOffsetHours: -9,
+        submittedAtOffsetHours: -9,
+      },
+    },
+    {
+      id: 'demo-formlink-failed-001',
+      patientId: 'demo-patient-004',
+      type: 'HOSPITAL_VISIT_CONFIRM',
+      title: '请确认到院安排',
+      status: 'ACTIVE',
+      hoursToExpire: 72,
+      submitCount: 0,
+      tokenSeed: 'demo-formlink-failed-001-token',
+      message: {
+        channel: 'WECHAT_OFFICIAL_ACCOUNT',
+        messageType: 'HOSPITAL_VISIT_REMINDER',
+        status: 'FAILED',
+        errorMessage: '患者尚未关注本院服务号 (没有 openId)',
+        sentAtOffsetHours: -1,
+      },
+    },
+    {
+      id: 'demo-formlink-expired-001',
+      patientId: 'demo-patient-005',
+      type: 'QUESTIONNAIRE',
+      title: '请填写慢阻肺症状问卷 (已过期)',
+      status: 'EXPIRED',
+      hoursToExpire: -2,
+      submitCount: 0,
+      tokenSeed: 'demo-formlink-expired-001-token',
+      message: { channel: 'SMS', messageType: 'QUESTIONNAIRE_REMINDER', status: 'SENT', sentAtOffsetHours: -120 },
+    },
+  ];
+
+  for (const seed of linkSeeds) {
+    const expiresAt = new Date(Date.now() + seed.hoursToExpire * 3600 * 1000);
+    const tokenHash = tokenHashFor(seed.tokenSeed);
+    await prisma.patientFormLink.upsert({
+      where: { id: seed.id },
+      update: {
+        status: seed.status,
+        submitCount: seed.submitCount,
+        usedAt: seed.submitCount > 0 ? new Date(Date.now() - 9 * 3600 * 1000) : null,
+      },
+      create: {
+        id: seed.id,
+        hospitalTenantId: tenant.id,
+        patientId: seed.patientId,
+        type: seed.type,
+        tokenHash,
+        title: seed.title,
+        description: '演示数据：患者通过服务号 / 短信链接进入 H5 表单。',
+        payload: seed.type === 'QUESTIONNAIRE'
+          ? { questionnaireType: 'HYPERTENSION_FOLLOWUP' }
+          : seed.type === 'VITAL_RECHECK'
+            ? { vitalType: 'BLOOD_PRESSURE' }
+            : seed.type === 'MEDICATION_CHECKIN'
+              ? { medicationName: '苯磺酸氨氯地平', dosage: '5mg' }
+              : { reason: '近期血压升高，建议门诊评估' },
+        expiresAt,
+        maxSubmit: 1,
+        submitCount: seed.submitCount,
+        status: seed.status,
+        requiresIdentityCheck: seed.type !== 'QUESTIONNAIRE',
+        createdBy: 'nurse-001',
+        usedAt: seed.submitCount > 0 ? new Date(Date.now() - 9 * 3600 * 1000) : null,
+      },
+    });
+
+    const msg = seed.message;
+    const msgId = `${seed.id}-message`;
+    const sentAt = msg.sentAtOffsetHours !== undefined ? new Date(Date.now() + msg.sentAtOffsetHours * 3600 * 1000) : null;
+    const clickedAt = msg.clickedAtOffsetHours !== undefined ? new Date(Date.now() + msg.clickedAtOffsetHours * 3600 * 1000) : null;
+    const submittedAt = msg.submittedAtOffsetHours !== undefined ? new Date(Date.now() + msg.submittedAtOffsetHours * 3600 * 1000) : null;
+    await prisma.patientOutboundMessage.upsert({
+      where: { id: msgId },
+      update: {
+        status: msg.status,
+        sentAt,
+        clickedAt,
+        submittedAt,
+        errorMessage: msg.errorMessage ?? null,
+      },
+      create: {
+        id: msgId,
+        hospitalTenantId: tenant.id,
+        patientId: seed.patientId,
+        formLinkId: seed.id,
+        channel: msg.channel,
+        messageType: msg.messageType,
+        title: seed.title,
+        content: `${seed.title}
+（演示数据，dev 模式 mock 发送）`,
+        linkUrl: `http://localhost:5173/wx/form/${seed.tokenSeed}`,
+        status: msg.status,
+        providerMessageId: msg.status === 'SENT' || msg.status === 'CLICKED' || msg.status === 'SUBMITTED' ? `demo-${msg.channel.toLowerCase()}-${seed.id}` : null,
+        errorMessage: msg.errorMessage ?? null,
+        sentAt,
+        clickedAt,
+        submittedAt,
+        createdBy: 'nurse-001',
+        recipientMasked: msg.channel === 'SMS' ? '138****0003' : 'demo****-001',
+      },
+    });
+  }
+
+  console.log('Patient engagement demo seeded:');
+  console.log(`- 1 demo HospitalTenant (${tenant.code})`);
+  console.log('- 2 demo PatientWechatIdentity entries');
+  console.log(`- ${linkSeeds.length} demo PatientFormLink rows (各种状态)`);
+}
+
+
+/* care-reminders v3 demo seed (idempotent — relies on upsert + skipDuplicates) */
+async function seedCareReminders() {
+  // 1) Backfill timezone on both demo tenants (the column is NOT NULL with a
+  // default, so this is mostly cosmetic, but it makes the value explicit).
+  await prisma.hospitalTenant.update({
+    where: { id: 'demo-tenant-001' },
+    data: { timezone: 'Asia/Shanghai' },
+  }).catch(() => {});
+  await prisma.hospitalTenant.update({
+    where: { id: 'demo-tenant-002' },
+    data: { timezone: 'Asia/Shanghai' },
+  }).catch(() => {});
+
+  // 2) Schedules
+  const sched1 = await prisma.careReminderSchedule.upsert({
+    where: { id: 'demo-care-sched-001-med' },
+    update: {},
+    create: {
+      id: 'demo-care-sched-001-med',
+      hospitalTenantId: 'demo-tenant-001',
+      patientId: 'demo-patient-001',
+      sourceType: 'MEDICATION',
+      sourceId: 'demo-med-001',
+      title: '服药提醒: 苯磺酸氨氯地平片 5mg',
+      description: '请按时服用降压药，并在小程序或本链接确认。',
+      reminderType: 'MEDICATION_CHECKIN',
+      frequencyUnit: 'DAY',
+      timesPerUnit: 1,
+      scheduledTimes: ['08:00'],
+      payload: { medicationId: 'demo-med-001', medicationName: '苯磺酸氨氯地平片', dosage: '5mg' },
+      checkInWindowBeforeMinutes: 60,
+      checkInWindowAfterMinutes: 240,
+      escalationAfterMinutes: 240,
+      isActive: true,
+      createdBy: 'nurse-001',
+    },
+  });
+
+  const sched2 = await prisma.careReminderSchedule.upsert({
+    where: { id: 'demo-care-sched-001-bp' },
+    update: {},
+    create: {
+      id: 'demo-care-sched-001-bp',
+      hospitalTenantId: 'demo-tenant-001',
+      patientId: 'demo-patient-001',
+      sourceType: 'VITAL',
+      title: '血压打卡提醒',
+      description: '请每日睡前测量并上传血压。',
+      reminderType: 'VITAL_RECHECK',
+      frequencyUnit: 'DAY',
+      timesPerUnit: 1,
+      scheduledTimes: ['20:00'],
+      payload: { vitalType: 'BLOOD_PRESSURE' },
+      checkInWindowBeforeMinutes: 60,
+      checkInWindowAfterMinutes: 360,
+      escalationAfterMinutes: 360,
+      isActive: true,
+      createdBy: 'nurse-001',
+    },
+  });
+
+  await prisma.careReminderSchedule.upsert({
+    where: { id: 'demo-care-sched-003-glu' },
+    update: {},
+    create: {
+      id: 'demo-care-sched-003-glu',
+      hospitalTenantId: 'demo-tenant-001',
+      patientId: 'demo-patient-003',
+      sourceType: 'VITAL',
+      title: '血糖打卡提醒 (短信兜底)',
+      description: '请按时打卡空腹血糖。',
+      reminderType: 'VITAL_RECHECK',
+      frequencyUnit: 'DAY',
+      timesPerUnit: 1,
+      scheduledTimes: ['07:30'],
+      payload: { vitalType: 'BLOOD_GLUCOSE' },
+      checkInWindowBeforeMinutes: 30,
+      checkInWindowAfterMinutes: 180,
+      escalationAfterMinutes: 180,
+      isActive: true,
+      createdBy: 'nurse-001',
+    },
+  });
+
+  await prisma.careReminderSchedule.upsert({
+    where: { id: 'demo-care-sched-101-med' },
+    update: {},
+    create: {
+      id: 'demo-care-sched-101-med',
+      hospitalTenantId: 'demo-tenant-002',
+      patientId: 'demo-patient-101',
+      sourceType: 'MEDICATION',
+      title: '服药提醒 (示例三甲)',
+      description: '示例三甲医院的演示提醒，用于跨租户验证。',
+      reminderType: 'MEDICATION_CHECKIN',
+      frequencyUnit: 'DAY',
+      timesPerUnit: 1,
+      scheduledTimes: ['09:00'],
+      payload: { medicationName: '示例药物' },
+      checkInWindowBeforeMinutes: 60,
+      checkInWindowAfterMinutes: 240,
+      isActive: true,
+      createdBy: 'nurse-001',
+    },
+  });
+
+  // 3) Sample occurrences for the UI demo. Use deterministic ids so re-running
+  //    is a no-op via upsert.
+  const now = new Date();
+  const inOneHour = new Date(now.getTime() + 60 * 60 * 1000);
+  const yesterday20 = new Date(now.getTime() - 26 * 60 * 60 * 1000);
+  const yesterday8 = new Date(now.getTime() - 38 * 60 * 60 * 1000);
+  const twoDaysAgo8 = new Date(now.getTime() - 62 * 60 * 60 * 1000);
+
+  const sampleOccurrences = [
+    {
+      id: 'demo-care-occ-pending-001',
+      scheduleId: sched1.id,
+      occurrenceType: 'MEDICATION_CHECKIN',
+      title: sched1.title,
+      dueAt: inOneHour,
+      availableFrom: new Date(inOneHour.getTime() - 60 * 60 * 1000),
+      availableUntil: new Date(inOneHour.getTime() + 4 * 60 * 60 * 1000),
+      status: 'PENDING',
+    },
+    {
+      id: 'demo-care-occ-completed-001',
+      scheduleId: sched1.id,
+      occurrenceType: 'MEDICATION_CHECKIN',
+      title: sched1.title,
+      dueAt: yesterday8,
+      availableFrom: new Date(yesterday8.getTime() - 60 * 60 * 1000),
+      availableUntil: new Date(yesterday8.getTime() + 4 * 60 * 60 * 1000),
+      status: 'COMPLETED',
+      completedAt: new Date(yesterday8.getTime() + 30 * 60 * 1000),
+      resultType: 'MedicationCheckIn',
+      resultId: 'demo-med-check-001-d01',
+    },
+    {
+      id: 'demo-care-occ-missed-001',
+      scheduleId: sched2.id,
+      occurrenceType: 'VITAL_RECHECK',
+      title: sched2.title,
+      dueAt: yesterday20,
+      availableFrom: new Date(yesterday20.getTime() - 60 * 60 * 1000),
+      availableUntil: new Date(yesterday20.getTime() + 6 * 60 * 60 * 1000),
+      status: 'MISSED',
+      missedAt: new Date(yesterday20.getTime() + 6 * 60 * 60 * 1000),
+    },
+    {
+      id: 'demo-care-occ-pending-002',
+      scheduleId: sched1.id,
+      occurrenceType: 'MEDICATION_CHECKIN',
+      title: sched1.title,
+      dueAt: twoDaysAgo8,
+      availableFrom: new Date(twoDaysAgo8.getTime() - 60 * 60 * 1000),
+      availableUntil: new Date(twoDaysAgo8.getTime() + 4 * 60 * 60 * 1000),
+      status: 'MISSED',
+      missedAt: new Date(twoDaysAgo8.getTime() + 4 * 60 * 60 * 1000),
+    },
+  ];
+
+  for (const seed of sampleOccurrences) {
+    await prisma.careReminderOccurrence.upsert({
+      where: { id: seed.id },
+      update: {},
+      create: {
+        ...seed,
+        hospitalTenantId: 'demo-tenant-001',
+        patientId: 'demo-patient-001',
+      },
+    });
+  }
+
+  // 4) One demo direct message (requiresAck) from nurse-001 to demo-patient-001.
+  // Skip if it exists.
+  const existingDirect = await prisma.patientDirectMessage.findFirst({
+    where: { id: 'demo-direct-msg-001' },
+    select: { id: true },
+  });
+  if (!existingDirect) {
+    await prisma.patientDirectMessage.create({
+      data: {
+        id: 'demo-direct-msg-001',
+        hospitalTenantId: 'demo-tenant-001',
+        patientId: 'demo-patient-001',
+        senderId: 'nurse-001',
+        title: '请确认本周复查时间',
+        content: '王先生您好, 您本周三上午 9:00 复查门诊, 请按时来院。如有疑问请回复或致电护士站。',
+        priority: 'IMPORTANT',
+        channel: 'WECHAT_OFFICIAL_ACCOUNT',
+        status: 'SENT',
+        requiresAck: true,
+      },
+    });
+  }
+
+  console.log('Care reminders v3 demo seeded:');
+  console.log('- 4 CareReminderSchedule rows (med×2, vital×2)');
+  console.log('- 4 CareReminderOccurrence rows (PENDING / COMPLETED / MISSED ×2)');
+  console.log('- 1 PatientDirectMessage (requiresAck=true)');
+}
 
 async function main() {
   console.log('🚀 Starting unified clinical demo seed...');
@@ -1162,6 +2727,8 @@ async function main() {
   await seedClinicalRules();
   await seedIntegrations();
   await seedClinicalDemo();
+  await seedPatientEngagement();
+  await seedCareReminders();
   console.log('\n✅ Unified clinical demo seed completed.');
   console.log('   Login users: admin/admin123, doctor/doctor123, nurse/nurse123, manager/manager123');
 }
@@ -1174,3 +2741,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+

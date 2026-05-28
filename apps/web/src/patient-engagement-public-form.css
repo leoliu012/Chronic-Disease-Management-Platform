@@ -1,0 +1,381 @@
+/* ============================================================================
+   patient-engagement-public-form.css
+   ----------------------------------
+   Mobile-first H5 form styling for /wx/form/:token.
+   Goal: cleaner than a default form, large tap targets, calming hospital tone.
+============================================================================ */
+
+.pe-public-shell {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f1f7fb 0%, #ffffff 60%);
+  color: #1f2c3a;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  padding: 0 0 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.pe-public-header {
+  padding: 28px 20px 20px;
+  background: linear-gradient(135deg, #2978c5 0%, #1f5fa3 100%);
+  color: #fff;
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
+  box-shadow: 0 6px 18px rgba(31, 95, 163, 0.18);
+}
+
+.pe-public-hospital {
+  font-size: 14px;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.pe-public-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 4px 0 12px;
+  line-height: 1.4;
+}
+
+.pe-public-greeting {
+  font-size: 15px;
+  margin: 0 0 6px;
+  opacity: 0.95;
+}
+
+.pe-public-description {
+  font-size: 14px;
+  background: rgba(255, 255, 255, 0.14);
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin: 8px 0 0;
+  line-height: 1.6;
+}
+
+.pe-public-deadline {
+  font-size: 13px;
+  margin: 12px 0 0;
+  opacity: 0.95;
+}
+.pe-public-deadline strong {
+  color: #ffe28a;
+}
+
+.pe-public-main {
+  padding: 18px 16px 12px;
+}
+
+.pe-public-section {
+  background: #fff;
+  border-radius: 14px;
+  padding: 18px 16px;
+  box-shadow: 0 4px 16px rgba(31, 95, 163, 0.08);
+  margin-bottom: 16px;
+}
+
+.pe-public-section h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #1f5fa3;
+}
+
+.pe-public-hint {
+  font-size: 13px;
+  color: #6b7a8c;
+  line-height: 1.6;
+  margin: 0 0 14px;
+}
+
+.pe-public-field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+}
+
+.pe-public-field > span {
+  font-size: 14px;
+  font-weight: 500;
+  color: #324558;
+  margin-bottom: 6px;
+}
+
+.pe-public-field input,
+.pe-public-field textarea {
+  width: 100%;
+  font-size: 16px; /* prevent iOS zoom on focus */
+  padding: 12px 12px;
+  border: 1px solid #d6e1ec;
+  border-radius: 10px;
+  background: #f8fbfd;
+  color: #1f2c3a;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.pe-public-field input:focus,
+.pe-public-field textarea:focus {
+  border-color: #2978c5;
+  background: #fff;
+}
+.pe-public-field textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.pe-public-score-field {
+  background: #f4f9fc;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.pe-public-score-options {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.pe-public-score-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 4px;
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #d6e1ec;
+  border-radius: 10px;
+  cursor: pointer;
+  color: #324558;
+  transition: all 0.15s ease;
+  min-height: 64px;
+}
+.pe-public-score-option strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.pe-public-score-option small {
+  font-size: 11px;
+  color: #6b7a8c;
+  text-align: center;
+  line-height: 1.3;
+}
+.pe-public-score-option.active {
+  background: #2978c5;
+  border-color: #2978c5;
+  color: #fff;
+}
+.pe-public-score-option.active small {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.pe-public-toggle-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.pe-public-toggle-option {
+  padding: 16px 12px;
+  font-size: 16px;
+  background: #fff;
+  border: 1px solid #d6e1ec;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #324558;
+  transition: all 0.15s ease;
+}
+.pe-public-toggle-option.active {
+  background: #2978c5;
+  border-color: #2978c5;
+  color: #fff;
+}
+.pe-public-toggle-option.active.danger {
+  background: #d94343;
+  border-color: #d94343;
+}
+
+.pe-public-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.pe-public-action-tile {
+  padding: 18px 10px;
+  font-size: 15px;
+  background: #fff;
+  border: 1px solid #d6e1ec;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #324558;
+  transition: all 0.15s ease;
+  min-height: 70px;
+  text-align: center;
+}
+.pe-public-action-tile.active {
+  background: #2978c5;
+  border-color: #2978c5;
+  color: #fff;
+}
+.pe-public-action-tile.active.danger {
+  background: #d94343;
+  border-color: #d94343;
+}
+
+.pe-public-primary-button {
+  width: 100%;
+  padding: 14px 16px;
+  background: #2978c5;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(41, 120, 197, 0.25);
+  transition: opacity 0.15s ease;
+}
+.pe-public-primary-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pe-public-close-button {
+  margin-top: 18px;
+  padding: 12px 18px;
+  background: #f1f4f8;
+  color: #324558;
+  border: 1px solid #d6e1ec;
+  border-radius: 10px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.pe-public-error {
+  font-size: 13px;
+  color: #c0392b;
+  background: #fdecea;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 12px;
+}
+
+.pe-public-success {
+  font-size: 13px;
+  color: #1f7a3a;
+  background: #e7f7ec;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 12px;
+}
+
+.pe-public-success-card {
+  text-align: center;
+  padding: 28px 18px;
+}
+.pe-public-success-card h2 {
+  color: #1f7a3a;
+  margin-bottom: 8px;
+}
+
+.pe-public-footer {
+  padding: 18px 22px;
+  font-size: 12px;
+  color: #6b7a8c;
+  text-align: center;
+  line-height: 1.6;
+}
+.pe-public-footer p {
+  margin: 6px 0;
+}
+.pe-public-mp-hint {
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+.pe-public-notice {
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: linear-gradient(180deg, #f1f7fb 0%, #ffffff 100%);
+}
+.pe-public-notice-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 32px 22px;
+  text-align: center;
+  box-shadow: 0 4px 18px rgba(31, 95, 163, 0.12);
+  max-width: 420px;
+  width: 100%;
+}
+.pe-public-notice-card h1 {
+  font-size: 20px;
+  color: #1f5fa3;
+  margin-bottom: 12px;
+}
+.pe-public-notice-card p {
+  font-size: 14px;
+  color: #324558;
+  line-height: 1.7;
+}
+
+/* Desktop polish */
+@media (min-width: 720px) {
+  .pe-public-main {
+    max-width: 560px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .pe-public-header {
+    max-width: 560px;
+    margin: 0 auto;
+    width: 100%;
+    border-radius: 0 0 18px 18px;
+  }
+  .pe-public-footer {
+    max-width: 560px;
+    margin: 0 auto;
+    width: 100%;
+  }
+}
+
+
+/* ===========================================================================
+ * care-reminders v3 — senior-friendly overrides
+ * Min font 18px, button height >=56px, large input fields, single action.
+ * ======================================================================== */
+.pe-public-senior,
+.pe-public-senior * {
+  font-size: 18px !important;
+  line-height: 1.6;
+}
+.pe-public-senior .pe-public-section h2 {
+  font-size: 22px !important;
+  margin-bottom: 12px;
+}
+.pe-public-senior .pe-public-primary-button {
+  min-height: 56px;
+  font-size: 19px !important;
+  padding: 14px 20px;
+  width: 100%;
+  margin-bottom: 12px;
+}
+.pe-public-senior input[type="number"],
+.pe-public-senior input[type="text"] {
+  font-size: 22px !important;
+  padding: 14px;
+  min-height: 48px;
+}
+.pe-public-senior label {
+  font-weight: 600;
+}
+.pe-public-senior .pe-public-hint {
+  color: #4b5563;
+}

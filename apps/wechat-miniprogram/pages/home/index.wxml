@@ -1,8 +1,9 @@
 <view class="container">
+  <!-- patient-engagement-wechat-h5-v1: 入口降为可选深度功能, 非主路径. -->
   <view wx:if="{{!patientId}}" class="card unbound-card">
-    <view class="card-title">请先绑定患者档案</view>
-    <view class="card-subtitle">绑定后可进行院外血压、血糖、血氧等数据上报，并查看用药打卡、健康问卷、护士提醒和风险预警。</view>
-    <view class="primary-btn bind-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">立即绑定</view>
+    <view class="card-title">我的长期管理</view>
+    <view class="card-subtitle">您可以在医院发给您的服务号通知或短信链接中直接填写问卷与上报数据，无需绑定即可完成本次随访。如果希望长期查看自己的指标趋势、用药计划与护士提醒，可以选择绑定院内档案。</view>
+    <view class="primary-btn bind-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">绑定院内档案（可选）</view>
   </view>
 
   <block wx:else>
