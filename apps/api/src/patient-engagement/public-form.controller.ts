@@ -66,6 +66,24 @@ export class PublicFormController {
   // out to CareRemindersModule) to avoid a circular module dependency.
   // No-op if the form link has no associated occurrence.
   // ---------------------------------------------------------------------------
+  // v3.2: record the authoritative submission linkage on the form link so
+  // the message-detail API can resolve the patient's exact submitted content.
+  private async _linkSubmissionInTx(
+    tx: any,
+    formLinkId: string,
+    submissionType: string,
+    submissionId: string,
+  ): Promise<void> {
+    try {
+      await tx.patientFormLink.update({
+        where: { id: formLinkId },
+        data: { submissionType, submissionId, submittedAt: new Date() },
+      });
+    } catch {
+      // columns may not exist on trees that haven't run the v3.2 migration
+    }
+  }
+
   private async _tryCompleteOccurrenceInTx(
     tx: any,
     formLinkId: string,
@@ -91,6 +109,32 @@ export class PublicFormController {
       // Table may not exist in trees that haven't run the v3 migration. Don't
       // break the submit just because of that.
     }
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // v3 care-reminder medication links may intentionally omit medicationId from
+  // the request body. The link payload already contains it. This keeps the H5 UI
+  // elderly-friendly: patients only tap "taken / not taken".
+  // ---------------------------------------------------------------------------
+  private resolveMedicationIdForPublicCheckIn(
+    dto: SubmitPublicMedicationCheckInDto,
+    formLink: { payload: unknown },
+  ): string {
+    const payload: any = formLink.payload || {};
+    const medicationId =
+      dto.medicationId ||
+      payload.medicationId ||
+      (payload.sourceType === 'MEDICATION' ? payload.sourceId : null);
+
+    if (!medicationId || typeof medicationId !== 'string') {
+      throw new BadRequestException({
+        code: 'MEDICATION_ID_MISSING',
+        message: '用药打卡链接缺少用药计划信息，请联系医院重新发送。',
+      });
+    }
+
+    return medicationId;
   }
 
   // ---------------------------------------------------------------------------
@@ -130,6 +174,9 @@ export class PublicFormController {
     return {
       valid: formLink.status === 'ACTIVE',
       status: formLink.status,
+      // v3.2: surface revoke reason so the H5 page can show a friendly
+      // "该提醒已失效" message instead of a raw token error.
+      revokeReason: formLink.revokeReason ?? null,
       type: formLink.type,
       title: formLink.title,
       description: formLink.description,
@@ -276,6 +323,7 @@ export class PublicFormController {
       });
 
       // v3: mark linked CareReminderOccurrence COMPLETED (no-op if none).
+      await this._linkSubmissionInTx(tx, formLink.id, 'QuestionnaireResult', qr.id);
       await this._tryCompleteOccurrenceInTx(tx, formLink.id, 'QuestionnaireResult', qr.id);
 
       return { questionnaireResult: qr, alertId };
@@ -437,6 +485,7 @@ export class PublicFormController {
 
       // v3: mark linked CareReminderOccurrence COMPLETED (no-op if none).
       if (created.length > 0) {
+        await this._linkSubmissionInTx(tx, formLink.id, 'VitalRecord', created[0].id);
         await this._tryCompleteOccurrenceInTx(tx, formLink.id, 'VitalRecord', created[0].id);
       }
     });
@@ -472,7 +521,8 @@ export class PublicFormController {
     }
     if (formLink.requiresIdentityCheck) this.assertFormSession(formLink.id, dto.formSessionToken);
 
-    const medication = await this.prisma.medicationRecord.findUnique({ where: { id: dto.medicationId } });
+    const medicationId = this.resolveMedicationIdForPublicCheckIn(dto, formLink);
+    const medication = await this.prisma.medicationRecord.findUnique({ where: { id: medicationId } });
     if (!medication || medication.patientId !== formLink.patientId) {
       throw new NotFoundException('用药计划不存在');
     }
@@ -532,6 +582,7 @@ export class PublicFormController {
       });
 
       // v3: mark linked CareReminderOccurrence COMPLETED (no-op if none).
+      await this._linkSubmissionInTx(tx, formLink.id, 'MedicationCheckIn', checkIn.id);
       await this._tryCompleteOccurrenceInTx(tx, formLink.id, 'MedicationCheckIn', checkIn.id);
 
       return { checkIn, alertId };
@@ -626,15 +677,31 @@ export class PublicFormController {
         }
       }
 
+      // v3.2: structured patient 到院反馈 (distinct from the nurse-side followUp).
+      const feedback = await tx.hospitalVisitFeedback.create({
+        data: {
+          hospitalTenantId: formLink.hospitalTenantId ?? '',
+          patientId: formLink.patientId,
+          formLinkId: formLink.id,
+          hospitalVisitReminderId: reminderId ?? undefined,
+          taskId: taskCreated?.id ?? undefined,
+          riskAlertId: reminderUpdated?.sourceRiskAlertId ?? undefined,
+          action,
+          note: dto.note ?? undefined,
+          source: 'H5_LINK',
+        },
+      });
+
       await tx.patientOutboundMessage.updateMany({
         where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
         data: { status: 'SUBMITTED', submittedAt: new Date() },
       });
 
+      await this._linkSubmissionInTx(tx, formLink.id, 'HospitalVisitFeedback', feedback.id);
       // v3: mark linked CareReminderOccurrence COMPLETED (no-op if none).
       await this._tryCompleteOccurrenceInTx(tx, formLink.id, 'FollowUpRecord', followUp.id);
 
-      return { followUp, reminderUpdated, taskCreated };
+      return { followUp, reminderUpdated, taskCreated, feedback };
     });
 
     await this.prisma.engagementEventLog.create({
@@ -697,6 +764,12 @@ export class PublicFormController {
 
       // Mark linked CareReminderOccurrence (rare for direct messages, but
       // possible if the schedule's reminderType is GENERAL_MESSAGE).
+      await this._linkSubmissionInTx(
+        tx,
+        formLink.id,
+        'PatientDirectMessage',
+        acknowledgedId ?? formLink.id,
+      );
       await this._tryCompleteOccurrenceInTx(
         tx,
         formLink.id,

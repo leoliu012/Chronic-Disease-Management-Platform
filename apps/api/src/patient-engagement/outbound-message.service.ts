@@ -120,6 +120,162 @@ export class OutboundMessageService {
     });
   }
 
+
+  // ---------------------------------------------------------------------------
+  // v3.2: delivery attempts
+  // ---------------------------------------------------------------------------
+  // PatientOutboundMessage is the canonical "case". Every real send (initial,
+  // auto SMS fallback, nurse resend) is a PatientOutboundAttempt row under it.
+  // recomputeDelivery() rolls the attempts up into message.status +
+  // deliverySummary so the list UI can show "本院服务号 + 短信" and per-channel
+  // warnings without N+1 queries.
+
+  async recordAttempt(input: {
+    messageId: string;
+    hospitalTenantId?: string | null;
+    patientId: string;
+    formLinkId?: string | null;
+    channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS';
+    status: 'SENT' | 'FAILED';
+    recipientMasked?: string | null;
+    providerMessageId?: string | null;
+    errorMessage?: string | null;
+    triggerReason?: 'INITIAL' | 'AUTO_FALLBACK' | 'NURSE_RESEND' | string | null;
+    triggeredBy?: string | null;
+  }) {
+    const prior = await this.prisma.patientOutboundAttempt.count({
+      where: { messageId: input.messageId },
+    });
+    return this.prisma.patientOutboundAttempt.create({
+      data: {
+        messageId: input.messageId,
+        hospitalTenantId: input.hospitalTenantId ?? undefined,
+        patientId: input.patientId,
+        formLinkId: input.formLinkId ?? undefined,
+        channel: input.channel,
+        status: input.status,
+        recipientMasked: input.recipientMasked ?? undefined,
+        providerMessageId: input.providerMessageId ?? undefined,
+        errorMessage: input.errorMessage ? input.errorMessage.slice(0, 500) : undefined,
+        attemptNo: prior + 1,
+        triggerReason: input.triggerReason ?? undefined,
+        triggeredBy: input.triggeredBy ?? undefined,
+        sentAt: input.status === 'SENT' ? new Date() : undefined,
+      },
+    });
+  }
+
+  /**
+   * Roll attempts up into the parent message. Preserves terminal states the
+   * patient drives (CLICKED / SUBMITTED / CANCELED) — those are NOT downgraded
+   * by a later send attempt.
+   */
+  async recomputeDelivery(messageId: string) {
+    const message = await this.prisma.patientOutboundMessage.findUnique({
+      where: { id: messageId },
+    });
+    if (!message) return null;
+
+    const attempts = await this.prisma.patientOutboundAttempt.findMany({
+      where: { messageId },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // latest status per channel
+    const perChannel: Record<string, string> = {};
+    for (const a of attempts) perChannel[a.channel] = a.status;
+    const channels = Object.keys(perChannel);
+    const anySent = Object.values(perChannel).includes('SENT');
+
+    const lastAttempt = attempts[attempts.length - 1] || null;
+    const deliverySummary: any = {
+      channels,
+      wechat: perChannel['WECHAT_OFFICIAL_ACCOUNT'] ?? null,
+      sms: perChannel['SMS'] ?? null,
+      attemptCount: attempts.length,
+    };
+
+    // Don't clobber patient-driven terminal states.
+    const protectedStatuses = ['CLICKED', 'SUBMITTED', 'CANCELED'];
+    let nextStatus = message.status;
+    if (!protectedStatuses.includes(message.status)) {
+      if (attempts.length === 0) nextStatus = message.status;
+      else nextStatus = anySent ? 'SENT' : 'FAILED';
+    }
+
+    const lastSent = [...attempts].reverse().find((a) => a.status === 'SENT');
+
+    return this.prisma.patientOutboundMessage.update({
+      where: { id: messageId },
+      data: {
+        status: nextStatus,
+        deliverySummary,
+        lastAttemptAt: lastAttempt?.createdAt ?? undefined,
+        // keep the freshest successful channel + providerMessageId on the message
+        ...(lastSent
+          ? { channel: lastSent.channel, providerMessageId: lastSent.providerMessageId ?? undefined, sentAt: lastSent.sentAt ?? new Date(), errorMessage: null }
+          : lastAttempt
+            ? { channel: lastAttempt.channel, errorMessage: lastAttempt.errorMessage ?? undefined }
+            : {}),
+      },
+    });
+  }
+
+  /**
+   * Canonical "send one channel under an existing message" primitive:
+   * dispatch through the adapter, write a PatientOutboundAttempt, then
+   * recompute the parent message. Returns { attempt, dispatched }.
+   */
+  async attemptDispatch(args: {
+    messageId: string;
+    channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS';
+    openId?: string | null;
+    phone?: string | null;
+    triggerReason?: 'INITIAL' | 'AUTO_FALLBACK' | 'NURSE_RESEND' | string | null;
+    triggeredBy?: string | null;
+  }) {
+    const message = await this.prisma.patientOutboundMessage.findUnique({
+      where: { id: args.messageId },
+    });
+    if (!message) return { attempt: null, dispatched: null };
+
+    // Reuse the per-adapter logic in dispatch() by temporarily aligning the
+    // message channel, then dispatching. dispatch() updates message.status, but
+    // recomputeDelivery() below re-derives the authoritative status from attempts.
+    if (message.channel !== args.channel) {
+      await this.prisma.patientOutboundMessage.update({
+        where: { id: args.messageId },
+        data: { channel: args.channel },
+      });
+    }
+    const dispatched = await this.dispatch(args.messageId, {
+      openId: args.channel === 'WECHAT_OFFICIAL_ACCOUNT' ? args.openId ?? null : null,
+      phone: args.channel === 'SMS' ? args.phone ?? null : null,
+    });
+
+    const recipientMasked =
+      args.channel === 'WECHAT_OFFICIAL_ACCOUNT'
+        ? this.maskOpenId(args.openId)
+        : this.maskPhone(args.phone);
+
+    const attempt = await this.recordAttempt({
+      messageId: args.messageId,
+      hospitalTenantId: message.hospitalTenantId,
+      patientId: message.patientId,
+      formLinkId: message.formLinkId,
+      channel: args.channel,
+      status: dispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+      recipientMasked,
+      providerMessageId: dispatched?.providerMessageId ?? null,
+      errorMessage: dispatched?.status === 'SENT' ? null : dispatched?.errorMessage ?? '发送失败',
+      triggerReason: args.triggerReason ?? 'INITIAL',
+      triggeredBy: args.triggeredBy ?? null,
+    });
+
+    const refreshed = await this.recomputeDelivery(args.messageId);
+    return { attempt, dispatched, message: refreshed };
+  }
+
   /**
    * Actually send a previously-created message through the right adapter.
    *

@@ -60,14 +60,6 @@ type ExpandedContext = {
   };
 };
 
-const diseaseLabelMap: Record<string, string> = {
-  HYPERTENSION: '高血压',
-  TYPE_2_DIABETES: '2型糖尿病',
-  COPD: '慢阻肺',
-  CORONARY_HEART_DISEASE: '冠心病',
-  HYPERLIPIDEMIA: '高脂血症',
-};
-
 const riskLabelMap: Record<string, string> = {
   LOW: '低危',
   MEDIUM: '中危',

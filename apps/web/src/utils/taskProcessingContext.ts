@@ -323,7 +323,7 @@ function formatDateTime(value: unknown) {
   return date.toLocaleString('zh-CN', { hour12: false });
 }
 
-function formatJsonValue(value: unknown) {
+function formatJsonValue(value: unknown): string {
   if (value === undefined || value === null || value === '') return '未填写';
   if (typeof value === 'boolean') return value ? '是' : '否';
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));

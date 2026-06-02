@@ -36,4 +36,13 @@ export class QueryMessagesDto {
   @IsOptional()
   @IsString()
   to?: string;
+
+  // patient_engagement_v3_2 — pagination
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @IsOptional()
+  @IsString()
+  pageSize?: string;
 }

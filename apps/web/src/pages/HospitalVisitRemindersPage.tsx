@@ -108,7 +108,7 @@ export function HospitalVisitRemindersPage({ user: _user }: { user: CurrentUser 
             这里仅作为“已提醒到院患者”的总入口；具体处理请点击查看详情，进入对应患者的到院提醒任务。
           </p>
         </div>
-        <button className="secondary-btn" type="button" onClick={loadReminders} disabled={loading}>
+        <button className="secondary-btn" type="button" onClick={() => loadReminders()} disabled={loading}>
           {loading ? '刷新中...' : '刷新'}
         </button>
       </div>

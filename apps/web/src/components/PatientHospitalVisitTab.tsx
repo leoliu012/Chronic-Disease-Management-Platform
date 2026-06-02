@@ -119,11 +119,6 @@ function getRiskClass(riskLevel?: string) {
   return `risk-badge risk-${String(riskLevel || '').toLowerCase().replace(/_/g, '-')}`;
 }
 
-function maskPhone(value?: string) {
-  if (!value || value.length < 7) return value ?? '-';
-  return `${value.slice(0, 3)}****${value.slice(-4)}`;
-}
-
 function formatGender(value?: string) {
   const gender = String(value ?? '').toUpperCase();
   if (gender === 'MALE') return '男';

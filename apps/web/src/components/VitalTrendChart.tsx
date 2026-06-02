@@ -38,8 +38,6 @@ export type TrendRangeValue =
 
 export const DEFAULT_TREND_RANGE: TrendRangeValue = { kind: 'preset', preset: '90' };
 
-const PRESET_OPTIONS: Array<{ value: TrendRangeValue['kind'] extends 'preset' ? never : never; label: string }> = [] as never;
-
 const PRESET_LABELS: Record<'all' | '7' | '30' | '90' | '180', string> = {
   all: '全部',
   '7': '近 7 天',
@@ -451,7 +449,6 @@ type BloodPressureProps = {
 
 function buildSeriesPoints(
   vitals: TimelineEvent[],
-  times: number[],
   minTime: number,
   timeRange: number,
   minVal: number,
@@ -516,8 +513,8 @@ export function BloodPressureTrendChart({
 
   const toY = (val: number) => padding.top + chartH - ((val - minVal) / valRange) * chartH;
   const toX = (time: number) => padding.left + ((time - minTime) / timeRange) * chartW;
-  const systolicPoints = buildSeriesPoints(systolicVitals, times, minTime, timeRange, minVal, valRange, padding, chartW, chartH);
-  const diastolicPoints = buildSeriesPoints(diastolicVitals, times, minTime, timeRange, minVal, valRange, padding, chartW, chartH);
+  const systolicPoints = buildSeriesPoints(systolicVitals, minTime, timeRange, minVal, valRange, padding, chartW, chartH);
+  const diastolicPoints = buildSeriesPoints(diastolicVitals, minTime, timeRange, minVal, valRange, padding, chartW, chartH);
   const toPath = (points: Array<{ x: number; y: number }>) => points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
   const yTicks = 5;
   const yStep = valRange / yTicks;

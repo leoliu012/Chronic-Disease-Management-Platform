@@ -77,8 +77,12 @@ export class SubmitPublicMedicationCheckInDto {
   @IsString()
   formSessionToken?: string;
 
+  // Optional for care-reminder H5 links: medicationId is embedded in
+  // PatientFormLink.payload by the reminder worker, so elderly users only
+  // need to tap "我已服药 / 今天未服药".
+  @IsOptional()
   @IsString()
-  medicationId!: string;
+  medicationId?: string;
 
   @IsBoolean()
   taken!: boolean;

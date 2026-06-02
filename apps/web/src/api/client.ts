@@ -327,6 +327,46 @@ api.interceptors.response.use(
   },
 );
 
+/**
+ * Compatibility wrapper for v3 API modules that use a fetch-like helper.
+ * It delegates to the existing axios instance `api`, so auth headers,
+ * session-expiry handling, operation notices, and base URL behavior stay
+ * consistent with the rest of the app.
+ */
+export async function apiFetch<T>(
+  url: string,
+  init: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: unknown;
+  } = {},
+): Promise<T> {
+  const method = init.method || 'GET';
 
+  let data = init.body;
+  const headers: Record<string, string> = {
+    ...(init.headers || {}),
+  };
 
+  if (typeof data === 'string') {
+    const trimmed = data.trim();
+    if (trimmed) {
+      try {
+        data = JSON.parse(trimmed);
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+      } catch {
+        // Keep non-JSON strings as-is.
+      }
+    }
+  }
+
+  const response = await api.request<T>({
+    url,
+    method,
+    data,
+    headers,
+  });
+
+  return response.data;
+}
 

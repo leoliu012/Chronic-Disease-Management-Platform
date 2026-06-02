@@ -317,65 +317,76 @@ export class PatientEngagementService {
     if (args.channel === 'WECHAT_OFFICIAL_ACCOUNT') recipient = args.patient.scopedOpenId;
     else if (args.channel === 'SMS') recipient = args.patient.phone;
 
-    const message = await this.outbound.create({
-      hospitalTenantId: args.formLink.hospitalTenantId,
-      patientId: args.patient.id,
-      formLinkId: args.formLink.id,
-      channel: args.channel,
-      messageType,
-      title: args.formLink.title,
-      content,
-      linkUrl: args.linkUrl,
-      recipient,
-      createdBy: args.createdBy ?? undefined,
-      initialStatus: args.channel === 'MANUAL_COPY' ? 'PENDING' : 'PENDING',
-    });
+    // v3.2 sendForLink: ONE canonical PatientOutboundMessage; each real send is
+    // a PatientOutboundAttempt under it. WeChat-fail + SMS-fallback are two
+    // attempts on the same message, not two messages.
+    const existingMessageId: string | undefined = (args as any).reuseMessageId;
+    const triggerReason: string = (args as any).triggerReason || 'INITIAL';
 
-    const dispatched = await this.outbound.dispatch(message.id, {
+    let message: any;
+    if (existingMessageId) {
+      message = await this.prisma.patientOutboundMessage.findUnique({ where: { id: existingMessageId } });
+      if (!message) throw new BadRequestException('原始消息不存在, 无法重发');
+    } else {
+      message = await this.outbound.create({
+        hospitalTenantId: args.formLink.hospitalTenantId,
+        patientId: args.patient.id,
+        formLinkId: args.formLink.id,
+        channel: args.channel,
+        messageType,
+        title: args.formLink.title,
+        content,
+        linkUrl: args.linkUrl,
+        recipient,
+        createdBy: args.createdBy ?? undefined,
+        initialStatus: 'PENDING',
+      });
+    }
+
+    // MANUAL_COPY: nothing is dispatched; the link just lives in history.
+    if (args.channel === 'MANUAL_COPY') {
+      const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: message.id } });
+      return { message: refreshed };
+    }
+
+    const primary = await this.outbound.attemptDispatch({
+      messageId: message.id,
+      channel: args.channel as 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS',
       openId: args.channel === 'WECHAT_OFFICIAL_ACCOUNT' ? recipient : null,
       phone: args.channel === 'SMS' ? recipient : null,
+      triggerReason,
+      triggeredBy: args.createdBy ?? null,
     });
 
     await this.prisma.engagementEventLog.create({
       data: {
         patientId: args.patient.id,
         formLinkId: args.formLink.id,
-        eventType: dispatched?.status === 'SENT' ? 'MESSAGE_SENT' : 'MESSAGE_FAILED',
+        eventType: primary.dispatched?.status === 'SENT' ? 'MESSAGE_SENT' : 'MESSAGE_FAILED',
         metadata: {
           channel: args.channel,
           messageType,
-          providerMessageId: dispatched?.providerMessageId ?? null,
-          errorMessage: dispatched?.errorMessage ?? null,
+          messageId: message.id,
+          triggerReason,
+          providerMessageId: primary.dispatched?.providerMessageId ?? null,
+          errorMessage: primary.dispatched?.errorMessage ?? null,
           hospitalTenantId: args.formLink.hospitalTenantId,
         } as any,
       },
     });
 
-    // v2.1 (Problem 5): if 本院微信 send failed but the patient has a phone
-    // on file, automatically create a second SMS message and try that. The
-    // original WeChat row stays FAILED for audit; the SMS row is the "live"
-    // delivery attempt and is what we return.
+    // Auto SMS fallback on WeChat failure — a SECOND attempt on the SAME message.
     if (
       args.channel === 'WECHAT_OFFICIAL_ACCOUNT' &&
-      dispatched?.status === 'FAILED' &&
+      primary.dispatched?.status === 'FAILED' &&
       args.patient.phone
     ) {
-      const fallbackMsg = await this.outbound.create({
-        hospitalTenantId: args.formLink.hospitalTenantId,
-        patientId: args.patient.id,
-        formLinkId: args.formLink.id,
+      const fallback = await this.outbound.attemptDispatch({
+        messageId: message.id,
         channel: 'SMS',
-        messageType,
-        title: args.formLink.title,
-        content,
-        linkUrl: args.linkUrl,
-        recipient: args.patient.phone,
-        createdBy: args.createdBy ?? undefined,
-        initialStatus: 'PENDING',
-      });
-      const fallbackDispatched = await this.outbound.dispatch(fallbackMsg.id, {
-        openId: null,
         phone: args.patient.phone,
+        triggerReason: 'AUTO_FALLBACK',
+        triggeredBy: args.createdBy ?? null,
       });
       await this.prisma.engagementEventLog.create({
         data: {
@@ -383,24 +394,23 @@ export class PatientEngagementService {
           formLinkId: args.formLink.id,
           eventType: 'MESSAGE_FALLBACK_SMS',
           metadata: {
-            primaryMessageId: message.id,
+            messageId: message.id,
             primaryChannel: 'WECHAT_OFFICIAL_ACCOUNT',
-            fallbackMessageId: fallbackMsg.id,
             fallbackChannel: 'SMS',
-            fallbackStatus: fallbackDispatched?.status,
-            fallbackError: fallbackDispatched?.errorMessage ?? null,
+            fallbackStatus: fallback.dispatched?.status,
+            fallbackError: fallback.dispatched?.errorMessage ?? null,
             hospitalTenantId: args.formLink.hospitalTenantId,
           } as any,
         },
       });
       return {
-        message: fallbackDispatched,
-        primary: dispatched,
+        message: fallback.message ?? fallback.dispatched,
+        primary: primary.dispatched,
         fallbackUsed: true,
       };
     }
 
-    return { message: dispatched };
+    return { message: primary.message ?? primary.dispatched };
   }
 
   // ---------------------------------------------------------------------------

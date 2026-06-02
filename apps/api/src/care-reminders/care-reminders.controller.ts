@@ -21,6 +21,7 @@ import { PatientEngagementTenantService } from '../patient-engagement/patient-en
 import { CareReminderScheduleService } from './care-reminder-schedule.service';
 import { CareReminderOccurrenceService } from './care-reminder-occurrence.service';
 import { CareReminderWorkerService } from './care-reminder-worker.service';
+import { CareReminderResendService } from './care-reminder-resend.service';
 import { PatientDirectMessageService } from './patient-direct-message.service';
 import {
   CreateMedicationScheduleDto,
@@ -44,6 +45,7 @@ export class CareRemindersController {
     private readonly schedules: CareReminderScheduleService,
     private readonly occurrences: CareReminderOccurrenceService,
     private readonly worker: CareReminderWorkerService,
+    private readonly resend: CareReminderResendService,
     private readonly directMessages: PatientDirectMessageService,
   ) {}
 
@@ -79,7 +81,7 @@ export class CareRemindersController {
       throw new NotFoundException('medication not found for this patient');
     }
 
-    const schedule = await this.schedules.create({
+    const schedule = await this.schedules.createOrUpdateForSource({
       hospitalTenantId,
       patientId,
       sourceType: 'MEDICATION',
@@ -111,7 +113,11 @@ export class CareRemindersController {
       ipAddress: req?.ip,
       afterData: { reminderType: 'MEDICATION_CHECKIN', patientId, times: dto.scheduledTimes },
     });
-    return schedule;
+    // v3.3: the medication record is the source of truth — reconcile the
+    // schedule's times/frequency/title to it (ignore any client-supplied
+    // scheduledTimes that disagree with the plan), then return the reconciled row.
+    await this.schedules.syncScheduleFromMedicationRecord(medication.id);
+    return this.schedules.getByIdOrThrow(schedule.id);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
@@ -125,19 +131,42 @@ export class CareRemindersController {
     this.tenant.assertWriteAllowed(user);
     const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
 
-    const schedule = await this.schedules.create({
+    // v3.3: a VITAL reminder MUST be bound to a VitalMonitoringPlan — care
+    // reminders only ever derive from the monitoring plan, never free-standing.
+    if (!dto.vitalMonitoringPlanId) {
+      throw new BadRequestException('指标提醒必须绑定指标监测计划。');
+    }
+    const plan = await this.prisma.vitalMonitoringPlan.findUnique({
+      where: { id: dto.vitalMonitoringPlanId },
+    });
+    if (!plan || plan.patientId !== patientId) {
+      throw new NotFoundException('vital monitoring plan not found for this patient');
+    }
+    // Trust the PLAN, not the request body: derive vitalType / times / frequency
+    // from the plan. (createOrUpdateForSource seeds the row; the sync call below
+    // reconciles it to the plan, so any body-supplied scheduledTimes are ignored.)
+    const planTimes = Array.isArray(plan.customMeasureTimes)
+      ? (plan.customMeasureTimes as unknown[]).filter((t) => typeof t === 'string')
+      : [];
+
+    const schedule = await this.schedules.createOrUpdateForSource({
       hospitalTenantId,
       patientId,
       sourceType: 'VITAL',
-      sourceId: dto.vitalMonitoringPlanId ?? null,
-      title: dto.title || `${this.vitalLabel(dto.vitalType)}打卡提醒`,
+      sourceId: plan.id,
+      title: dto.title || `${plan.displayName || this.vitalLabel(plan.vitalType)}打卡提醒`,
       description: dto.description ?? null,
       reminderType: 'VITAL_RECHECK',
-      frequencyUnit: dto.frequencyUnit ?? 'DAY',
-      timesPerUnit: dto.scheduledTimes.length,
-      scheduledTimes: dto.scheduledTimes,
+      frequencyUnit: (plan.frequencyUnit ?? 'DAY') as 'DAY' | 'WEEK' | 'MONTH',
+      timesPerUnit: plan.timesPerUnit ?? (planTimes.length || 1),
+      scheduledTimes: planTimes as string[],
       scheduledDays: dto.scheduledDays ?? null,
-      payload: { vitalType: dto.vitalType },
+      payload: {
+        vitalPlanId: plan.id,
+        vitalType: plan.vitalType,
+        displayName: plan.displayName,
+        unit: plan.unit,
+      },
       reminderLeadMinutes: dto.reminderLeadMinutes ?? 0,
       checkInWindowBeforeMinutes: dto.checkInWindowBeforeMinutes ?? 60,
       checkInWindowAfterMinutes: dto.checkInWindowAfterMinutes ?? 240,
@@ -151,9 +180,12 @@ export class CareRemindersController {
       targetType: 'CareReminderSchedule',
       targetId: schedule.id,
       ipAddress: req?.ip,
-      afterData: { reminderType: 'VITAL_RECHECK', vitalType: dto.vitalType, patientId, times: dto.scheduledTimes },
+      afterData: { reminderType: 'VITAL_RECHECK', vitalType: plan.vitalType, patientId, times: planTimes },
     });
-    return schedule;
+    // v3.3: the plan is the source of truth — reconcile the schedule to it and
+    // return the reconciled row.
+    await this.schedules.syncScheduleFromVitalMonitoringPlan(plan.id);
+    return this.schedules.getByIdOrThrow(schedule.id);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
@@ -185,6 +217,26 @@ export class CareRemindersController {
     const sched = await this.schedules.getByIdOrThrow(id);
     await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
     return this.schedules.resume(id);
+  }
+
+  // care-reminders-plan-dedupe-v1: schedule-level "取消计划" — permanently stop a
+  // plan-bound long-term reminder (deletes the schedule; occurrences cascade).
+  @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Post('schedules/:id/cancel')
+  async cancelSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+    this.tenant.assertWriteAllowed(user);
+    const sched = await this.schedules.getByIdOrThrow(id);
+    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
+    const result = await this.schedules.cancelSchedule(id);
+    await this.audit.record({
+      user,
+      action: 'CARE_REMINDER_SCHEDULE_CANCELED',
+      targetType: 'CareReminderSchedule',
+      targetId: id,
+      ipAddress: req?.ip,
+      afterData: { sourceType: sched.sourceType, sourceId: sched.sourceId },
+    });
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -293,6 +345,31 @@ export class CareRemindersController {
       afterData: { status: refreshed.status },
     });
     return { reused: false, occurrence: refreshed };
+  }
+
+  // v3.1: nurse 再次发送 — reuse the occurrence's canonical message and
+  // append a NURSE_RESEND delivery attempt (no new message row). The
+  // service throws BadRequest (400) for completed / non-resendable states.
+  @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Post('occurrences/:id/resend')
+  async resendOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+    this.tenant.assertWriteAllowed(user);
+    const occ = await this.occurrences.getByIdOrThrow(id);
+    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
+    const result = await this.resend.resend(id);
+    await this.audit.record({
+      user,
+      action: 'CARE_REMINDER_RESEND',
+      targetType: 'CareReminderOccurrence',
+      targetId: id,
+      ipAddress: req?.ip,
+      afterData: {
+        reusedLink: result.reusedLink,
+        messageId: result.message?.id ?? null,
+        status: result.occurrence?.status ?? null,
+      },
+    });
+    return result;
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)

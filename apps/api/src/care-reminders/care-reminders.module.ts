@@ -5,6 +5,7 @@ import { PatientEngagementModule } from '../patient-engagement/patient-engagemen
 import { CareReminderScheduleService } from './care-reminder-schedule.service';
 import { CareReminderOccurrenceService } from './care-reminder-occurrence.service';
 import { CareReminderWorkerService } from './care-reminder-worker.service';
+import { CareReminderResendService } from './care-reminder-resend.service';
 import { PatientDirectMessageService } from './patient-direct-message.service';
 import { CareRemindersController } from './care-reminders.controller';
 
@@ -24,6 +25,7 @@ import { CareRemindersController } from './care-reminders.controller';
     CareReminderScheduleService,
     CareReminderOccurrenceService,
     CareReminderWorkerService,
+    CareReminderResendService,
     PatientDirectMessageService,
   ],
   exports: [

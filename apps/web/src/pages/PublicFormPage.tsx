@@ -34,6 +34,8 @@ type FormType =
 type FormMeta = {
   valid: boolean;
   status: 'ACTIVE' | 'USED' | 'EXPIRED' | 'REVOKED';
+  // patient_engagement_v3_2 — nurse-entered reason shown on a revoked link
+  revokeReason?: string | null;
   type: FormType;
   title: string;
   description: string | null;
@@ -131,6 +133,17 @@ export function PublicFormPage() {
 
   if (meta.status !== 'ACTIVE') {
     const label = STATUS_LABEL[meta.status];
+    // v3.2: a REVOKED link means the nurse intentionally canceled this
+    // reminder. Show a friendly message with their reason — never a raw
+    // token error.
+    if (meta.status === 'REVOKED') {
+      const reason = (meta.revokeReason || '').trim();
+      const revokedBody =
+        '医院工作人员已取消本次提醒。' +
+        (reason ? `\n原因：${reason}` : '') +
+        '\n如有疑问，请联系医院慢病管理团队。';
+      return <FullPageNotice title="该提醒已失效" body={revokedBody} />;
+    }
     const body =
       meta.status === 'USED'
         ? '本链接对应的随访任务已经提交过。如果有疑问，请联系医院慢病管理团队。'

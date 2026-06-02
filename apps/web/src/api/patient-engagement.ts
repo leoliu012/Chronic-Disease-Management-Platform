@@ -58,6 +58,14 @@ export type CreateLinkResponse = {
   sendResult: null | { channel: string; status: string; errorMessage: string | null };
 };
 
+// patient_engagement_v3_2 — delivery summary rolled up from attempts
+export type DeliverySummary = {
+  channels?: string[];
+  wechat?: string | null;
+  sms?: string | null;
+  attemptCount?: number;
+} | null;
+
 export type OutboundMessage = {
   id: string;
   channel: string;
@@ -73,14 +81,77 @@ export type OutboundMessage = {
   clickedAt: string | null;
   submittedAt: string | null;
   createdAt: string;
+  // patient_engagement_v3_2
+  lastAttemptAt?: string | null;
+  deliverySummary?: DeliverySummary;
+  patient?: { id: string; name: string; hospitalPatientId: string | null } | null;
   formLink: null | {
     id: string;
     type: string;
     status: string;
     expiresAt: string;
     usedAt: string | null;
+    revokedAt?: string | null;
+    revokeReason?: string | null;
     submitCount: number;
+    submittedAt?: string | null;
   };
+};
+
+// patient_engagement_v3_2 — one delivery attempt under a message
+export type OutboundAttempt = {
+  id: string;
+  messageId: string;
+  channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | string;
+  status: 'SENT' | 'FAILED' | string;
+  recipientMasked: string | null;
+  providerMessageId: string | null;
+  errorMessage: string | null;
+  attemptNo: number;
+  triggerReason: 'INITIAL' | 'AUTO_FALLBACK' | 'NURSE_RESEND' | string | null;
+  triggeredBy: string | null;
+  sentAt: string | null;
+  createdAt: string;
+};
+
+export type MessageSubmission = {
+  type: string;
+  inferred?: boolean;
+  submittedAt: string | null;
+  data: Record<string, any>;
+} | null;
+
+export type MessageDetail = {
+  message: OutboundMessage;
+  formLink:
+    | null
+    | (OutboundMessage['formLink'] & {
+        title?: string;
+        description?: string | null;
+        revokeReason?: string | null;
+        submissionType?: string | null;
+        submissionId?: string | null;
+      });
+  attempts: OutboundAttempt[];
+  submission: MessageSubmission;
+};
+
+export type MessageListFilters = {
+  patientId?: string;
+  status?: string;
+  messageType?: string;
+  channel?: string;
+  from?: string; // ISO date or yyyy-mm-dd
+  to?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type PaginatedMessages = {
+  items: OutboundMessage[];
+  total: number;
+  page: number;
+  pageSize: number;
 };
 
 export async function fetchContactSummary(patientId: string): Promise<ContactSummary> {
@@ -90,6 +161,31 @@ export async function fetchContactSummary(patientId: string): Promise<ContactSum
 
 export async function fetchPatientMessages(patientId: string): Promise<OutboundMessage[]> {
   const { data } = await apiClient.get(`/patient-engagement/patients/${patientId}/messages`);
+  return data;
+}
+
+// patient_engagement_v3_2 — filtered + paginated message list
+export async function fetchMessages(filters: MessageListFilters): Promise<PaginatedMessages> {
+  const params: Record<string, string> = {};
+  if (filters.patientId) params.patientId = filters.patientId;
+  if (filters.status) params.status = filters.status;
+  if (filters.messageType) params.messageType = filters.messageType;
+  if (filters.channel) params.channel = filters.channel;
+  if (filters.from) params.from = filters.from;
+  if (filters.to) params.to = filters.to;
+  if (filters.page) params.page = String(filters.page);
+  if (filters.pageSize) params.pageSize = String(filters.pageSize);
+  const { data } = await apiClient.get(`/patient-engagement/messages`, { params });
+  // backward-compat: if an older API returns a bare array, wrap it.
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length, page: 1, pageSize: data.length };
+  }
+  return data;
+}
+
+// patient_engagement_v3_2 — full case detail (message + attempts + submission)
+export async function fetchMessageDetail(messageId: string): Promise<MessageDetail> {
+  const { data } = await apiClient.get(`/patient-engagement/messages/${messageId}/detail`);
   return data;
 }
 
@@ -148,23 +244,18 @@ export async function createHospitalVisitLink(
   return data;
 }
 
-export async function revokeFormLink(formLinkId: string, reason: string) {
+// patient_engagement_v3_2 — \"使链接失效\" (revoke). Patient sees a friendly reason.
+export async function invalidateFormLink(formLinkId: string, reason: string) {
   const { data } = await apiClient.post(`/patient-engagement/form-links/${formLinkId}/revoke`, {
     reason,
   });
   return data;
 }
 
+// patient_engagement_v3_2 — resend reuses the same case (no new message row).
 export async function resendMessage(messageId: string, preferredChannel?: PreferredChannel) {
   const { data } = await apiClient.post(`/patient-engagement/messages/${messageId}/resend`, {
     preferredChannel,
-  });
-  return data;
-}
-
-export async function markMessageManualSent(messageId: string, note?: string) {
-  const { data } = await apiClient.post(`/patient-engagement/messages/${messageId}/mark-manual-sent`, {
-    note,
   });
   return data;
 }

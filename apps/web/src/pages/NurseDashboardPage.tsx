@@ -65,10 +65,6 @@ type WorkItem = {
   actionText: string;
 };
 
-type CreatedTask = {
-  id: string;
-};
-
 type HospitalVisitReminder = {
   id: string;
   patientId: string;
@@ -357,7 +353,7 @@ export function NurseDashboardPage() {
       else if (item.riskLevel === 'HIGH') dueAt.setHours(dueAt.getHours() + 24);
       else dueAt.setHours(dueAt.getHours() + 72);
 
-      const taskRes = await api.post(`/patients/${item.patient.id}/tasks`, {
+      await api.post(`/patients/${item.patient.id}/tasks`, {
         title: item.title.replace(/^风险预警：/, '风险随访：'),
         type: 'RISK_ALERT_FOLLOW_UP',
         dueAt: dueAt.toISOString(),
@@ -370,7 +366,6 @@ export function NurseDashboardPage() {
         handlingNote: '护士已从“待处理事项”将该风险预警转为电话随访任务。',
       });
 
-      const createdTask = taskRes.data as CreatedTask;
       setMessage('已生成风险随访任务，即将进入患者详情页的电话随访 tab。');
       navigate(`/patients/${item.patient.id}?workspace=follow-up`);
     } catch (err) {
@@ -425,6 +420,7 @@ export function NurseDashboardPage() {
   }
 
   function getWorkbenchCount(sectionKey: WorkbenchSectionKey) {
+    if (!data) return summary?.totalOpen ?? 0;
     if (sectionKey === 'workItems') return summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount;
     if (sectionKey === 'vitals') return data.summary.recentAbnormalVitalCount;
     if (sectionKey === 'patients') return data.summary.patientCount;

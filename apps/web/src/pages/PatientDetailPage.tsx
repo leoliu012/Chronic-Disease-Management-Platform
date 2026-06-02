@@ -1,5 +1,5 @@
 import type { FormEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
 import { ClosedLoopEventList } from '../components/ClosedLoopEventList';
@@ -354,6 +354,22 @@ function formatTime(value?: string) {
 function formatDate(value?: string) {
   if (!value) return '-';
   return new Date(value).toLocaleDateString('zh-CN');
+}
+
+// care-reminders-jump-v1: scroll a plan card into view and briefly highlight
+// it after a cross-workspace jump. Retries on the next frame because the
+// target workspace may still be mounting when first called.
+function scrollPlanCardIntoView(elementId: string, attempt = 0) {
+  const el = document.getElementById(elementId);
+  if (!el) {
+    if (attempt < 8) {
+      window.requestAnimationFrame(() => scrollPlanCardIntoView(elementId, attempt + 1));
+    }
+    return;
+  }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('care-reminders-jump-flash');
+  window.setTimeout(() => el.classList.remove('care-reminders-jump-flash'), 1800);
 }
 
 function formatPatientGenderLabel(value?: string) {
@@ -1186,6 +1202,49 @@ export function PatientDetailPage() {
     // just clicked, so the click anchor stays in view.
   }
 
+  // care-reminders-jump-v1: invoked from CareRemindersPanel's "查看/修改用药计划 /
+  // 查看/修改指标监测" buttons. Switch to the owning workspace, force-open the
+  // matching plan's inline edit form (NOT a toggle — always expand), and scroll
+  // the card into view. If the bound plan is stopped/inactive, reveal history so
+  // it is actually rendered before we try to focus it.
+  const focusPlanFromReminder = useCallback(
+    (sourceType: string, sourceId: string | null) => {
+      if (!sourceId) {
+        if (sourceType === 'MEDICATION') setActiveWorkspace('medication');
+        else if (sourceType === 'VITAL') setActiveWorkspace('monitoring');
+        return;
+      }
+      if (sourceType === 'MEDICATION') {
+        const item = medicationTimeline.find((it) => it.data?.id === sourceId);
+        if (item && item.data?.isActive === false) setShowInactiveMedications(true);
+        setActiveWorkspace('medication');
+        setEditingMedicationId(null);
+        if (item?.data) {
+          window.requestAnimationFrame(() => {
+            startEditMedication(item.data);
+            scrollPlanCardIntoView(`med-card-${sourceId}`);
+          });
+        } else {
+          window.requestAnimationFrame(() => scrollPlanCardIntoView(`med-card-${sourceId}`));
+        }
+      } else if (sourceType === 'VITAL') {
+        const item = monitoringPlanTimeline.find((it) => it.data?.id === sourceId);
+        if (item && item.data?.isActive === false) setShowInactiveMonitoringPlans(true);
+        setActiveWorkspace('monitoring');
+        setEditingMonitoringPlanId(null);
+        if (item?.data) {
+          window.requestAnimationFrame(() => {
+            startEditMonitoringPlan(item.data);
+            scrollPlanCardIntoView(`mon-card-${sourceId}`);
+          });
+        } else {
+          window.requestAnimationFrame(() => scrollPlanCardIntoView(`mon-card-${sourceId}`));
+        }
+      }
+    },
+    [medicationTimeline, monitoringPlanTimeline],
+  );
+
   async function submitMedication(event: FormEvent) {
     event.preventDefault();
     if (!patientId || savingMedication) return;
@@ -1433,20 +1492,6 @@ export function PatientDetailPage() {
     setSuggestion('请患者继续按慢病管理要求监测指标，如出现危险症状及时就医。');
     setNextFollowUpTime('');
     setFollowUpSignature('');
-  }
-
-  function openFollowUpTab(_taskId?: string) {
-    const next = new URLSearchParams(searchParams);
-    next.set('workspace', 'follow-up');
-    next.delete('taskPanel');
-    next.delete('taskId');
-    next.delete('mode');
-    next.delete('followUpTaskId');
-    setSearchParams(next, { replace: false });
-    setTaskPanelOpen(false);
-    setActiveWorkspace('follow-up');
-    setFollowUpFormOpen(true);
-    primeFollowUpDraft();
   }
 
   function resetFollowUpForm() {
@@ -1843,7 +1888,7 @@ export function PatientDetailPage() {
               <Link className="primary-btn compact-link-btn" to="/patients">
                 返回患者主索引
               </Link>
-              <button className="secondary-btn" type="button" onClick={loadTimeline}>
+              <button className="secondary-btn" type="button" onClick={() => loadTimeline()}>
                 重新加载
               </button>
             </div>
@@ -2096,7 +2141,7 @@ export function PatientDetailPage() {
               查看待办面板
             </button>
           )}
-          <button className="secondary-btn" type="button" onClick={loadTimeline} disabled={loading}>
+          <button className="secondary-btn" type="button" onClick={() => loadTimeline()} disabled={loading}>
             {loading ? '刷新中...' : '刷新档案'}
           </button>
         </div>
@@ -2343,7 +2388,7 @@ export function PatientDetailPage() {
       )}
 
       {activeWorkspace === 'hospital-records' && (
-        <HospitalRecordsView patientId={patientId} />
+        <HospitalRecordsView patientId={patientId!} />
       )}
 
       {false && activeWorkspace === 'actions' && (
@@ -2938,6 +2983,7 @@ export function PatientDetailPage() {
                     <article
                       className={`task-inline-card medication-inline-card${isInlineEditing ? ' is-inline-editing' : ''}`}
                       key={item.data?.id ?? `${item.time}-${item.title}`}
+                      id={item.data?.id ? `mon-card-${item.data.id}` : undefined}
                     >
                       <div className="task-inline-card-topline">
                         <span className="badge">{item.data?.sourcePreset ? diseaseLabelMap[item.data.sourcePreset] ?? item.data.sourcePreset : '医院配置'}</span>
@@ -3020,6 +3066,7 @@ export function PatientDetailPage() {
                     <article
                       className={`task-inline-card medication-inline-card${isInlineEditing ? ' is-inline-editing' : ''}`}
                       key={item.data?.id ?? `${item.time}-${item.title}`}
+                      id={item.data?.id ? `med-card-${item.data.id}` : undefined}
                     >
                       <div className="task-inline-card-topline">
                         <span className="badge">{dataSourceLabelMap[item.data?.dataSource] ?? item.data?.dataSource ?? '医院端'}</span>
@@ -3567,16 +3614,15 @@ export function PatientDetailPage() {
               .map((item: any) => item.data)
               .filter((m: any) => m && m.id)
               .map((m: any) => ({ id: m.id, medicationName: m.medicationName, dosage: m.dosage, frequency: m.frequency }))}
+hospitalVisitReminders={activeHospitalVisitReminders.map((r: any) => ({ id: r.id, title: r.title, reason: r.reason }))}
+          />
+        </section>
+      )}
 
       {/* care-reminders v3 */}
       {activeWorkspace === 'care-reminders' && (
         <section className="panel">
-          <CareRemindersPanel patientId={patientId!} canEdit={true} />
-        </section>
-      )}
-
-            hospitalVisitReminders={activeHospitalVisitReminders.map((r: any) => ({ id: r.id, title: r.title, reason: r.reason }))}
-          />
+          <CareRemindersPanel patientId={patientId!} canEdit={true} onNavigateToSource={focusPlanFromReminder} />
         </section>
       )}
 

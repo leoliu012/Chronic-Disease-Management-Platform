@@ -200,6 +200,9 @@ model Patient {
   careReminderSchedules   CareReminderSchedule[]
   careReminderOccurrences CareReminderOccurrence[]
   patientDirectMessages   PatientDirectMessage[]
+  // patient_engagement_v3_2
+  outboundAttempts        PatientOutboundAttempt[]
+  hospitalVisitFeedbacks  HospitalVisitFeedback[]
 }
 
 model DiseaseProfile {
@@ -1258,6 +1261,10 @@ model PatientFormLink {
   @@index([taskId])
   @@index([riskAlertId])
   @@index([expiresAt])
+  // patient_engagement_v3_2 — submission linkage
+  submissionType String?
+  submissionId   String?
+  submittedAt    DateTime?
 }
 
 model PatientOutboundMessage {
@@ -1294,6 +1301,10 @@ model PatientOutboundMessage {
   @@index([patientId, channel, status])
   @@index([formLinkId])
   @@index([messageType, createdAt])
+  // patient_engagement_v3_2
+  attempts          PatientOutboundAttempt[]
+  lastAttemptAt     DateTime?
+  deliverySummary   Json?
 }
 
 model EngagementEventLog {
@@ -1420,6 +1431,9 @@ model CareReminderOccurrence {
   resultType        String?
   resultId          String?
   lastError         String?
+  // care-reminders v3.1 — resend bookkeeping
+  resendCount       Int      @default(0)
+  lastResentAt      DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1460,4 +1474,64 @@ model PatientDirectMessage {
   @@index([hospitalTenantId, patientId, createdAt])
   @@index([senderId, createdAt])
   @@index([formLinkId])
+}
+
+
+// ============================================================================
+// patient_engagement_v3_2 — delivery attempts + structured visit feedback
+// ============================================================================
+
+model PatientOutboundAttempt {
+  id                String   @id @default(uuid())
+  messageId         String
+  hospitalTenantId  String?
+  patientId         String
+  formLinkId        String?
+  // WECHAT_OFFICIAL_ACCOUNT / SMS
+  channel           String
+  // SENT / FAILED
+  status            String
+  recipientMasked   String?
+  providerMessageId String?
+  errorMessage      String?
+  attemptNo         Int
+  // INITIAL / AUTO_FALLBACK / NURSE_RESEND
+  triggerReason     String?
+  triggeredBy       String?
+  sentAt            DateTime?
+  createdAt         DateTime @default(now())
+
+  message PatientOutboundMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  patient Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, createdAt])
+  @@index([hospitalTenantId, patientId, createdAt])
+  @@index([channel, status])
+}
+
+model HospitalVisitFeedback {
+  id                      String   @id @default(uuid())
+  hospitalTenantId        String
+  patientId               String
+  formLinkId              String?
+  messageId               String?
+  hospitalVisitReminderId String?
+  taskId                  String?
+  riskAlertId             String?
+  // WILL_VISIT / ARRIVED / CANNOT_VISIT / REFUSED
+  action                  String
+  note                    String?
+  submittedAt             DateTime @default(now())
+  source                  String   @default("H5_LINK")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([hospitalTenantId, patientId, submittedAt])
+  @@index([formLinkId])
+  @@index([messageId])
+  @@index([hospitalVisitReminderId])
+  @@index([taskId])
+  @@index([riskAlertId])
 }

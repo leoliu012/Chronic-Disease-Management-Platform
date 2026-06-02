@@ -238,10 +238,16 @@ export class AdminPatientEngagementController {
     this.tenant.assertWriteAllowed(user);
     await this.tenant.assertFormLinkVisibleToUser(id, user);
     const updated = await this.formLink.revoke(id, dto.reason, user.id);
+    // v3.2: the case is no longer live — mark its message CANCELED (unless the
+    // patient already submitted) so the list reflects 已失效.
+    await this.prisma.patientOutboundMessage.updateMany({
+      where: { formLinkId: id, status: { notIn: ['SUBMITTED', 'CANCELED'] } },
+      data: { status: 'CANCELED' },
+    });
     await this.prisma.engagementEventLog.create({
       data: {
         formLinkId: id,
-        eventType: 'TOKEN_REVOKED',
+        eventType: 'LINK_REVOKED',
         metadata: { reason: dto.reason, operatorId: user.id } as any,
       },
     });
@@ -294,15 +300,152 @@ export class AdminPatientEngagementController {
     if (query.messageType) where.messageType = query.messageType;
     if (query.from || query.to) {
       where.createdAt = {};
-      if (query.from) where.createdAt.gte = new Date(query.from);
-      if (query.to) where.createdAt.lte = new Date(query.to);
+      if (query.from) {
+        // v3.2-fix: bare-date from = start-of-day (server-local), matching the
+        // end-of-day handling on `to`. Parsing 'YYYY-MM-DD' via new Date() yields
+        // UTC midnight, which on a UTC+N server starts the window N hours late and
+        // silently drops early-in-the-day rows.
+        const from = new Date(query.from);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(query.from)) from.setHours(0, 0, 0, 0);
+        where.createdAt.gte = from;
+      }
+      if (query.to) {
+        // inclusive end-of-day if a bare date was supplied
+        const to = new Date(query.to);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(query.to)) to.setHours(23, 59, 59, 999);
+        where.createdAt.lte = to;
+      }
     }
-    return this.prisma.patientOutboundMessage.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take: 200,
+    // v3.2: pagination
+    const page = Math.max(1, Number(query.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 50));
+    const [total, items] = await this.prisma.$transaction([
+      this.prisma.patientOutboundMessage.count({ where }),
+      this.prisma.patientOutboundMessage.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          patient: { select: { id: true, name: true, hospitalPatientId: true } },
+          formLink: {
+            select: { id: true, type: true, status: true, expiresAt: true, usedAt: true, revokedAt: true, revokeReason: true, submitCount: true, submittedAt: true },
+          },
+        },
+      }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
+  // v3.2: full case detail — message + formLink + attempts timeline + patient submission
+  @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
+  @Get('messages/:id/detail')
+  async messageDetail(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+    await this.tenant.assertMessageVisibleToUser(id, user);
+    const message = await this.prisma.patientOutboundMessage.findUnique({
+      where: { id },
       include: { patient: { select: { id: true, name: true, hospitalPatientId: true } } },
     });
+    if (!message) throw new NotFoundException('Message not found');
+    const formLink = message.formLinkId
+      ? await this.prisma.patientFormLink.findUnique({ where: { id: message.formLinkId } })
+      : null;
+    const attempts = await this.prisma.patientOutboundAttempt.findMany({
+      where: { messageId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+    const submission = formLink ? await this.resolveSubmission(formLink) : null;
+    return { message, formLink, attempts, submission };
+  }
+
+  /**
+   * Resolve the patient's submitted content for a form link. Order:
+   *   1) formLink.submissionType/submissionId (authoritative, v3.2)
+   *   2) latest EngagementEventLog FORM_SUBMITTED metadata.resultId (legacy fallback)
+   */
+  private async resolveSubmission(formLink: any): Promise<any | null> {
+    let type: string | null = formLink.submissionType ?? null;
+    let id: string | null = formLink.submissionId ?? null;
+    let inferred = false;
+
+    if (!type || !id) {
+      const ev = await this.prisma.engagementEventLog.findFirst({
+        where: { formLinkId: formLink.id, eventType: { in: ['FORM_SUBMITTED'] } },
+        orderBy: { createdAt: 'desc' },
+      });
+      const meta: any = ev?.metadata || {};
+      if (meta.resultType && meta.resultId) {
+        type = type || meta.resultType;
+        id = id || meta.resultId;
+        inferred = true;
+      } else if (meta.followUpId) {
+        type = type || 'FollowUpRecord';
+        id = id || meta.followUpId;
+        inferred = true;
+      }
+    }
+    if (!type || !id) return null;
+
+    const submittedAt = formLink.submittedAt ?? null;
+    try {
+      if (type === 'QuestionnaireResult') {
+        const r = await this.prisma.questionnaireResult.findUnique({ where: { id } });
+        if (!r) return null;
+        return {
+          type, inferred, submittedAt: submittedAt ?? r.createdAt,
+          data: {
+            questionnaireType: r.questionnaireType, score: r.score, riskLevel: r.riskLevel,
+            riskConclusion: r.riskConclusion, answers: r.answers, note: r.note, createdAt: r.createdAt,
+          },
+        };
+      }
+      if (type === 'VitalRecord') {
+        const r = await this.prisma.vitalRecord.findUnique({ where: { id } });
+        if (!r) return null;
+        return {
+          type, inferred, submittedAt: submittedAt ?? r.measuredAt,
+          data: { vitalType: r.type, value: r.value, unit: r.unit, measuredAt: r.measuredAt, isAbnormal: r.isAbnormal, note: r.note },
+        };
+      }
+      if (type === 'MedicationCheckIn') {
+        const r = await this.prisma.medicationCheckIn.findUnique({ where: { id }, include: { medication: true } });
+        if (!r) return null;
+        return {
+          type, inferred, submittedAt: submittedAt ?? r.checkedAt,
+          data: {
+            medicationName: r.medication?.medicationName ?? null, dosage: r.medication?.dosage ?? null,
+            taken: r.taken, checkedAt: r.checkedAt, scheduledAt: r.scheduledAt, note: r.note,
+          },
+        };
+      }
+      if (type === 'HospitalVisitFeedback') {
+        const r = await this.prisma.hospitalVisitFeedback.findUnique({ where: { id } });
+        if (!r) return null;
+        return {
+          type, inferred, submittedAt: submittedAt ?? r.submittedAt,
+          data: { action: r.action, note: r.note, submittedAt: r.submittedAt, hospitalVisitReminderId: r.hospitalVisitReminderId, taskId: r.taskId, riskAlertId: r.riskAlertId },
+        };
+      }
+      if (type === 'FollowUpRecord') {
+        const r = await this.prisma.followUpRecord.findUnique({ where: { id } });
+        if (!r) return null;
+        return {
+          type, inferred, submittedAt: submittedAt ?? r.followUpTime,
+          data: { action: r.result, note: r.suggestion, content: r.content, createdAt: r.followUpTime },
+        };
+      }
+      if (type === 'PatientDirectMessage' || type === 'PatientDirectMessageAck') {
+        const r = await this.prisma.patientDirectMessage.findUnique({ where: { id } });
+        if (!r) return null;
+        return {
+          type: 'PatientDirectMessage', inferred, submittedAt: submittedAt ?? r.acknowledgedAt,
+          data: { content: r.content, requiresAck: r.requiresAck, acknowledgedAt: r.acknowledgedAt },
+        };
+      }
+    } catch {
+      return null;
+    }
+    return null;
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
@@ -321,8 +464,19 @@ export class AdminPatientEngagementController {
     if (!message.formLinkId) throw new ForbiddenException('该消息没有关联表单链接, 无法重发');
     const formLink = await this.prisma.patientFormLink.findUnique({ where: { id: message.formLinkId } });
     if (!formLink) throw new NotFoundException('Form link not found');
+    // v3.2: resend reuses the same case (message). Do NOT implicitly create a
+    // new link/case — if the link is no longer usable, fail clearly.
+    if (formLink.status === 'REVOKED' || formLink.revokedAt) {
+      throw new ForbiddenException('该链接已失效, 无法再次发送, 请重新创建随访案件.');
+    }
+    if (formLink.status === 'USED' || formLink.submitCount >= formLink.maxSubmit) {
+      throw new ForbiddenException('该链接已被患者提交, 无需再次发送.');
+    }
+    if (formLink.status === 'EXPIRED' || (formLink.expiresAt && formLink.expiresAt.getTime() <= Date.now())) {
+      throw new ForbiddenException('该链接已过期, 请重新创建随访案件.');
+    }
     if (formLink.status !== 'ACTIVE') {
-      throw new ForbiddenException('原链接状态已变更, 请先撤销并重新生成');
+      throw new ForbiddenException('原链接状态已变更, 无法再次发送.');
     }
     const patient = await this.prisma.patient.findUnique({
       where: { id: message.patientId },
@@ -346,7 +500,11 @@ export class AdminPatientEngagementController {
       return match?.openId ?? null;
     })();
 
-    const channel = (dto.preferredChannel as any) || message.channel;
+    // Default to AUTO so the system re-picks 本院服务号 / 短信兜底.
+    let channel = (dto.preferredChannel as any) || 'AUTO';
+    if (channel === 'AUTO') channel = scopedOpenId ? 'WECHAT_OFFICIAL_ACCOUNT' : 'SMS';
+    if (channel === 'MANUAL_COPY') channel = scopedOpenId ? 'WECHAT_OFFICIAL_ACCOUNT' : 'SMS';
+
     const sendOutcome = await this.engagement.sendForLink({
       formLink: {
         id: formLink.id,
@@ -360,7 +518,10 @@ export class AdminPatientEngagementController {
       channel,
       linkUrl: message.linkUrl || this.formLink.buildLinkUrl('__expired__'),
       createdBy: user.id,
-    });
+      // v3.2: reuse this message; append attempts instead of new rows.
+      reuseMessageId: message.id,
+      triggerReason: 'NURSE_RESEND',
+    } as any);
 
     await this.audit.record({
       user,
@@ -368,7 +529,7 @@ export class AdminPatientEngagementController {
       targetType: 'PatientOutboundMessage',
       targetId: id,
       ipAddress: req?.ip,
-      afterData: { channel, formLinkId: formLink.id },
+      afterData: { channel, formLinkId: formLink.id, reused: true },
     });
     return sendOutcome;
   }
