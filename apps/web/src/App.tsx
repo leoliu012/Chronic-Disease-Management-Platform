@@ -73,11 +73,7 @@ const navItems: NavItem[] = [
     to: '/integrations',
     label: '接口中心',
     hint: 'HIS / EMR / LIS 同步 · 网关入库 / 冲突核验',
-    // conflict-resolution-ux-v1: 护士 / 医生需要进入查看「冲突」队列，
-    // 因为他们最了解患者；管理员只看配置，护士才知道这个院内号是不是
-    // 真的有过身份证变更。配置类按钮（一键批量、autoPromote 开关）
-    // 仍在页面内按 isAdmin 进行细粒度禁用。
-    roles: ['ADMIN', 'MANAGER', 'DOCTOR', 'NURSE'],
+    roles: ['ADMIN', 'MANAGER'],
   },
   {
     to: '/hospital-wechat/account',
@@ -249,7 +245,7 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
             <Route
               path="/integrations"
               element={
-                <RoleRoute user={user} roles={['ADMIN', 'MANAGER', 'DOCTOR', 'NURSE']}>
+                <RoleRoute user={user} roles={['ADMIN', 'MANAGER']}>
                   <IntegrationCenterPage user={user} />
                 </RoleRoute>
               }
@@ -374,6 +370,5 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
 
 

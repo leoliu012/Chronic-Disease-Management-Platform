@@ -219,12 +219,86 @@ patcher 幂等（已修过则打印 `[skip]`）。
 这次用的是能解析 Prisma/Nest 类型的真实类型检查（不再是只查语法的 isolatedModules），覆盖了上次漏掉的 TS2xxx 跨类型赋值问题。
 
 
+### FILE: APPLY_CARE_REMINDERS_V3_3_3.md
+# care_reminders_v3_3_3_worker_reconcile
+
+承接 v3.3 / v3.3.1 / v3.3.2，补齐三个剩余项。
+
+## 1. Worker 生成提醒前先 reconcile（最重要）
+
+之前 `CareReminderWorkerService.passGenerate()` 直接查 `isActive:true` 的 schedule 并按其 `scheduledTimes`
+生成 occurrence。如果护士刚在"指标监测"改了血压时间，但没人打开"慢病提醒"页（listForPatient 才 reconcile）、
+也没跑 reconcile 脚本，worker 会用**旧时间**生成提醒——"按时自动提醒"这个核心场景不稳。
+
+修复：`passGenerate()` 开头先收集所有 `sourceType in (MEDICATION,VITAL)` 的 schedule 的 patientId，
+对每个 patient 调 `syncAllSchedulesForPatient()`（内部含 sourceId 回填 + 按来源计划对齐 + isActive 跟随），
+每个 patient 用 try/catch 包裹（单个失败不影响整轮），然后**重新查**一遍 fresh 的 `isActive:true` schedule
+再生成 occurrence。这样即使没人开页面，worker 也按计划当前时间生成。
+
+### occurrence 漂移清理
+`generateForSchedule` 用 `createMany({skipDuplicates:true})` + `@@unique([scheduleId,dueAt])`，只新增不删除。
+所以时间从 20:00 改成 07:30/19:30 后，旧的 20:00 PENDING occurrence 会残留、与新时间并存。
+修复：reconcile 时若某 schedule 的 `scheduledTimes` 变化，先 `pruneFuturePendingIfTimesChanged()` 删除该
+schedule **未来的、未发送的（PENDING 且 dueAt > now）** occurrence，再更新 schedule；worker 随后按新时间重建。
+已发送 / 已打开 / 已完成 / 已错过 / 已升级 / 过去的，一律保留。
+
+## 2. 全局"慢病提醒中心"也去掉"今日提醒"
+
+`CareRemindersPage.tsx`（独立路由，跨患者）移除"今日提醒（前后 24 小时）"板块及其 `listTodayOccurrences` 调用。
+保留"未完成 / 已升级"列表，并给它加上"立即发送 / 再次发送"操作（让护士对遗漏的提醒补发），按钮统一 pe-admin。
+
+## 3. 删除前端不用的 API helper
+
+`apps/web/src/api/care-reminders.ts` 删除已无调用方的：
+`createMedicationSchedule`、`createVitalSchedule`、`pauseSchedule`、`resumeSchedule`、`cancelSchedule`、
+以及更早为"新增提醒计划"表单加的 `listPatientMedications` / `listPatientVitalPlans` /
+`MedicationOption` / `VitalPlanOption`，和现在没人用的 `listTodayOccurrences`。
+（后端对应端点仍在并继续挡绑定计划，只是前端不再暴露/误用。）
+
+## smoke 增强
+- 5b：worker run-once 后，血压 VITAL schedule 仍对齐计划（每日 2 次 07:30/19:30）——验证 worker 侧 reconcile。
+- 18c：全局 CareRemindersPage 源码不再包含"今日提醒" / `listTodayOccurrences`。
+
+## 应用（WSL，仓库根目录）
+
+```bash
+ZIP="/mnt/c/Users/leoxi/Downloads/care_reminders_v3_3_3_worker_reconcile_patch.zip"
+TMP="/tmp/care_reminders_v3_3_3_worker_reconcile_patch"
+rm -rf "$TMP"; mkdir -p "$TMP"; unzip -q "$ZIP" -d "$TMP"; rsync -av "$TMP/" ./
+
+python3 scripts/apply_care_reminders_v3_3_3_worker_reconcile.py
+
+cd apps/api
+# 重启后端，worker 改动才生效：
+npm run start:dev
+# 另一个终端（API 跑起来后）：
+npm run smoke:care-reminders
+npm run smoke:patient-engagement
+cd ../web && npm run build
+```
+
+patcher 幂等（覆盖为同一版本）。
+
+## 验证（本地沙箱已做）
+
+- 后端用真实 tsc（NestJS + Prisma client + class-validator，strict）编译整个 care-reminders 模块：
+  worker + schedule.service 改动 **0 类型错误**。
+- 前端真实 tsc：CareRemindersPage / api/care-reminders / CareRemindersPanel **0 错误**，删 helper 无断引用。
+- smoke 脚本 `node --check` 通过。
+- prune 逻辑单测：时间变化才触发；只删 dueAt > now 的 PENDING；已发送/已完成/已错过/过去的全部保留。
+
+### 说明
+- **必须重启 API**，worker 是常驻服务，改动重启后才生效。
+- worker reconcile 现在每轮都会把 schedule 对齐计划，所以对已有库，存量"脏 schedule"会在 worker 下一轮自动修正并清理旧的未来 PENDING occurrence；也可仍用 `node prisma/reconcile-care-reminder-schedules.js` 立即修。
+- 沙箱连不了 Postgres、跑不了浏览器，worker 真实生成时序、补发交互、按钮视觉需你跑起来确认。
+
+
 ### FILE: apps/.DS_Store
 <<SKIPPED: binary file (6148 bytes)>>
 
 
 ### FILE: apps/api/.env
-DATABASE_URL=postgresql://chronic:chronic_password@127.0.0.1:55432/chronic_care?schema=public
+DATABASE_URL=postgresql://chronic:chronic_password@127.0.0.1:15432/chronic_care?schema=public
 
 PORT=3000
 NODE_ENV=development
@@ -465,7 +539,7 @@ services:
       POSTGRES_PASSWORD: chronic_password
       POSTGRES_DB: chronic_care
     ports:
-      - "55432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - chronic_postgres_data:/var/lib/postgresql/data
 
@@ -9879,6 +9953,26 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
+  // 5b. v3.3.3: the worker reconciles source-bound schedules to their plan
+  //     BEFORE generating. After the worker runs, the BP VITAL schedule must
+  //     still match the plan (twice-a-day 07:30/19:30) — i.e. the worker did
+  //     not generate from / leave behind stale times.
+  // ---------------------------------------------------------------
+  {
+    const r = await call(adminToken, 'GET', `/care-reminders/patients/${PATIENT}/schedules`);
+    const vital = (r.body || []).find(
+      (s) => s.sourceType === 'VITAL' && s.sourceId === 'demo-vital-plan-001-bp',
+    );
+    record(
+      '5b. worker keeps BP schedule aligned to plan (07:30/19:30, x2)',
+      Boolean(vital) &&
+        vital.timesPerUnit === 2 &&
+        JSON.stringify(vital.scheduledTimes) === JSON.stringify(['07:30', '19:30']),
+      `timesPerUnit=${vital?.timesPerUnit} times=${JSON.stringify(vital?.scheduledTimes)}`,
+    );
+  }
+
+  // ---------------------------------------------------------------
   // 6. pick THIS schedule's occurrence closest to now
   // ---------------------------------------------------------------
   let occId = null;
@@ -10154,6 +10248,25 @@ async function main() {
         '18b. CareRemindersPanel no longer renders TodaySection',
         !hasToday,
         hasToday ? 'TodaySection still present' : 'removed',
+      );
+    }
+
+    // 18c. v3.3.3: the global care-reminders center page also drops 今日提醒
+    const pageCandidates = [
+      path.resolve(__dirname, '../../web/src/pages/CareRemindersPage.tsx'),
+      path.resolve(process.cwd(), 'apps/web/src/pages/CareRemindersPage.tsx'),
+      path.resolve(process.cwd(), '../web/src/pages/CareRemindersPage.tsx'),
+    ];
+    const pageFile = pageCandidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
+    if (!pageFile) {
+      record('18c. CareRemindersPage no 今日提醒', true, '(source not reachable from smoke; skipped as PASS)');
+    } else {
+      const pageSrc = fs.readFileSync(pageFile, 'utf8');
+      const pageHasToday = pageSrc.includes('今日提醒') || /listTodayOccurrences/.test(pageSrc);
+      record(
+        '18c. global CareRemindersPage no longer shows 今日提醒',
+        !pageHasToday,
+        pageHasToday ? '今日提醒 still present' : 'removed',
       );
     }
   }
@@ -12403,6 +12516,32 @@ export class CareReminderScheduleService {
   }
 
   /**
+   * v3.3.3: when a reconcile changes a schedule's scheduledTimes, drop its
+   * FUTURE, not-yet-sent occurrences so they get regenerated at the new times
+   * (otherwise the old time's PENDING rows linger alongside the new ones). Only
+   * PENDING occurrences strictly after "now" are removed; anything already sent,
+   * clicked, completed, missed, escalated, or due in the past is preserved.
+   * Returns the number of occurrences removed.
+   */
+  private async pruneFuturePendingIfTimesChanged(
+    scheduleId: string,
+    oldTimes: unknown,
+    newTimes: string[],
+  ): Promise<number> {
+    const before = JSON.stringify(this.toStringArray(oldTimes));
+    const after = JSON.stringify(newTimes);
+    if (before === after) return 0;
+    const res = await this.prisma.careReminderOccurrence.deleteMany({
+      where: {
+        scheduleId,
+        status: 'PENDING',
+        dueAt: { gt: new Date() },
+      },
+    });
+    return res.count;
+  }
+
+  /**
    * Reconcile every MEDICATION schedule bound to this medication to the record.
    * Returns the number of schedules updated.
    */
@@ -12416,6 +12555,9 @@ export class CareReminderScheduleService {
     let updated = 0;
     for (const s of bound) {
       if (this.scheduleMatches(s as any, want)) continue;
+      // Drop future, not-yet-sent occurrences if the reminder times changed, so
+      // the worker regenerates them at the new times instead of stacking both.
+      await this.pruneFuturePendingIfTimesChanged(s.id, (s as any).scheduledTimes, want.scheduledTimes);
       await this.prisma.careReminderSchedule.update({
         where: { id: s.id },
         data: {
@@ -12446,6 +12588,9 @@ export class CareReminderScheduleService {
     let updated = 0;
     for (const s of bound) {
       if (this.scheduleMatches(s as any, want)) continue;
+      // Drop future, not-yet-sent occurrences if the reminder times changed, so
+      // the worker regenerates them at the new times instead of stacking both.
+      await this.pruneFuturePendingIfTimesChanged(s.id, (s as any).scheduledTimes, want.scheduledTimes);
       await this.prisma.careReminderSchedule.update({
         where: { id: s.id },
         data: {
@@ -12843,6 +12988,32 @@ export class CareReminderWorkerService
   // ---------------------------------------------------------------------------
 
   private async passGenerate(horizonDays: number): Promise<number> {
+    // v3.3.3: reconcile source-bound schedules to their MedicationRecord /
+    // VitalMonitoringPlan BEFORE generating occurrences. Otherwise, if a nurse
+    // just changed e.g. a blood-pressure plan's times but nobody has opened the
+    // care-reminders page (which reconciles on read) and the reconcile script
+    // hasn't run, the worker would generate reminders from stale schedule times.
+    // syncAllSchedulesForPatient() also backfills missing sourceId and flips
+    // isActive to match the source plan, so the fresh query below reflects the
+    // true, current state.
+    const sourceBound = await this.prisma.careReminderSchedule.findMany({
+      where: { sourceType: { in: ['MEDICATION', 'VITAL'] } },
+      select: { patientId: true },
+    });
+    const patientIds = Array.from(new Set(sourceBound.map((s) => s.patientId)));
+    for (const patientId of patientIds) {
+      try {
+        await this.schedules.syncAllSchedulesForPatient(patientId);
+      } catch (e) {
+        // Never let one patient's reconcile failure abort the whole worker pass.
+        this.logger.error(
+          `reconcile before generate failed for patient ${patientId}: ${(e as Error).message}`,
+        );
+      }
+    }
+
+    // Re-query AFTER reconcile so we generate from the up-to-date schedules
+    // (times/frequency aligned to the plan; plan-inactive bindings now isActive=false).
     const activeSchedules = await this.prisma.careReminderSchedule.findMany({
       where: { isActive: true },
       include: { hospitalTenant: { select: { timezone: true } } },
@@ -41360,76 +41531,6 @@ export function listSchedulesForPatient(patientId: string) {
   return apiFetch<CareReminderSchedule[]>(`/care-reminders/patients/${patientId}/schedules`);
 }
 
-/** Lightweight option lists for the "新增提醒计划" form. */
-export type MedicationOption = {
-  id: string;
-  medicationName: string;
-  dosage?: string | null;
-  frequency?: string | null;
-  isActive?: boolean;
-};
-export type VitalPlanOption = {
-  id: string;
-  vitalType: string;
-  displayName?: string | null;
-  unit?: string | null;
-  isActive?: boolean;
-};
-export function listPatientMedications(patientId: string) {
-  return apiFetch<MedicationOption[]>(`/patients/${patientId}/medications`);
-}
-export function listPatientVitalPlans(patientId: string) {
-  return apiFetch<VitalPlanOption[]>(`/patients/${patientId}/vital-monitoring-plans`);
-}
-
-export function createMedicationSchedule(
-  patientId: string,
-  body: {
-    medicationId: string;
-    title?: string;
-    description?: string;
-    scheduledTimes: string[];
-    scheduledDays?: string[];
-    escalationAfterMinutes?: number;
-  },
-) {
-  return apiFetch<CareReminderSchedule>(
-    `/care-reminders/patients/${patientId}/medication-schedules`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
-}
-
-export function createVitalSchedule(
-  patientId: string,
-  body: {
-    vitalType: string;
-    title?: string;
-    description?: string;
-    scheduledTimes: string[];
-    scheduledDays?: string[];
-    escalationAfterMinutes?: number;
-    vitalMonitoringPlanId?: string;
-  },
-) {
-  return apiFetch<CareReminderSchedule>(
-    `/care-reminders/patients/${patientId}/vital-schedules`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
-}
-
-export function pauseSchedule(id: string) {
-  return apiFetch<CareReminderSchedule>(`/care-reminders/schedules/${id}/pause`, { method: 'POST' });
-}
-export function resumeSchedule(id: string) {
-  return apiFetch<CareReminderSchedule>(`/care-reminders/schedules/${id}/resume`, { method: 'POST' });
-}
-/** Permanently cancel a plan-bound long-term reminder (deletes the schedule). */
-export function cancelSchedule(id: string) {
-  return apiFetch<{ id: string; canceled: true }>(`/care-reminders/schedules/${id}/cancel`, {
-    method: 'POST',
-  });
-}
-
 // ---------------------------------------------------------------------------
 // occurrence endpoints
 // ---------------------------------------------------------------------------
@@ -41441,13 +41542,6 @@ export function listOccurrencesForPatient(patientId: string, status?: string) {
   );
 }
 
-export function listTodayOccurrences() {
-  const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  return apiFetch<CareReminderOccurrence[]>(
-    `/care-reminders/today?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-  );
-}
 export function listMissedOccurrences() {
   return apiFetch<CareReminderOccurrence[]>(`/care-reminders/missed`);
 }
@@ -57347,7 +57441,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   listMissedOccurrences,
-  listTodayOccurrences,
   resendOccurrence,
   sendOccurrenceNow,
   type CareReminderOccurrence,
@@ -57355,7 +57448,6 @@ import {
 import '../patient-engagement-admin-tab.css';
 
 export default function CareRemindersPage() {
-  const [today, setToday] = useState<CareReminderOccurrence[]>([]);
   const [missed, setMissed] = useState<CareReminderOccurrence[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -57366,8 +57458,10 @@ export default function CareRemindersPage() {
     setLoading(true);
     setErr(null);
     try {
-      const [t, m] = await Promise.all([listTodayOccurrences(), listMissedOccurrences()]);
-      setToday(t);
+      // v3.3.3: the cross-patient center no longer shows a same-day board
+      // (it duplicated the long-term reminders view). It now focuses on
+      // outstanding / escalated reminders that need a nurse to follow up.
+      const m = await listMissedOccurrences();
       setMissed(m);
     } catch (e: any) {
       setErr(e?.message || '加载失败');
@@ -57432,20 +57526,19 @@ export default function CareRemindersPage() {
       {notice && <div className="pe-admin-banner pe-admin-banner-ok">{notice}</div>}
 
       <section className="pe-admin-messages">
-        <h3>{`今日提醒（前后 24 小时）· ${today.length} 条`}</h3>
-        {today.length === 0 ? (
-          <p className="pe-admin-muted">前后 24 小时内没有计划中的提醒。</p>
-        ) : (
-          <OccurrenceTable rows={today} busyId={busyId} onSend={send} onResend={resend} showPatient showActions />
-        )}
-      </section>
-
-      <section className="pe-admin-messages">
         <h3>{`未完成 / 已升级 · 最近 30 天 ${missed.length} 条`}</h3>
         {missed.length === 0 ? (
           <p className="pe-admin-muted">近期没有遗漏。</p>
         ) : (
-          <OccurrenceTable rows={missed} showPatient showEscalation />
+          <OccurrenceTable
+            rows={missed}
+            busyId={busyId}
+            onSend={send}
+            onResend={resend}
+            showPatient
+            showEscalation
+            showActions
+          />
         )}
       </section>
     </div>
@@ -89260,6 +89353,26 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
+  // 5b. v3.3.3: the worker reconciles source-bound schedules to their plan
+  //     BEFORE generating. After the worker runs, the BP VITAL schedule must
+  //     still match the plan (twice-a-day 07:30/19:30) — i.e. the worker did
+  //     not generate from / leave behind stale times.
+  // ---------------------------------------------------------------
+  {
+    const r = await call(adminToken, 'GET', `/care-reminders/patients/${PATIENT}/schedules`);
+    const vital = (r.body || []).find(
+      (s) => s.sourceType === 'VITAL' && s.sourceId === 'demo-vital-plan-001-bp',
+    );
+    record(
+      '5b. worker keeps BP schedule aligned to plan (07:30/19:30, x2)',
+      Boolean(vital) &&
+        vital.timesPerUnit === 2 &&
+        JSON.stringify(vital.scheduledTimes) === JSON.stringify(['07:30', '19:30']),
+      `timesPerUnit=${vital?.timesPerUnit} times=${JSON.stringify(vital?.scheduledTimes)}`,
+    );
+  }
+
+  // ---------------------------------------------------------------
   // 6. pick THIS schedule's occurrence closest to now
   // ---------------------------------------------------------------
   let occId = null;
@@ -89535,6 +89648,25 @@ async function main() {
         '18b. CareRemindersPanel no longer renders TodaySection',
         !hasToday,
         hasToday ? 'TodaySection still present' : 'removed',
+      );
+    }
+
+    // 18c. v3.3.3: the global care-reminders center page also drops 今日提醒
+    const pageCandidates = [
+      path.resolve(__dirname, '../../web/src/pages/CareRemindersPage.tsx'),
+      path.resolve(process.cwd(), 'apps/web/src/pages/CareRemindersPage.tsx'),
+      path.resolve(process.cwd(), '../web/src/pages/CareRemindersPage.tsx'),
+    ];
+    const pageFile = pageCandidates.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
+    if (!pageFile) {
+      record('18c. CareRemindersPage no 今日提醒', true, '(source not reachable from smoke; skipped as PASS)');
+    } else {
+      const pageSrc = fs.readFileSync(pageFile, 'utf8');
+      const pageHasToday = pageSrc.includes('今日提醒') || /listTodayOccurrences/.test(pageSrc);
+      record(
+        '18c. global CareRemindersPage no longer shows 今日提醒',
+        !pageHasToday,
+        pageHasToday ? '今日提醒 still present' : 'removed',
       );
     }
   }
@@ -89868,6 +90000,32 @@ export class CareReminderScheduleService {
   }
 
   /**
+   * v3.3.3: when a reconcile changes a schedule's scheduledTimes, drop its
+   * FUTURE, not-yet-sent occurrences so they get regenerated at the new times
+   * (otherwise the old time's PENDING rows linger alongside the new ones). Only
+   * PENDING occurrences strictly after "now" are removed; anything already sent,
+   * clicked, completed, missed, escalated, or due in the past is preserved.
+   * Returns the number of occurrences removed.
+   */
+  private async pruneFuturePendingIfTimesChanged(
+    scheduleId: string,
+    oldTimes: unknown,
+    newTimes: string[],
+  ): Promise<number> {
+    const before = JSON.stringify(this.toStringArray(oldTimes));
+    const after = JSON.stringify(newTimes);
+    if (before === after) return 0;
+    const res = await this.prisma.careReminderOccurrence.deleteMany({
+      where: {
+        scheduleId,
+        status: 'PENDING',
+        dueAt: { gt: new Date() },
+      },
+    });
+    return res.count;
+  }
+
+  /**
    * Reconcile every MEDICATION schedule bound to this medication to the record.
    * Returns the number of schedules updated.
    */
@@ -89881,6 +90039,9 @@ export class CareReminderScheduleService {
     let updated = 0;
     for (const s of bound) {
       if (this.scheduleMatches(s as any, want)) continue;
+      // Drop future, not-yet-sent occurrences if the reminder times changed, so
+      // the worker regenerates them at the new times instead of stacking both.
+      await this.pruneFuturePendingIfTimesChanged(s.id, (s as any).scheduledTimes, want.scheduledTimes);
       await this.prisma.careReminderSchedule.update({
         where: { id: s.id },
         data: {
@@ -89911,6 +90072,9 @@ export class CareReminderScheduleService {
     let updated = 0;
     for (const s of bound) {
       if (this.scheduleMatches(s as any, want)) continue;
+      // Drop future, not-yet-sent occurrences if the reminder times changed, so
+      // the worker regenerates them at the new times instead of stacking both.
+      await this.pruneFuturePendingIfTimesChanged(s.id, (s as any).scheduledTimes, want.scheduledTimes);
       await this.prisma.careReminderSchedule.update({
         where: { id: s.id },
         data: {
@@ -90148,6 +90312,489 @@ export class CareReminderScheduleService {
     for (const t of times) {
       if (!parseHm(t)) throw new BadRequestException(`invalid scheduledTime: "${t}" (expected HH:MM)`);
     }
+  }
+}
+
+
+### FILE: files/apps/api/src/care-reminders/care-reminder-worker.service.ts
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnApplicationShutdown,
+} from '@nestjs/common';
+import { TaskStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CareReminderScheduleService } from './care-reminder-schedule.service';
+import { CareReminderOccurrenceService } from './care-reminder-occurrence.service';
+import { FormLinkService } from '../patient-engagement/form-link.service';
+import { OutboundMessageService } from '../patient-engagement/outbound-message.service';
+import { WechatOfficialAccountService } from '../patient-engagement/wechat-official-account.service';
+import { HospitalWechatOfficialAccountService } from '../patient-engagement/hospital-wechat-account.service';
+
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_HORIZON_DAYS = 3;
+
+/**
+ * CareReminderWorkerService
+ * --------------------------
+ * Single-instance setInterval-driven worker. Three passes per tick:
+ *
+ *   1. generate    — for every active schedule, materialize PENDING occurrences
+ *                    out to N days ahead. Idempotent via @@unique([scheduleId, dueAt]).
+ *   2. dispatch    — for PENDING occurrences with `availableFrom <= now`, create
+ *                    PatientFormLink + PatientOutboundMessage and ship them.
+ *   3. missed      — for occurrences past `availableUntil` and still un-completed,
+ *                    mark MISSED. If schedule.escalationAfterMinutes is set,
+ *                    escalate exactly once to a nurse Task.
+ *
+ * Default cadence: every 5 minutes. Disabled by default to keep dev runs quiet —
+ * set CARE_REMINDER_WORKER_ENABLED=true to start it.
+ *
+ * Multi-instance safety: NONE. If you run >1 Nest replicas, only one of them
+ * should set CARE_REMINDER_WORKER_ENABLED=true. Future hardening: leader election
+ * via PG advisory lock, or move dispatch to Bull/Redis.
+ *
+ * For tests, callers can invoke `runOnce()` directly without the interval.
+ */
+@Injectable()
+export class CareReminderWorkerService
+  implements OnApplicationBootstrap, OnApplicationShutdown
+{
+  private readonly logger = new Logger('CareReminderWorker');
+  private timer: NodeJS.Timeout | null = null;
+  private inFlight = false;
+  private lastRunAt: Date | null = null;
+  private lastRunSummary: {
+    generated: number;
+    dispatched: number;
+    dispatchFailed: number;
+    missed: number;
+    escalated: number;
+    error?: string;
+  } | null = null;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly schedules: CareReminderScheduleService,
+    private readonly occurrences: CareReminderOccurrenceService,
+    private readonly formLink: FormLinkService,
+    private readonly outbound: OutboundMessageService,
+    private readonly wechat: WechatOfficialAccountService,
+    private readonly accounts: HospitalWechatOfficialAccountService,
+  ) {}
+
+  // ---------------------------------------------------------------------------
+  // lifecycle
+  // ---------------------------------------------------------------------------
+
+  onApplicationBootstrap() {
+    if (process.env.CARE_REMINDER_WORKER_ENABLED !== 'true') {
+      this.logger.log(
+        'Care-reminder worker disabled (set CARE_REMINDER_WORKER_ENABLED=true to enable).',
+      );
+      return;
+    }
+    const intervalMs = Number(
+      process.env.CARE_REMINDER_WORKER_INTERVAL_MS ?? DEFAULT_INTERVAL_MS,
+    );
+    // First run after 5s to avoid startup race.
+    setTimeout(() => {
+      this.runOnce().catch((e) => this.logger.error(`initial pass failed: ${(e as Error).message}`));
+      this.timer = setInterval(() => {
+        this.runOnce().catch((e) => this.logger.error(`scheduled pass failed: ${(e as Error).message}`));
+      }, intervalMs);
+    }, 5_000);
+    this.logger.log(`Care-reminder worker scheduled every ${intervalMs}ms.`);
+  }
+
+  onApplicationShutdown() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  getStatus() {
+    return {
+      enabled: process.env.CARE_REMINDER_WORKER_ENABLED === 'true',
+      running: this.timer !== null,
+      inFlight: this.inFlight,
+      intervalMs: Number(
+        process.env.CARE_REMINDER_WORKER_INTERVAL_MS ?? DEFAULT_INTERVAL_MS,
+      ),
+      lastRunAt: this.lastRunAt?.toISOString() ?? null,
+      lastRunSummary: this.lastRunSummary,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // runOnce — also callable from smoke tests / dev-tools controller
+  // ---------------------------------------------------------------------------
+
+  async runOnce(): Promise<NonNullable<typeof this.lastRunSummary>> {
+    if (this.inFlight) {
+      this.logger.warn('previous pass still in flight; skipping this tick.');
+      return this.lastRunSummary ?? { generated: 0, dispatched: 0, dispatchFailed: 0, missed: 0, escalated: 0 };
+    }
+    this.inFlight = true;
+    const horizonDays = Number(
+      process.env.CARE_REMINDER_WORKER_HORIZON_DAYS ?? DEFAULT_HORIZON_DAYS,
+    );
+    let generated = 0;
+    let dispatched = 0;
+    let dispatchFailed = 0;
+    let missed = 0;
+    let escalated = 0;
+    let errorMsg: string | undefined;
+
+    try {
+      generated = await this.passGenerate(horizonDays);
+      const dispatchResult = await this.passDispatch();
+      dispatched = dispatchResult.dispatched;
+      dispatchFailed = dispatchResult.failed;
+      const missedResult = await this.passMissed();
+      missed = missedResult.missed;
+      escalated = missedResult.escalated;
+    } catch (e) {
+      errorMsg = (e as Error).message;
+      this.logger.error(`runOnce error: ${errorMsg}`);
+    } finally {
+      this.inFlight = false;
+      this.lastRunAt = new Date();
+      this.lastRunSummary = { generated, dispatched, dispatchFailed, missed, escalated, ...(errorMsg ? { error: errorMsg } : {}) };
+    }
+    return this.lastRunSummary!;
+  }
+
+  // ---------------------------------------------------------------------------
+  // pass 1: generate occurrences
+  // ---------------------------------------------------------------------------
+
+  private async passGenerate(horizonDays: number): Promise<number> {
+    // v3.3.3: reconcile source-bound schedules to their MedicationRecord /
+    // VitalMonitoringPlan BEFORE generating occurrences. Otherwise, if a nurse
+    // just changed e.g. a blood-pressure plan's times but nobody has opened the
+    // care-reminders page (which reconciles on read) and the reconcile script
+    // hasn't run, the worker would generate reminders from stale schedule times.
+    // syncAllSchedulesForPatient() also backfills missing sourceId and flips
+    // isActive to match the source plan, so the fresh query below reflects the
+    // true, current state.
+    const sourceBound = await this.prisma.careReminderSchedule.findMany({
+      where: { sourceType: { in: ['MEDICATION', 'VITAL'] } },
+      select: { patientId: true },
+    });
+    const patientIds = Array.from(new Set(sourceBound.map((s) => s.patientId)));
+    for (const patientId of patientIds) {
+      try {
+        await this.schedules.syncAllSchedulesForPatient(patientId);
+      } catch (e) {
+        // Never let one patient's reconcile failure abort the whole worker pass.
+        this.logger.error(
+          `reconcile before generate failed for patient ${patientId}: ${(e as Error).message}`,
+        );
+      }
+    }
+
+    // Re-query AFTER reconcile so we generate from the up-to-date schedules
+    // (times/frequency aligned to the plan; plan-inactive bindings now isActive=false).
+    const activeSchedules = await this.prisma.careReminderSchedule.findMany({
+      where: { isActive: true },
+      include: { hospitalTenant: { select: { timezone: true } } },
+    });
+
+    let totalCreated = 0;
+    for (const sched of activeSchedules) {
+      const timezone = sched.hospitalTenant?.timezone || 'Asia/Shanghai';
+      const r = await this.occurrences.generateForSchedule({
+        schedule: sched,
+        timezone,
+        daysAhead: horizonDays,
+      });
+      totalCreated += r.created;
+    }
+    return totalCreated;
+  }
+
+  // ---------------------------------------------------------------------------
+  // pass 2: dispatch
+  // ---------------------------------------------------------------------------
+
+  private async passDispatch(): Promise<{ dispatched: number; failed: number }> {
+    const now = new Date();
+    // Window: anything currently inside the reminder window.
+    const pending = await this.prisma.careReminderOccurrence.findMany({
+      where: {
+        status: 'PENDING',
+        availableFrom: { lte: now },
+        availableUntil: { gte: now },
+      },
+      orderBy: { dueAt: 'asc' },
+      take: 200, // cap per tick
+      include: {
+        schedule: true,
+        patient: { include: { wechatIdentities: { take: 5, orderBy: { createdAt: 'desc' } } } },
+      },
+    });
+
+    let dispatched = 0;
+    let failed = 0;
+    for (const occ of pending) {
+      // Spec point 9: each occurrence creates at most ONE active form link.
+      // The PENDING → SENDING claim is the gate.
+      const claimed = await this.occurrences.claimForSending(occ.id);
+      if (!claimed) continue; // another worker pass grabbed it, or it transitioned
+
+      try {
+        const { formLink, linkUrl, message } = await this.dispatchOne(occ);
+        if (message?.status === 'SENT' || message?.status === 'PENDING') {
+          await this.occurrences.markSent(occ.id, formLink.id, message.id);
+          dispatched += 1;
+        } else {
+          await this.occurrences.markSendFailed(occ.id, message?.errorMessage ?? 'unknown dispatch failure');
+          failed += 1;
+        }
+      } catch (e) {
+        await this.occurrences.markSendFailed(occ.id, (e as Error).message);
+        failed += 1;
+      }
+    }
+
+    return { dispatched, failed };
+  }
+
+  private async dispatchOne(occ: any) {
+    const tenantId: string = occ.hospitalTenantId;
+    const patient = occ.patient;
+    const schedule = occ.schedule;
+
+    // Step 1: create the form link.
+    const { formLink, token, linkUrl } = await this.formLink.create({
+      hospitalTenantId: tenantId,
+      patientId: occ.patientId,
+      type: this.occurrenceTypeToFormLinkType(occ.occurrenceType),
+      title: occ.title,
+      description: this.buildDescription(occ, schedule),
+      payload: {
+        careReminderOccurrenceId: occ.id,
+        scheduleId: occ.scheduleId,
+        sourceType: schedule.sourceType,
+        sourceId: schedule.sourceId,
+        ...(schedule.payload || {}),
+      } as any,
+      expiresInHours: 24,
+      requiresIdentityCheck: false,
+      createdBy: null,
+    });
+
+    // Step 2: resolve channel using v2.1 rules.
+    const account = await this.accounts.getAccountForTenant(tenantId);
+    const scopedOpenId = (() => {
+      if (!account) return null;
+      const match = (patient.wechatIdentities || []).find(
+        (i: any) =>
+          i.hospitalTenantId === tenantId &&
+          i.appId === account.appId &&
+          i.isVerified,
+      );
+      return match?.openId ?? null;
+    })();
+    const canWechat = await this.wechat.tenantCanReceiveWechat(tenantId);
+
+    const primaryChannel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | 'MANUAL_COPY' =
+      scopedOpenId && canWechat ? 'WECHAT_OFFICIAL_ACCOUNT' :
+      patient.phone ? 'SMS' :
+      'MANUAL_COPY';
+
+    // Step 3: create + dispatch outbound message.
+    const messageType = this.occurrenceTypeToMessageType(occ.occurrenceType);
+    const recipient = primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' ? scopedOpenId : primaryChannel === 'SMS' ? patient.phone : null;
+    const content = this.buildContent(occ, schedule, linkUrl);
+
+    const message = await this.outbound.create({
+      hospitalTenantId: tenantId,
+      patientId: occ.patientId,
+      formLinkId: formLink.id,
+      channel: primaryChannel,
+      messageType,
+      title: occ.title,
+      content,
+      linkUrl,
+      recipient,
+      createdBy: null,
+      initialStatus: 'PENDING',
+    });
+
+    if (primaryChannel !== 'MANUAL_COPY') {
+      const dispatched = await this.outbound.dispatch(message.id, {
+        openId: primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' ? recipient : null,
+        phone: primaryChannel === 'SMS' ? recipient : null,
+      });
+      // v3.2: record this as the INITIAL delivery attempt on the canonical message.
+      // (We're already inside `if (primaryChannel !== 'MANUAL_COPY')`, so the
+      // channel here is WECHAT_OFFICIAL_ACCOUNT or SMS.)
+      try {
+        await this.outbound.recordAttempt({
+          messageId: message.id,
+          hospitalTenantId: tenantId,
+          patientId: occ.patientId,
+          formLinkId: formLink.id,
+          channel: primaryChannel,
+          status: dispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+          providerMessageId: dispatched?.providerMessageId ?? null,
+          errorMessage: dispatched?.status === 'SENT' ? null : dispatched?.errorMessage ?? '发送失败',
+          triggerReason: 'INITIAL',
+        });
+        await this.outbound.recomputeDelivery(message.id);
+      } catch { /* attempts table may be pre-v3.2 */ }
+
+      // v2.1 SMS fallback on WeChat failure.
+      if (
+        primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' &&
+        dispatched?.status === 'FAILED' &&
+        patient.phone
+      ) {
+        const fb = await this.outbound.create({
+          hospitalTenantId: tenantId,
+          patientId: occ.patientId,
+          formLinkId: formLink.id,
+          channel: 'SMS',
+          messageType,
+          title: occ.title,
+          content,
+          linkUrl,
+          recipient: patient.phone,
+          createdBy: null,
+          initialStatus: 'PENDING',
+        });
+        const fbDispatched = await this.outbound.dispatch(fb.id, {
+          openId: null,
+          phone: patient.phone,
+        });
+        try {
+          await this.outbound.recordAttempt({
+            messageId: message.id,
+            hospitalTenantId: tenantId,
+            patientId: occ.patientId,
+            formLinkId: formLink.id,
+            channel: 'SMS',
+            status: fbDispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+            providerMessageId: fbDispatched?.providerMessageId ?? null,
+            errorMessage: fbDispatched?.status === 'SENT' ? null : fbDispatched?.errorMessage ?? '发送失败',
+            triggerReason: 'AUTO_FALLBACK',
+          });
+          await this.outbound.recomputeDelivery(message.id);
+        } catch { /* attempts table may be pre-v3.2 */ }
+        const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: fb.id } });
+        return { formLink, token, linkUrl, message: refreshed };
+      }
+
+      const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: message.id } });
+      return { formLink, token, linkUrl, message: refreshed };
+    }
+
+    return { formLink, token, linkUrl, message };
+  }
+
+  // ---------------------------------------------------------------------------
+  // pass 3: missed + escalation
+  // ---------------------------------------------------------------------------
+
+  private async passMissed(): Promise<{ missed: number; escalated: number }> {
+    const now = new Date();
+
+    // mark MISSED
+    const stale = await this.prisma.careReminderOccurrence.findMany({
+      where: {
+        status: { in: ['PENDING', 'SENT', 'CLICKED'] },
+        availableUntil: { lt: now },
+      },
+      take: 500,
+    });
+    let missed = 0;
+    for (const occ of stale) {
+      if (await this.occurrences.markMissed(occ.id)) missed += 1;
+    }
+
+    // escalate: MISSED + schedule.escalationAfterMinutes set + within escalation window
+    const candidates = await this.prisma.careReminderOccurrence.findMany({
+      where: {
+        status: 'MISSED',
+        escalatedTaskId: null,
+      },
+      include: { schedule: true, patient: { select: { responsibleNurseId: true } } },
+      take: 500,
+    });
+    let escalated = 0;
+    for (const occ of candidates) {
+      const after = occ.schedule.escalationAfterMinutes;
+      if (after == null) continue;
+      const escalateAt = (occ.missedAt ?? occ.availableUntil).getTime() + after * 60_000;
+      if (escalateAt > now.getTime()) continue;
+
+      // Create the nurse task first, then atomically attach.
+      const task = await this.prisma.task.create({
+        data: {
+          patientId: occ.patientId,
+          title: `未完成 · ${occ.title}`,
+          type: this.occurrenceTypeToTaskType(occ.occurrenceType),
+          status: TaskStatus.PENDING,
+          dueAt: new Date(now.getTime() + 24 * 3600 * 1000),
+          assigneeId: occ.patient.responsibleNurseId ?? undefined,
+        },
+      });
+      const won = await this.occurrences.markEscalated(occ.id, task.id);
+      if (won) {
+        escalated += 1;
+      } else {
+        // Lost the race; delete the orphan task we just made.
+        try { await this.prisma.task.delete({ where: { id: task.id } }); } catch { /* ignore */ }
+      }
+    }
+
+    return { missed, escalated };
+  }
+
+  // ---------------------------------------------------------------------------
+  // helpers
+  // ---------------------------------------------------------------------------
+
+  private occurrenceTypeToFormLinkType(t: string): string {
+    switch (t) {
+      case 'MEDICATION_CHECKIN': return 'MEDICATION_CHECKIN';
+      case 'VITAL_RECHECK': return 'VITAL_RECHECK';
+      case 'QUESTIONNAIRE': return 'QUESTIONNAIRE';
+      case 'GENERAL_MESSAGE': return 'GENERAL_MESSAGE';
+      default: return 'GENERIC_NOTICE';
+    }
+  }
+
+  private occurrenceTypeToMessageType(t: string): string {
+    switch (t) {
+      case 'MEDICATION_CHECKIN': return 'MEDICATION_REMINDER';
+      case 'VITAL_RECHECK': return 'VITAL_RECHECK_REMINDER';
+      case 'QUESTIONNAIRE': return 'QUESTIONNAIRE_REMINDER';
+      case 'GENERAL_MESSAGE': return 'QUESTIONNAIRE_REMINDER';
+      default: return 'QUESTIONNAIRE_REMINDER';
+    }
+  }
+
+  private occurrenceTypeToTaskType(t: string): string {
+    switch (t) {
+      case 'MEDICATION_CHECKIN': return 'MEDICATION_ADHERENCE_FOLLOW_UP';
+      case 'VITAL_RECHECK': return 'RISK_ALERT_FOLLOW_UP';
+      case 'GENERAL_MESSAGE': return 'GENERAL_FOLLOW_UP';
+      default: return 'GENERAL_FOLLOW_UP';
+    }
+  }
+
+  private buildDescription(occ: any, schedule: any): string {
+    const dueLocal = occ.dueAt as Date;
+    return schedule.description || `${occ.title} · 计划时间 ${dueLocal.toISOString()}`;
+  }
+
+  private buildContent(occ: any, schedule: any, linkUrl: string): string {
+    return `${schedule.description || occ.title}\n点击下方链接完成本次任务: ${linkUrl}`;
   }
 }
 
@@ -90740,76 +91387,6 @@ export function listSchedulesForPatient(patientId: string) {
   return apiFetch<CareReminderSchedule[]>(`/care-reminders/patients/${patientId}/schedules`);
 }
 
-/** Lightweight option lists for the "新增提醒计划" form. */
-export type MedicationOption = {
-  id: string;
-  medicationName: string;
-  dosage?: string | null;
-  frequency?: string | null;
-  isActive?: boolean;
-};
-export type VitalPlanOption = {
-  id: string;
-  vitalType: string;
-  displayName?: string | null;
-  unit?: string | null;
-  isActive?: boolean;
-};
-export function listPatientMedications(patientId: string) {
-  return apiFetch<MedicationOption[]>(`/patients/${patientId}/medications`);
-}
-export function listPatientVitalPlans(patientId: string) {
-  return apiFetch<VitalPlanOption[]>(`/patients/${patientId}/vital-monitoring-plans`);
-}
-
-export function createMedicationSchedule(
-  patientId: string,
-  body: {
-    medicationId: string;
-    title?: string;
-    description?: string;
-    scheduledTimes: string[];
-    scheduledDays?: string[];
-    escalationAfterMinutes?: number;
-  },
-) {
-  return apiFetch<CareReminderSchedule>(
-    `/care-reminders/patients/${patientId}/medication-schedules`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
-}
-
-export function createVitalSchedule(
-  patientId: string,
-  body: {
-    vitalType: string;
-    title?: string;
-    description?: string;
-    scheduledTimes: string[];
-    scheduledDays?: string[];
-    escalationAfterMinutes?: number;
-    vitalMonitoringPlanId?: string;
-  },
-) {
-  return apiFetch<CareReminderSchedule>(
-    `/care-reminders/patients/${patientId}/vital-schedules`,
-    { method: 'POST', body: JSON.stringify(body) },
-  );
-}
-
-export function pauseSchedule(id: string) {
-  return apiFetch<CareReminderSchedule>(`/care-reminders/schedules/${id}/pause`, { method: 'POST' });
-}
-export function resumeSchedule(id: string) {
-  return apiFetch<CareReminderSchedule>(`/care-reminders/schedules/${id}/resume`, { method: 'POST' });
-}
-/** Permanently cancel a plan-bound long-term reminder (deletes the schedule). */
-export function cancelSchedule(id: string) {
-  return apiFetch<{ id: string; canceled: true }>(`/care-reminders/schedules/${id}/cancel`, {
-    method: 'POST',
-  });
-}
-
 // ---------------------------------------------------------------------------
 // occurrence endpoints
 // ---------------------------------------------------------------------------
@@ -90821,13 +91398,6 @@ export function listOccurrencesForPatient(patientId: string, status?: string) {
   );
 }
 
-export function listTodayOccurrences() {
-  const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const to = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  return apiFetch<CareReminderOccurrence[]>(
-    `/care-reminders/today?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-  );
-}
 export function listMissedOccurrences() {
   return apiFetch<CareReminderOccurrence[]>(`/care-reminders/missed`);
 }
@@ -92436,7 +93006,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   listMissedOccurrences,
-  listTodayOccurrences,
   resendOccurrence,
   sendOccurrenceNow,
   type CareReminderOccurrence,
@@ -92444,7 +93013,6 @@ import {
 import '../patient-engagement-admin-tab.css';
 
 export default function CareRemindersPage() {
-  const [today, setToday] = useState<CareReminderOccurrence[]>([]);
   const [missed, setMissed] = useState<CareReminderOccurrence[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -92455,8 +93023,10 @@ export default function CareRemindersPage() {
     setLoading(true);
     setErr(null);
     try {
-      const [t, m] = await Promise.all([listTodayOccurrences(), listMissedOccurrences()]);
-      setToday(t);
+      // v3.3.3: the cross-patient center no longer shows a same-day board
+      // (it duplicated the long-term reminders view). It now focuses on
+      // outstanding / escalated reminders that need a nurse to follow up.
+      const m = await listMissedOccurrences();
       setMissed(m);
     } catch (e: any) {
       setErr(e?.message || '加载失败');
@@ -92521,20 +93091,19 @@ export default function CareRemindersPage() {
       {notice && <div className="pe-admin-banner pe-admin-banner-ok">{notice}</div>}
 
       <section className="pe-admin-messages">
-        <h3>{`今日提醒（前后 24 小时）· ${today.length} 条`}</h3>
-        {today.length === 0 ? (
-          <p className="pe-admin-muted">前后 24 小时内没有计划中的提醒。</p>
-        ) : (
-          <OccurrenceTable rows={today} busyId={busyId} onSend={send} onResend={resend} showPatient showActions />
-        )}
-      </section>
-
-      <section className="pe-admin-messages">
         <h3>{`未完成 / 已升级 · 最近 30 天 ${missed.length} 条`}</h3>
         {missed.length === 0 ? (
           <p className="pe-admin-muted">近期没有遗漏。</p>
         ) : (
-          <OccurrenceTable rows={missed} showPatient showEscalation />
+          <OccurrenceTable
+            rows={missed}
+            busyId={busyId}
+            onSend={send}
+            onResend={resend}
+            showPatient
+            showEscalation
+            showActions
+          />
         )}
       </section>
     </div>
@@ -95762,6 +96331,87 @@ def main() -> None:
     CTRL.write_text(src, encoding="utf-8")
     print("[ok] care-reminders.controller.ts: frequencyUnit cast to 'DAY' | 'WEEK' | 'MONTH'")
     print("\n[done] v3.3.2 type fix applied. Now: cd apps/web && npm run build  (or restart the API)")
+
+
+if __name__ == "__main__":
+    main()
+
+
+### FILE: scripts/apply_care_reminders_v3_3_3_worker_reconcile.py
+#!/usr/bin/env python3
+"""
+apply_care_reminders_v3_3_3_worker_reconcile.py
+-----------------------------------------------
+Care Reminders v3.3.3:
+  1. The worker reconciles source-bound schedules to their MedicationRecord /
+     VitalMonitoringPlan BEFORE generating occurrences, and prunes future,
+     not-yet-sent occurrences when a reminder's times changed (so reminders
+     fire at the plan's current times even if nobody opened the page).
+  2. The global cross-patient "慢病提醒中心" page (CareRemindersPage) drops the
+     "今日提醒" board.
+  3. Dead frontend API helpers are removed (create/pause/resume/cancel schedule,
+     the add-form option lists, and the now-unused listTodayOccurrences).
+
+Idempotent: installs known-good full-file versions of
+  - apps/api/src/care-reminders/care-reminder-worker.service.ts
+      passGenerate() reconciles every source-bound patient (try/catch per patient,
+      never aborts the pass), then re-queries fresh isActive schedules to generate.
+  - apps/api/src/care-reminders/care-reminder-schedule.service.ts
+      sync*FromMedicationRecord / sync*FromVitalMonitoringPlan now call
+      pruneFuturePendingIfTimesChanged() before updating a schedule whose times
+      changed (deletes only PENDING occurrences with dueAt > now).
+  - apps/web/src/pages/CareRemindersPage.tsx
+      removes 今日提醒 section + listTodayOccurrences; outstanding/escalated list
+      keeps send/resend actions; buttons are pe-admin.
+  - apps/web/src/api/care-reminders.ts
+      removes createMedicationSchedule / createVitalSchedule / pauseSchedule /
+      resumeSchedule / cancelSchedule / listPatientMedications /
+      listPatientVitalPlans / MedicationOption / VitalPlanOption /
+      listTodayOccurrences (all unused).
+  - apps/api/scripts/smoke-care-reminders.js
+      adds 5b (worker keeps BP schedule aligned to plan) and 18c (global page
+      has no 今日提醒).
+
+Run from repo ROOT:
+  python3 scripts/apply_care_reminders_v3_3_3_worker_reconcile.py
+"""
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+ROOT = Path.cwd()
+SRC = Path(__file__).resolve().parent.parent / "files"
+
+FILES = [
+    "apps/api/src/care-reminders/care-reminder-worker.service.ts",
+    "apps/api/src/care-reminders/care-reminder-schedule.service.ts",
+    "apps/web/src/pages/CareRemindersPage.tsx",
+    "apps/web/src/api/care-reminders.ts",
+    "apps/api/scripts/smoke-care-reminders.js",
+]
+
+
+def main() -> None:
+    if not SRC.exists():
+        print(f"[err] payload dir not found: {SRC} (unzip the patch first)", file=sys.stderr)
+        sys.exit(1)
+    for rel in FILES:
+        src = SRC / rel
+        dst = ROOT / rel
+        if not src.exists():
+            print(f"[err] missing payload file: {src}", file=sys.stderr)
+            sys.exit(1)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        print(f"[ok] {rel}")
+    print("\n[done] v3.3.3 installed.")
+    print("Restart the API so the worker change takes effect:")
+    print("  cd apps/api && npm run start:dev")
+    print("Then (optional) verify:")
+    print("  npm run smoke:care-reminders   # needs the API running")
+    print("  cd ../web && npm run build")
 
 
 if __name__ == "__main__":

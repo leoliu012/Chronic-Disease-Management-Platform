@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: chronic_password
       POSTGRES_DB: chronic_care
     ports:
-      - "55432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - chronic_postgres_data:/var/lib/postgresql/data
 
