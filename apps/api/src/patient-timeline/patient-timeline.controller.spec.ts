@@ -7,7 +7,9 @@ describe('PatientTimelineController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PatientTimelineController],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     controller = module.get<PatientTimelineController>(PatientTimelineController);
   });

@@ -14,11 +14,13 @@ import { Roles } from '../security/roles.decorator';
 import { CurrentUser } from '../security/current-user.decorator';
 import type { RequestUser } from '../security/request-user.type';
 import { AuditService } from '../security/audit.service';
+import { Audit } from '../security/audit.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { PatientEngagementService } from './patient-engagement.service';
 import { FormLinkService } from './form-link.service';
 import { HospitalWechatOfficialAccountService } from './hospital-wechat-account.service';
 import { PatientEngagementTenantService } from './patient-engagement-tenant.service';
+import { ClinicalAccessScopeService } from '../security/clinical-access-scope.service';
 import {
   CreateHospitalVisitConfirmLinkDto,
   CreateMedicationCheckInLinkDto,
@@ -47,6 +49,7 @@ export class AdminPatientEngagementController {
     private readonly audit: AuditService,
     private readonly accounts: HospitalWechatOfficialAccountService,
     private readonly tenant: PatientEngagementTenantService,
+    private readonly access: ClinicalAccessScopeService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -65,6 +68,7 @@ export class AdminPatientEngagementController {
   // ---------------------------------------------------------------------------
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_PATIENT_QUESTIONNAIRE', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/questionnaire-links')
   async createQuestionnaireLink(
     @Param('patientId') patientId: string,
@@ -101,6 +105,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_PATIENT_VITAL_RECHECK', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/vital-recheck-links')
   async createVitalRecheckLink(
     @Param('patientId') patientId: string,
@@ -137,6 +142,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_PATIENT_MEDICATION_CHECKIN', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/medication-checkin-links')
   async createMedicationCheckInLink(
     @Param('patientId') patientId: string,
@@ -184,6 +190,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_PATIENT_HOSPITAL_VISIT', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/hospital-visit-links')
   async createHospitalVisitLink(
     @Param('patientId') patientId: string,
@@ -228,6 +235,7 @@ export class AdminPatientEngagementController {
   // ---------------------------------------------------------------------------
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'REVOKE_PATIENT_H5_LINK', target: 'PatientFormLink', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('form-links/:id/revoke')
   async revokeLink(
     @Param('id') id: string,
@@ -236,7 +244,7 @@ export class AdminPatientEngagementController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    await this.tenant.assertFormLinkVisibleToUser(id, user);
+    await this.tenant.assertFormLinkWritableToUser(id, user);
     const updated = await this.formLink.revoke(id, dto.reason, user.id);
     // v3.2: the case is no longer live — mark its message CANCELED (unless the
     // patient already submitted) so the list reflects 已失效.
@@ -275,7 +283,7 @@ export class AdminPatientEngagementController {
       orderBy: { createdAt: 'desc' },
       include: {
         formLink: {
-          select: { id: true, type: true, status: true, expiresAt: true, usedAt: true, submitCount: true },
+          select: { id: true, type: true, status: true, expiresAt: true, usedAt: true, submitCount: true, payload: true },
         },
       },
       take: 100,
@@ -289,11 +297,9 @@ export class AdminPatientEngagementController {
     if (query.patientId) {
       await this.tenant.assertPatientVisibleToUser(query.patientId, user);
       where.patientId = query.patientId;
-    } else if (user.role !== UserRole.ADMIN) {
-      // Non-admin without a patient filter: limit to their tenant.
-      const tenantId = await this.tenant.resolveUserHospitalTenantId(user);
-      if (!tenantId) throw new ForbiddenException('当前用户未绑定 hospitalTenantId');
-      where.hospitalTenantId = tenantId;
+    } else {
+      // List visibility uses the same patient domain as every clinical module.
+      where.patient = await this.access.buildPatientScope(user, query.hospitalTenantId);
     }
     if (query.channel) where.channel = query.channel;
     if (query.status) where.status = query.status;
@@ -329,7 +335,7 @@ export class AdminPatientEngagementController {
         include: {
           patient: { select: { id: true, name: true, hospitalPatientId: true } },
           formLink: {
-            select: { id: true, type: true, status: true, expiresAt: true, usedAt: true, revokedAt: true, revokeReason: true, submitCount: true, submittedAt: true },
+            select: { id: true, type: true, status: true, expiresAt: true, usedAt: true, revokedAt: true, revokeReason: true, submitCount: true, submittedAt: true, payload: true },
           },
         },
       }),
@@ -449,6 +455,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'RESEND_PATIENT_MESSAGE', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.message.patientId' })
   @Post('messages/:id/resend')
   async resendMessage(
     @Param('id') id: string,
@@ -457,7 +464,7 @@ export class AdminPatientEngagementController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    await this.tenant.assertMessageVisibleToUser(id, user);
+    await this.tenant.assertMessageWritableToUser(id, user);
 
     const message = await this.prisma.patientOutboundMessage.findUnique({ where: { id } });
     if (!message) throw new NotFoundException('Message not found');
@@ -535,6 +542,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'MARK_PATIENT_MESSAGE_MANUAL_SENT', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('messages/:id/mark-manual-sent')
   async markManualSent(
     @Param('id') id: string,
@@ -543,7 +551,7 @@ export class AdminPatientEngagementController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    await this.tenant.assertMessageVisibleToUser(id, user);
+    await this.tenant.assertMessageWritableToUser(id, user);
     const message = await this.prisma.patientOutboundMessage.findUnique({ where: { id } });
     if (!message) throw new NotFoundException('Message not found');
     const updated = await this.prisma.patientOutboundMessage.update({
@@ -614,3 +622,8 @@ export class AdminPatientEngagementController {
     };
   }
 }
+
+
+
+
+

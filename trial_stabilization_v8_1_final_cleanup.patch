@@ -1,0 +1,974 @@
+--- a/apps/api/prisma/schema.prisma
++++ b/apps/api/prisma/schema.prisma
+@@ -1635,6 +1635,7 @@
+   retryScheduled  Int      @default(0)
+   recoveredStuck  Int      @default(0)
+   recoveredAsSent Int      @default(0)
++  expiredLinks    Int      @default(0)
+   missed          Int      @default(0)
+   escalated       Int      @default(0)
+   error           String?
+
+--- a/apps/api/src/care-reminders/care-reminder-worker.service.ts
++++ b/apps/api/src/care-reminders/care-reminder-worker.service.ts
+@@ -35,6 +35,7 @@
+   retryScheduled: number;
+   recoveredStuck: number;
+   recoveredAsSent: number;
++  expiredLinks: number;
+   missed: number;
+   escalated: number;
+   error?: string;
+@@ -349,6 +350,7 @@
+       retryScheduled: 0,
+       recoveredStuck: 0,
+       recoveredAsSent: 0,
++      expiredLinks: 0,
+       missed: 0,
+       escalated: 0,
+       ...(error ? { error } : {}),
+@@ -449,6 +451,8 @@
+ 
+     let summary = this.emptySummary('SUCCEEDED');
+     try {
++      summary.expiredLinks = await this.expireStaleFormLinks();
++
+       const recovery = await this.recoverStuckSending();
+       summary.recoveredStuck = recovery.recoveredStuck;
+       summary.recoveredAsSent = recovery.recoveredAsSent;
+@@ -488,6 +492,7 @@
+           retryScheduled: summary.retryScheduled,
+           recoveredStuck: summary.recoveredStuck,
+           recoveredAsSent: summary.recoveredAsSent,
++          expiredLinks: summary.expiredLinks,
+           missed: summary.missed,
+           escalated: summary.escalated,
+           error: summary.error?.slice(0, 1000),
+@@ -509,10 +514,27 @@
+         `round=${run.id} status=${summary.status} generated=${summary.generated} ` +
+           `sent=${summary.dispatched} failed=${summary.dispatchFailed} retried=${summary.retried} ` +
+           `retryScheduled=${summary.retryScheduled} recovered=${summary.recoveredStuck} ` +
+-          `escalated=${summary.escalated}`,
++          `expiredLinks=${summary.expiredLinks} escalated=${summary.escalated}`,
+       );
+     }
+     return summary;
++  }
++
++  // ---------------------------------------------------------------------------
++  // housekeeping: converge expired ACTIVE H5 links before each leader round
++  // ---------------------------------------------------------------------------
++
++  private async expireStaleFormLinks(now = new Date()): Promise<number> {
++    const result = await this.prisma.patientFormLink.updateMany({
++      where: {
++        status: 'ACTIVE',
++        expiresAt: { lte: now },
++      },
++      data: {
++        status: 'EXPIRED',
++      },
++    });
++    return result.count;
+   }
+ 
+   // ---------------------------------------------------------------------------
+
+--- a/apps/api/src/admin-ops/admin-ops.service.ts
++++ b/apps/api/src/admin-ops/admin-ops.service.ts
+@@ -105,6 +105,7 @@
+           retryScheduled: true,
+           recoveredStuck: true,
+           recoveredAsSent: true,
++          expiredLinks: true,
+           missed: true,
+           escalated: true,
+         },
+@@ -144,6 +145,7 @@
+         retryScheduled: metrics24h._sum.retryScheduled ?? 0,
+         recoveredStuck: metrics24h._sum.recoveredStuck ?? 0,
+         recoveredAsSent: metrics24h._sum.recoveredAsSent ?? 0,
++        expiredLinks: metrics24h._sum.expiredLinks ?? 0,
+         missed: metrics24h._sum.missed ?? 0,
+         escalated: metrics24h._sum.escalated ?? 0,
+       },
+
+--- a/apps/api/prisma/seed-all.js
++++ b/apps/api/prisma/seed-all.js
+@@ -2614,23 +2614,71 @@
+     },
+   });
+ 
++  const demoMedication101 = await prisma.medicationRecord.upsert({
++    where: { id: 'demo-med-101' },
++    update: {
++      patientId: 'demo-patient-101',
++      medicationName: '示例药物',
++      dosage: '示例剂量',
++      frequency: '每日 1 次',
++      frequencyUnit: 'DAY',
++      timesPerUnit: 1,
++      timingRelation: 'NONE',
++      customDoseTimes: ['09:00'],
++      reminderLeadMinutes: 180,
++      checkInWindowBeforeMinutes: 60,
++      missedWindowAfterMinutes: 240,
++      dataSource: 'EMR',
++      isActive: true,
++    },
++    create: {
++      id: 'demo-med-101',
++      patientId: 'demo-patient-101',
++      medicationName: '示例药物',
++      dosage: '示例剂量',
++      frequency: '每日 1 次',
++      frequencyUnit: 'DAY',
++      timesPerUnit: 1,
++      timingRelation: 'NONE',
++      customDoseTimes: ['09:00'],
++      reminderLeadMinutes: 180,
++      checkInWindowBeforeMinutes: 60,
++      missedWindowAfterMinutes: 240,
++      dataSource: 'EMR',
++      isActive: true,
++    },
++  });
++
+   await prisma.careReminderSchedule.upsert({
+     where: { id: 'demo-care-sched-101-med' },
+-    update: {},
++    update: {
++      sourceId: demoMedication101.id,
++      payload: {
++        medicationId: demoMedication101.id,
++        medicationName: demoMedication101.medicationName,
++        dosage: demoMedication101.dosage,
++      },
++    },
+     create: {
+       id: 'demo-care-sched-101-med',
+       hospitalTenantId: 'demo-tenant-002',
+       patientId: 'demo-patient-101',
+       sourceType: 'MEDICATION',
++      sourceId: demoMedication101.id,
+       title: '服药提醒 (示例三甲)',
+       description: '示例三甲医院的演示提醒，用于跨租户验证。',
+       reminderType: 'MEDICATION_CHECKIN',
+       frequencyUnit: 'DAY',
+       timesPerUnit: 1,
+       scheduledTimes: ['09:00'],
+-      payload: { medicationName: '示例药物' },
++      payload: {
++        medicationId: demoMedication101.id,
++        medicationName: demoMedication101.medicationName,
++        dosage: demoMedication101.dosage,
++      },
+       checkInWindowBeforeMinutes: 60,
+       checkInWindowAfterMinutes: 240,
++      escalationAfterMinutes: 240,
+       isActive: true,
+       createdBy: 'demo-care-nurse-a',
+     },
+
+--- a/apps/web/src/pages/AdminOpsPage.tsx
++++ b/apps/web/src/pages/AdminOpsPage.tsx
+@@ -108,6 +108,7 @@
+         <MetricCard label="已升级任务" value={String(m.escalated ?? 0)} tone={(m.escalated ?? 0) > 0 ? 'warn' : 'ok'} />
+         <MetricCard label="等待重试" value={String(worker.backlog.retryScheduled)} tone={worker.backlog.retryScheduled > 0 ? 'warn' : 'ok'} />
+         <MetricCard label="长期发送中" value={String(worker.backlog.stuckSending)} tone={worker.backlog.stuckSending > 0 ? 'danger' : 'ok'} />
++        <MetricCard label="自动收敛过期链接" value={String(m.expiredLinks ?? 0)} tone="ok" />
+       </div>
+ 
+       <div className="ops-panel">
+@@ -178,7 +179,7 @@
+         <MetricCard label="开放 episode 无任务" value={String(integrity.openEpisodesWithoutTask)} tone={integrity.openEpisodesWithoutTask > 0 ? 'warn' : 'ok'} />
+         <MetricCard label="重复提醒计划" value={String(integrity.duplicateScheduleGroups)} tone={integrity.duplicateScheduleGroups > 0 ? 'danger' : 'ok'} />
+         <MetricCard label="提醒计划缺少来源" value={String(integrity.sourceLessBoundSchedules)} tone={integrity.sourceLessBoundSchedules > 0 ? 'warn' : 'ok'} />
+-        <MetricCard label="患者缺少责任护士" value={String(integrity.patientsWithoutResponsibleNurse)} tone={integrity.patientsWithoutResponsibleNurse > 0 ? 'warn' : 'ok'} />
++        <MetricCard label="待分配患者" value={String(integrity.patientsWithoutResponsibleNurse)} tone={integrity.patientsWithoutResponsibleNurse > 0 ? 'warn' : 'ok'} note="进入待认领队列，不视为数据错误" />
+         <MetricCard label="患者缺少医院归属" value={String(integrity.patientsWithoutTenant)} tone={integrity.patientsWithoutTenant > 0 ? 'danger' : 'ok'} />
+         <MetricCard label="24 小时内链接到期" value={String(integrity.activeLinksExpiringSoon)} tone={integrity.activeLinksExpiringSoon > 0 ? 'warn' : 'ok'} />
+         <MetricCard label="已过期但仍 ACTIVE" value={String(integrity.activeLinksAlreadyExpired)} tone={integrity.activeLinksAlreadyExpired > 0 ? 'danger' : 'ok'} />
+
+--- /dev/null
++++ b/apps/api/prisma/migrations/20260609170000_trial_stabilization_v8_1/migration.sql
+@@ -0,0 +1,3 @@
++-- trial-stabilization-v8.1: persist H5 expiry housekeeping count per care-reminder worker run.
++ALTER TABLE "CareReminderWorkerRun"
++ADD COLUMN "expiredLinks" INTEGER NOT NULL DEFAULT 0;
+
+--- /dev/null
++++ b/apps/api/prisma/repair-trial-stabilization-v8-1.js
+@@ -0,0 +1,146 @@
++#!/usr/bin/env node
++/*
++ * trial-stabilization-v8.1 existing-database repair
++ *
++ * Run from apps/api after prisma migrate + prisma generate:
++ *   node prisma/repair-trial-stabilization-v8-1.js --dry-run
++ *   node prisma/repair-trial-stabilization-v8-1.js
++ *
++ * Safe scope:
++ *   1) converge expired ACTIVE PatientFormLink rows to EXPIRED;
++ *   2) repair the exact cross-tenant demo fixture demo-care-sched-101-med;
++ *   3) report, but never guess or mutate, any remaining non-demo source-less
++ *      MEDICATION / VITAL schedules.
++ */
++const { PrismaClient } = require('@prisma/client');
++
++const prisma = new PrismaClient();
++const DRY_RUN = process.argv.includes('--dry-run');
++
++async function repairExpiredLinks(now) {
++  const where = { status: 'ACTIVE', expiresAt: { lte: now } };
++  const count = await prisma.patientFormLink.count({ where });
++  console.log(`[h5-expiry] ${count} ACTIVE link(s) already expired${DRY_RUN ? ' (dry-run)' : ''}.`);
++  if (!DRY_RUN && count) {
++    const updated = await prisma.patientFormLink.updateMany({
++      where,
++      data: { status: 'EXPIRED' },
++    });
++    console.log(`[h5-expiry] converged ${updated.count} link(s) to EXPIRED.`);
++  }
++  return count;
++}
++
++async function repairDemoTenant2MedicationFixture() {
++  const schedule = await prisma.careReminderSchedule.findUnique({
++    where: { id: 'demo-care-sched-101-med' },
++  });
++  if (!schedule) {
++    console.log('[demo-fixture] demo-care-sched-101-med not present; nothing to repair.');
++    return false;
++  }
++  if (schedule.patientId !== 'demo-patient-101' || schedule.sourceType !== 'MEDICATION') {
++    throw new Error(
++      `[demo-fixture] refusing to mutate unexpected schedule ${schedule.id}: ` +
++      `patientId=${schedule.patientId} sourceType=${schedule.sourceType}`,
++    );
++  }
++
++  const needsRepair = schedule.sourceId !== 'demo-med-101';
++  console.log(
++    `[demo-fixture] ${schedule.id} sourceId=${schedule.sourceId || 'NULL'} ` +
++    `${needsRepair ? 'needs repair' : 'already bound'}.`,
++  );
++  if (DRY_RUN) return needsRepair;
++
++  const medication = await prisma.medicationRecord.upsert({
++    where: { id: 'demo-med-101' },
++    update: {
++      patientId: 'demo-patient-101',
++      medicationName: '示例药物',
++      dosage: '示例剂量',
++      frequency: '每日 1 次',
++      frequencyUnit: 'DAY',
++      timesPerUnit: 1,
++      timingRelation: 'NONE',
++      customDoseTimes: ['09:00'],
++      reminderLeadMinutes: 180,
++      checkInWindowBeforeMinutes: 60,
++      missedWindowAfterMinutes: 240,
++      dataSource: 'EMR',
++      isActive: true,
++    },
++    create: {
++      id: 'demo-med-101',
++      patientId: 'demo-patient-101',
++      medicationName: '示例药物',
++      dosage: '示例剂量',
++      frequency: '每日 1 次',
++      frequencyUnit: 'DAY',
++      timesPerUnit: 1,
++      timingRelation: 'NONE',
++      customDoseTimes: ['09:00'],
++      reminderLeadMinutes: 180,
++      checkInWindowBeforeMinutes: 60,
++      missedWindowAfterMinutes: 240,
++      dataSource: 'EMR',
++      isActive: true,
++    },
++  });
++
++  await prisma.careReminderSchedule.update({
++    where: { id: schedule.id },
++    data: {
++      sourceId: medication.id,
++      payload: {
++        medicationId: medication.id,
++        medicationName: medication.medicationName,
++        dosage: medication.dosage,
++      },
++    },
++  });
++  console.log(`[demo-fixture] bound ${schedule.id} -> ${medication.id}.`);
++  return true;
++}
++
++async function reportRemainingSourceLessSchedules() {
++  const rows = await prisma.careReminderSchedule.findMany({
++    where: {
++      sourceType: { in: ['MEDICATION', 'VITAL'] },
++      sourceId: null,
++    },
++    orderBy: { createdAt: 'asc' },
++    select: {
++      id: true,
++      patientId: true,
++      sourceType: true,
++      title: true,
++      payload: true,
++    },
++  });
++  if (!rows.length) {
++    console.log('[source-check] no source-less MEDICATION / VITAL schedules remain.');
++    return;
++  }
++  console.warn(`[source-check] ${rows.length} source-less schedule(s) still require manual review:`);
++  for (const row of rows) {
++    console.warn(`- ${row.id} patient=${row.patientId} type=${row.sourceType} title=${row.title}`);
++  }
++}
++
++async function main() {
++  console.log(`trial-stabilization-v8.1 repair ${DRY_RUN ? '(dry-run)' : '(apply)'}`);
++  await repairExpiredLinks(new Date());
++  await repairDemoTenant2MedicationFixture();
++  await reportRemainingSourceLessSchedules();
++  console.log('[done] trial-stabilization-v8.1 repair complete.');
++}
++
++main()
++  .catch((error) => {
++    console.error('\n[FAIL]', error);
++    process.exitCode = 1;
++  })
++  .finally(async () => {
++    await prisma.$disconnect();
++  });
+
+--- /dev/null
++++ b/apps/api/prisma/check-trial-stabilization-v8-1.js
+@@ -0,0 +1,82 @@
++#!/usr/bin/env node
++/*
++ * Post-deploy data check for trial-stabilization-v8.1.
++ * Run from apps/api after repair and Worker restart:
++ *   node prisma/check-trial-stabilization-v8-1.js
++ */
++const { PrismaClient } = require('@prisma/client');
++
++const prisma = new PrismaClient();
++
++function fail(message) {
++  throw new Error(message);
++}
++
++async function main() {
++  const now = new Date();
++  const [
++    expiredActiveLinks,
++    sourceLessBoundSchedules,
++    demoSchedule,
++    demoMedication,
++    latestWorkerRun,
++    staleOpenTasks,
++    pendingAllocationPatients,
++  ] = await Promise.all([
++    prisma.patientFormLink.count({
++      where: { status: 'ACTIVE', expiresAt: { lte: now } },
++    }),
++    prisma.careReminderSchedule.count({
++      where: {
++        sourceType: { in: ['MEDICATION', 'VITAL'] },
++        sourceId: null,
++      },
++    }),
++    prisma.careReminderSchedule.findUnique({
++      where: { id: 'demo-care-sched-101-med' },
++      select: { id: true, patientId: true, sourceType: true, sourceId: true, payload: true },
++    }),
++    prisma.medicationRecord.findUnique({
++      where: { id: 'demo-med-101' },
++      select: { id: true, patientId: true, medicationName: true, dosage: true, isActive: true },
++    }),
++    prisma.careReminderWorkerRun.findFirst({
++      orderBy: { startedAt: 'desc' },
++      select: { id: true, status: true, expiredLinks: true, startedAt: true, finishedAt: true },
++    }),
++    prisma.task.count({
++      where: { status: { in: ['PENDING', 'IN_PROGRESS'] }, dueAt: { lt: now } },
++    }),
++    prisma.patient.count({ where: { responsibleNurseId: null } }),
++  ]);
++
++  if (expiredActiveLinks !== 0) {
++    fail(`${expiredActiveLinks} PatientFormLink row(s) remain ACTIVE after expiry`);
++  }
++  if (sourceLessBoundSchedules !== 0) {
++    fail(`${sourceLessBoundSchedules} MEDICATION / VITAL CareReminderSchedule row(s) still have NULL sourceId`);
++  }
++  if (demoSchedule && demoSchedule.sourceId !== 'demo-med-101') {
++    fail(`demo-care-sched-101-med is bound to ${demoSchedule.sourceId || 'NULL'}, expected demo-med-101`);
++  }
++  if (demoSchedule && (!demoMedication || demoMedication.patientId !== 'demo-patient-101')) {
++    fail('demo-med-101 missing or not owned by demo-patient-101');
++  }
++
++  console.log('[PASS] no expired ACTIVE PatientFormLink rows');
++  console.log('[PASS] no source-less MEDICATION / VITAL CareReminderSchedule rows');
++  if (demoSchedule) console.log('[PASS] demo-care-sched-101-med is bound to demo-med-101');
++  console.log(`[INFO] latest Worker run: ${latestWorkerRun ? JSON.stringify(latestWorkerRun) : 'none yet'}`);
++  console.log(`[INFO] stale open tasks: ${staleOpenTasks} (operational queue; review, do not delete)`);
++  console.log(`[INFO] pending-allocation patients: ${pendingAllocationPatients} (valid queue state)`);
++  console.log('\n[PASS] trial-stabilization-v8.1 data check succeeded');
++}
++
++main()
++  .catch((error) => {
++    console.error('\n[FAIL]', error.message || error);
++    process.exitCode = 1;
++  })
++  .finally(async () => {
++    await prisma.$disconnect();
++  });
+
+--- /dev/null
++++ b/apps/api/prisma/smoke-trial-stabilization-v8-1.js
+@@ -0,0 +1,133 @@
++#!/usr/bin/env node
++/*
++ * Black-box + DB smoke for trial-stabilization-v8.1.
++ *
++ * Prerequisites:
++ *   - API running on localhost:3000 (or API_BASE_URL)
++ *   - migration applied + prisma generate
++ *   - demo seed / repair applied
++ *
++ * It creates one temporary already-expired ACTIVE H5 link, triggers a Worker
++ * round through the authenticated admin endpoint, verifies convergence to
++ * EXPIRED, verifies persisted expiredLinks metric, and cleans up.
++ */
++const crypto = require('crypto');
++const { PrismaClient } = require('@prisma/client');
++
++const prisma = new PrismaClient();
++const API = process.env.API_BASE_URL || 'http://localhost:3000';
++
++function assert(condition, message) {
++  if (!condition) throw new Error(message);
++}
++
++async function http(path, options = {}) {
++  const response = await fetch(`${API}${path}`, options);
++  const text = await response.text();
++  let body = null;
++  try {
++    body = text ? JSON.parse(text) : null;
++  } catch {
++    body = text;
++  }
++  if (!response.ok) {
++    throw new Error(`${options.method || 'GET'} ${path} -> ${response.status}: ${text}`);
++  }
++  return body;
++}
++
++async function login() {
++  const body = await http('/auth/login', {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ username: 'admin', password: 'admin123' }),
++  });
++  assert(body && body.accessToken, 'admin login response missing accessToken');
++  console.log('[PASS] admin login');
++  return body.accessToken;
++}
++
++async function runLeaderRound(token) {
++  for (let attempt = 1; attempt <= 12; attempt += 1) {
++    const summary = await http('/care-reminders/worker/run-once', {
++      method: 'POST',
++      headers: { Authorization: `Bearer ${token}` },
++    });
++    if (summary.status === 'SUCCEEDED') {
++      console.log(`[PASS] Worker leader round succeeded on attempt ${attempt}`);
++      return summary;
++    }
++    if (summary.status !== 'SKIPPED_LOCKED' && summary.status !== 'SKIPPED_IN_FLIGHT') {
++      throw new Error(`unexpected Worker run status: ${JSON.stringify(summary)}`);
++    }
++    await new Promise((resolve) => setTimeout(resolve, 500));
++  }
++  throw new Error('Worker did not obtain leader lock after 12 attempts');
++}
++
++async function main() {
++  const token = await login();
++  const patient = await prisma.patient.findUnique({
++    where: { id: 'demo-patient-001' },
++    select: { id: true, hospitalTenantId: true },
++  });
++  assert(patient, 'demo-patient-001 missing; run node prisma/seed-all.js first');
++
++  const id = `smoke-expired-link-${crypto.randomUUID()}`;
++  const tokenHash = crypto.createHash('sha256').update(id).digest('hex');
++  try {
++    await prisma.patientFormLink.create({
++      data: {
++        id,
++        hospitalTenantId: patient.hospitalTenantId,
++        patientId: patient.id,
++        type: 'GENERIC_NOTICE',
++        tokenHash,
++        title: 'trial-stabilization-v8.1 temporary expired link',
++        expiresAt: new Date(Date.now() - 60_000),
++        status: 'ACTIVE',
++        maxSubmit: 1,
++      },
++    });
++    console.log('[PASS] created temporary expired ACTIVE H5 link');
++
++    const summary = await runLeaderRound(token);
++    assert((summary.expiredLinks || 0) >= 1, `Worker summary expiredLinks expected >=1: ${JSON.stringify(summary)}`);
++
++    const repaired = await prisma.patientFormLink.findUnique({ where: { id } });
++    assert(repaired && repaired.status === 'EXPIRED', `temporary H5 link status is ${repaired?.status || 'missing'}, expected EXPIRED`);
++    console.log('[PASS] Worker converged temporary H5 link to EXPIRED');
++
++    const latest = await prisma.careReminderWorkerRun.findFirst({
++      where: { status: 'SUCCEEDED' },
++      orderBy: { finishedAt: 'desc' },
++      select: { expiredLinks: true },
++    });
++    assert(latest && latest.expiredLinks >= 1, 'persisted Worker run expiredLinks metric missing');
++    console.log('[PASS] Worker run persisted expiredLinks metric');
++
++    const ops = await http('/admin/ops/reminder-worker', {
++      headers: { Authorization: `Bearer ${token}` },
++    });
++    assert((ops.metrics24h?.expiredLinks || 0) >= 1, 'admin ops reminder-worker missing expiredLinks metric');
++    console.log('[PASS] admin ops exposes 24h expiredLinks metric');
++
++    const integrity = await http('/admin/ops/data-integrity', {
++      headers: { Authorization: `Bearer ${token}` },
++    });
++    assert(integrity.activeLinksAlreadyExpired === 0, `ops reports ${integrity.activeLinksAlreadyExpired} expired ACTIVE links`);
++    console.log('[PASS] data-integrity reports zero expired ACTIVE links');
++    console.log('\n[PASS] trial-stabilization-v8.1 smoke succeeded');
++  } finally {
++    await prisma.patientFormLink.deleteMany({ where: { id } });
++  }
++}
++
++main()
++  .catch((error) => {
++    console.error('\n[FAIL]', error.message || error);
++    process.exitCode = 1;
++  })
++  .finally(async () => {
++    await prisma.$disconnect();
++  });
+
+--- /dev/null
++++ b/scripts/apply_trial_stabilization_v8_1.py
+@@ -0,0 +1,58 @@
++#!/usr/bin/env python3
++"""Install trial-stabilization-v8.1 overlay from repository root.
++
++Usage:
++  python3 scripts/apply_trial_stabilization_v8_1.py
++
++The installer is idempotent and backs up replaced files under:
++  .patch-backups/trial-stabilization-v8-1-YYYYMMDD-HHMMSS/
++"""
++from __future__ import annotations
++
++import shutil
++import sys
++from datetime import datetime
++from pathlib import Path
++
++ROOT = Path.cwd()
++OVERLAY = ROOT / "trial_stabilization_v8_1_overlay"
++BACKUP = ROOT / ".patch-backups" / f"trial-stabilization-v8-1-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
++
++if not OVERLAY.is_dir():
++    print(f"[err] missing overlay directory: {OVERLAY}", file=sys.stderr)
++    print("[hint] run from repository root after extracting the zip with rsync -av \"$TMP/\" ./", file=sys.stderr)
++    raise SystemExit(1)
++
++changed = 0
++skipped = 0
++
++for source in sorted(path for path in OVERLAY.rglob("*") if path.is_file()):
++    relative = source.relative_to(OVERLAY)
++    target = ROOT / relative
++    source_bytes = source.read_bytes()
++    if target.exists() and target.read_bytes() == source_bytes:
++        print(f"[skip] {relative}")
++        skipped += 1
++        continue
++
++    if target.exists():
++        backup_target = BACKUP / relative
++        backup_target.parent.mkdir(parents=True, exist_ok=True)
++        shutil.copy2(target, backup_target)
++
++    target.parent.mkdir(parents=True, exist_ok=True)
++    shutil.copy2(source, target)
++    print(f"[ok] installed {relative}")
++    changed += 1
++
++if changed:
++    print(f"[ok] backup directory: {BACKUP}")
++else:
++    print("[ok] no file content changed; patch already installed")
++
++print(f"[summary] changed={changed} skipped={skipped}")
++print("[next] node scripts/assert-trial-stabilization-v8-1.js")
++print("[next] cd apps/api && npx prisma migrate dev && npx prisma generate")
++print("[next] node prisma/repair-trial-stabilization-v8-1.js --dry-run")
++print("[next] node prisma/repair-trial-stabilization-v8-1.js")
++print("[next] npm run build")
+
+--- /dev/null
++++ b/scripts/assert-trial-stabilization-v8-1.js
+@@ -0,0 +1,91 @@
++#!/usr/bin/env node
++/*
++ * Static assertions for trial-stabilization-v8.1.
++ * Run from repository root:
++ *   node scripts/assert-trial-stabilization-v8-1.js
++ */
++const fs = require('fs');
++const path = require('path');
++
++const root = process.cwd();
++
++function read(relative) {
++  const absolute = path.join(root, relative);
++  if (!fs.existsSync(absolute)) throw new Error(`missing ${relative}`);
++  return fs.readFileSync(absolute, 'utf8');
++}
++
++function must(relative, needle, label) {
++  const source = read(relative);
++  if (!source.includes(needle)) throw new Error(`${label}: expected snippet not found in ${relative}`);
++  console.log(`[PASS] ${label}`);
++}
++
++function main() {
++  must(
++    'apps/api/prisma/schema.prisma',
++    '  expiredLinks    Int      @default(0)',
++    'Worker run schema persists expiredLinks',
++  );
++  must(
++    'apps/api/src/care-reminders/care-reminder-worker.service.ts',
++    'summary.expiredLinks = await this.expireStaleFormLinks();',
++    'Worker leader round runs H5 expiry housekeeping',
++  );
++  must(
++    'apps/api/src/care-reminders/care-reminder-worker.service.ts',
++    "status: 'ACTIVE',\n        expiresAt: { lte: now },",
++    'H5 housekeeping targets only ACTIVE links past expiry',
++  );
++  must(
++    'apps/api/src/care-reminders/care-reminder-worker.service.ts',
++    'expiredLinks: summary.expiredLinks,',
++    'Worker run persists H5 expiry housekeeping metric',
++  );
++  must(
++    'apps/api/src/admin-ops/admin-ops.service.ts',
++    'expiredLinks: metrics24h._sum.expiredLinks ?? 0,',
++    'Admin ops aggregates 24h H5 expiry housekeeping metric',
++  );
++  must(
++    'apps/web/src/pages/AdminOpsPage.tsx',
++    'label="自动收敛过期链接"',
++    'Admin ops page displays automatic H5 expiry convergence',
++  );
++  must(
++    'apps/web/src/pages/AdminOpsPage.tsx',
++    'label="待分配患者"',
++    'Admin ops page treats unassigned patients as a queue state',
++  );
++  must(
++    'apps/api/prisma/seed-all.js',
++    "where: { id: 'demo-med-101' }",
++    'Seed creates demo-med-101 medication master',
++  );
++  must(
++    'apps/api/prisma/seed-all.js',
++    'sourceId: demoMedication101.id,',
++    'Seed binds demo-care-sched-101-med to medication master',
++  );
++  must(
++    'apps/api/prisma/migrations/20260609170000_trial_stabilization_v8_1/migration.sql',
++    'ADD COLUMN "expiredLinks" INTEGER NOT NULL DEFAULT 0;',
++    'Additive migration exists',
++  );
++  for (const relative of [
++    'apps/api/prisma/repair-trial-stabilization-v8-1.js',
++    'apps/api/prisma/check-trial-stabilization-v8-1.js',
++    'apps/api/prisma/smoke-trial-stabilization-v8-1.js',
++  ]) {
++    if (!fs.existsSync(path.join(root, relative))) throw new Error(`missing ${relative}`);
++  }
++  console.log('[PASS] repair / check / smoke scripts installed');
++  console.log('\n[PASS] trial-stabilization-v8.1 static assertions succeeded');
++}
++
++try {
++  main();
++} catch (error) {
++  console.error('\n[FAIL]', error.message || error);
++  process.exitCode = 1;
++}
+
+--- /dev/null
++++ b/APPLY_TRIAL_STABILIZATION_V8_1.md
+@@ -0,0 +1,242 @@
++# trial_stabilization_v8_1_final_cleanup
++
++这是当前试点前的最终增量收口补丁。它承接：
++
++- Care Reminder Worker v7：PG advisory lock、heartbeat、运行指标、SENDING 恢复、指数退避与人工 replay；
++- Audit / Ops v8：`@Audit()` 医疗审计 metadata、`/health/*`、`/admin/ops/*` 和管理员运维页面；
++- 已验证的 reminder grouping / 微信随访 UX。
++
++本补丁只修复最新源码和真实运行验证中仍然存在的两个问题，不引入护理组、CarePlan、BullMQ 或新的平行待办模型。
++
++## 修复 1：过期 H5 链接自动收敛
++
++现有 `FormLinkService.resolveByToken()` 只有在患者打开链接时才把过期 `ACTIVE` 链接更新为 `EXPIRED`。
++如果患者从未打开链接，数据库和运维页会长期显示：
++
++```text
++activeLinksAlreadyExpired > 0
++```
++
++v8.1 在 Care Reminder Worker 已有 advisory lock 的 leader round 中增加：
++
++```text
++status = ACTIVE AND expiresAt <= now
++→ status = EXPIRED
++```
++
++只有拿到 PG advisory lock 的实例执行清理。多 API 实例不会重复做 housekeeping。
++
++新增每轮运行指标：
++
++```text
++expiredLinks
++```
++
++并在管理员运维页展示最近 24 小时“自动收敛过期链接”数量。
++
++## 修复 2：第二医院 demo fixture 不再制造孤儿提醒
++
++旧 `seed-all.js` 创建：
++
++```text
++demo-care-sched-101-med
++sourceType = MEDICATION
++sourceId = null
++payload.medicationName = 示例药物
++```
++
++这违反既有产品不变量：
++
++```text
++MedicationRecord / VitalMonitoringPlan 是主数据
++CareReminderSchedule 是触达派生层
++MEDICATION / VITAL schedule 必须绑定来源
++```
++
++v8.1 增加：
++
++```text
++demo-med-101
++```
++
++并将：
++
++```text
++demo-care-sched-101-med → demo-med-101
++```
++
++绑定。seed 重复执行时也会自愈旧 fixture。
++
++## 修复 3：运维页语义优化
++
++`responsibleNurseId = null` 是待分配队列状态，并非数据损坏。
++管理员页面将：
++
++```text
++患者缺少责任护士
++```
++
++调整为：
++
++```text
++待分配患者
++进入待认领队列，不视为数据错误
++```
++
++## 数据库变更
++
++仅增加一个 nullable-safe、带默认值的整数列：
++
++```sql
++ALTER TABLE "CareReminderWorkerRun"
++ADD COLUMN "expiredLinks" INTEGER NOT NULL DEFAULT 0;
++```
++
++不会删除或改写历史业务数据。
++
++---
++
++## WSL 应用方式
++
++从仓库根目录运行：
++
++```bash
++cd ~/Dev/Chronic-Disease-Management-Platform
++
++ZIP="/mnt/c/Users/leoxi/Downloads/trial_stabilization_v8_1_final_cleanup_patch.zip"
++TMP="/tmp/trial_stabilization_v8_1_final_cleanup_patch"
++
++rm -rf "$TMP"
++mkdir -p "$TMP"
++unzip -q "$ZIP" -d "$TMP"
++rsync -av "$TMP/" ./
++
++python3 scripts/apply_trial_stabilization_v8_1.py
++node scripts/assert-trial-stabilization-v8-1.js
++```
++
++开发环境：
++
++```bash
++cd apps/api
++
++npx prisma migrate dev
++npx prisma generate
++
++node prisma/repair-trial-stabilization-v8-1.js --dry-run
++node prisma/repair-trial-stabilization-v8-1.js
++node prisma/reconcile-care-reminder-schedules.js
++
++npm run build
++```
++
++正式医院环境不要运行 `migrate dev`：
++
++```bash
++cd apps/api
++
++npx prisma migrate deploy
++npx prisma generate
++
++node prisma/repair-trial-stabilization-v8-1.js --dry-run
++node prisma/repair-trial-stabilization-v8-1.js
++node prisma/reconcile-care-reminder-schedules.js
++
++npm run build
++```
++
++修改 Worker 后必须重启 API：
++
++```bash
++cd ~/Dev/Chronic-Disease-Management-Platform/apps/api
++npm run start:dev
++```
++
++---
++
++## 黑盒验收
++
++在 API 已启动的另一个 WSL 终端运行：
++
++```bash
++cd ~/Dev/Chronic-Disease-Management-Platform/apps/api
++
++node prisma/smoke-trial-stabilization-v8-1.js
++node prisma/check-trial-stabilization-v8-1.js
++
++node prisma/check-care-reminder-worker-v7.js
++node prisma/smoke-audit-ops-v8.js
++npm run smoke:care-reminders
++npm run smoke:patient-engagement
++
++cd ../web
++npm run build
++```
++
++`smoke-trial-stabilization-v8-1.js` 会：
++
++1. 管理员登录；
++2. 临时创建一条已经过期但仍为 `ACTIVE` 的 H5 链接；
++3. 触发一次 Worker leader round；
++4. 验证链接自动变为 `EXPIRED`；
++5. 验证 `expiredLinks` 写入 Worker run；
++6. 验证 `/admin/ops/reminder-worker` 暴露该指标；
++7. 验证 `/admin/ops/data-integrity` 中 `activeLinksAlreadyExpired = 0`；
++8. 删除临时测试链接。
++
++## 预期数据完整性结果
++
++```text
++sourceLessBoundSchedules: 0
++activeLinksAlreadyExpired: 0
++patientsWithoutResponsibleNurse: 1
++staleOpenTasks: 8
++```
++
++后两项无需强行清零：
++
++- `patientsWithoutResponsibleNurse: 1` 是第二医院跨租户 demo 患者，保留为未来待认领队列 fixture；
++- `staleOpenTasks: 8` 是演示工作台的 SLA 超时和 reminder escalation 数据，应保留用于验证护士处置流程。
++
++## Git 检查与提交
++
++```bash
++cd ~/Dev/Chronic-Disease-Management-Platform
++
++git diff --stat
++git diff -- \
++  apps/api/prisma/schema.prisma \
++  apps/api/prisma/seed-all.js \
++  apps/api/src/care-reminders/care-reminder-worker.service.ts \
++  apps/api/src/admin-ops/admin-ops.service.ts \
++  apps/web/src/pages/AdminOpsPage.tsx
++
++git status
++```
++
++确认构建与 smoke 通过后：
++
++```bash
++git add \
++  apps/api/prisma \
++  apps/api/src/care-reminders/care-reminder-worker.service.ts \
++  apps/api/src/admin-ops/admin-ops.service.ts \
++  apps/web/src/pages/AdminOpsPage.tsx \
++  scripts/apply_trial_stabilization_v8_1.py \
++  scripts/assert-trial-stabilization-v8-1.js \
++  APPLY_TRIAL_STABILIZATION_V8_1.md
++
++git commit -m "fix(trial): converge expired H5 links and repair reminder demo source binding"
++```
++
++## 暂不混入本补丁
++
++以下继续作为独立 P1 / PR-8：
++
++```text
++CareTeam / 队列认领 / 交接班
++/work-items 首页统一摘要
++三高共管 CarePlan
++NextBestAction
++transactional outbox + BullMQ / Redis queue
++```

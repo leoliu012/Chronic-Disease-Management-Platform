@@ -23,6 +23,7 @@ import { manualLogout, SESSION_EXPIRED_EVENT } from './api/auth-session';
 import { OperationToastHost } from './components/OperationToastHost';
 import { PublicFormPage } from './pages/PublicFormPage';
 import HospitalWechatAccountPage from './pages/HospitalWechatAccountPage';
+import { AdminOpsPage } from './pages/AdminOpsPage';
 
 import CareRemindersPage from './pages/CareRemindersPage';
 type NavItem = {
@@ -76,6 +77,12 @@ const navItems: NavItem[] = [
     roles: ['ADMIN', 'MANAGER'],
   },
   {
+    to: '/admin/ops',
+    label: '系统健康',
+    hint: '运维状态 / 异常核验',
+    roles: ['ADMIN'],
+  },
+  {
     to: '/hospital-wechat/account',
     label: '服务号配置',
     hint: '本院公众号 / 模板消息',
@@ -84,7 +91,7 @@ const navItems: NavItem[] = [
   {
     to: '/care-reminders',
     label: '慢病提醒中心',
-    hint: '今日 / 未完成 / 主动消息',
+    hint: '未完成提醒 / 已升级跟进',
     roles: ['ADMIN', 'DOCTOR', 'NURSE'],
   },
 ];
@@ -292,6 +299,15 @@ function AuthenticatedShell({ user, onLogout }: { user: CurrentUser; onLogout: (
               }
             />
             <Route
+              path="/admin/ops"
+              element={
+                <RoleRoute user={user} roles={['ADMIN']}>
+                  <AdminOpsPage />
+                </RoleRoute>
+              }
+            />
+
+            <Route
               path="/hospital-wechat/account"
               element={
                 <RoleRoute user={user} roles={['ADMIN']}>
@@ -370,5 +386,8 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+
+
 
 

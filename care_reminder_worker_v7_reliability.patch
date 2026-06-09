@@ -1,0 +1,1885 @@
+--- a/apps/api/src/care-reminders/care-reminder-occurrence.service.ts
++++ b/apps/api/src/care-reminders/care-reminder-occurrence.service.ts
+@@ -1,4 +1,10 @@
+-import { Injectable, Logger, NotFoundException, ForbiddenException } from '@nestjs/common';
++import {
++  BadRequestException,
++  ForbiddenException,
++  Injectable,
++  Logger,
++  NotFoundException,
++} from '@nestjs/common';
+ import type { CareReminderSchedule, Prisma } from '@prisma/client';
+ import { PrismaService } from '../prisma/prisma.service';
+ import { dayOfWeekFromIso, localDateInTzToUtc, parseHm, tenantDatesAhead } from './tz-util';
+@@ -7,6 +13,7 @@
+   | 'PENDING'
+   | 'SENDING'
+   | 'SENT'
++  | 'FAILED'
+   | 'CLICKED'
+   | 'COMPLETED'
+   | 'MISSED'
+@@ -19,19 +26,25 @@
+   skipped: number;
+ };
+ 
++export type SendFailureResult = {
++  transitioned: boolean;
++  status: 'PENDING' | 'FAILED';
++  retryCount: number;
++  nextRetryAt: Date | null;
++  exhausted: boolean;
++};
++
+ /**
+  * CareReminderOccurrenceService
+  * -----------------------------
+- * Two responsibilities:
+- *
+- *  1. Given a schedule + a window of tenant-local dates, compute the deterministic
+- *     UTC dueAt for every firing inside that window and insert any missing
+- *     `CareReminderOccurrence` rows. Uses `createMany({ skipDuplicates: true })`
+- *     + the `@@unique([scheduleId, dueAt])` constraint so re-runs are no-ops.
++ * Deterministic occurrence generation plus guarded state transitions.
+  *
+- *  2. State-machine guards. Every transition uses `updateMany` with a status
+- *     filter so concurrent worker passes can't double-send or double-escalate.
+- *     `claim***ForXxx()` returns the row only if the caller won the race.
++ * Reliability invariants:
++ *  - generation is idempotent via @@unique([scheduleId, dueAt]);
++ *  - every dispatch must win PENDING -> SENDING atomically;
++ *  - dispatch artifacts are persisted before an external provider call;
++ *  - failures become delayed PENDING retries, then terminal FAILED;
++ *  - stale SENDING rows can be recovered after a crashed worker process.
+  */
+ @Injectable()
+ export class CareReminderOccurrenceService {
+@@ -43,10 +56,6 @@
+   // Occurrence math
+   // ---------------------------------------------------------------------------
+ 
+-  /**
+-   * Generate occurrences for a single schedule over the next `daysAhead` days
+-   * (tenant timezone). Idempotent.
+-   */
+   async generateForSchedule(args: {
+     schedule: CareReminderSchedule;
+     timezone: string;
+@@ -70,10 +79,8 @@
+ 
+     const startsAt = schedule.startDate ? new Date(schedule.startDate).getTime() : 0;
+     const endsAt = schedule.endDate ? new Date(schedule.endDate).getTime() : Infinity;
+-
+     const checkInBeforeMs = schedule.checkInWindowBeforeMinutes * 60_000;
+     const checkInAfterMs = schedule.checkInWindowAfterMinutes * 60_000;
+-
+     const rows: Prisma.CareReminderOccurrenceCreateManyInput[] = [];
+ 
+     for (const isoDate of tenantDatesAhead(timezone, daysAhead, now)) {
+@@ -86,8 +93,6 @@
+         if (!dueAt) continue;
+         const dueMs = dueAt.getTime();
+         if (dueMs < startsAt || dueMs > endsAt) continue;
+-        const availableFrom = new Date(dueMs - checkInBeforeMs);
+-        const availableUntil = new Date(dueMs + checkInAfterMs);
+         rows.push({
+           hospitalTenantId: schedule.hospitalTenantId,
+           patientId: schedule.patientId,
+@@ -95,8 +100,8 @@
+           occurrenceType: schedule.reminderType,
+           title: schedule.title,
+           dueAt,
+-          availableFrom,
+-          availableUntil,
++          availableFrom: new Date(dueMs - checkInBeforeMs),
++          availableUntil: new Date(dueMs + checkInAfterMs),
+           status: 'PENDING',
+         });
+       }
+@@ -104,8 +109,6 @@
+ 
+     if (rows.length === 0) return { scheduleId: schedule.id, created: 0, skipped: 0 };
+ 
+-    // `createMany({ skipDuplicates: true })` + the @@unique constraint gives us
+-    // a one-shot idempotent insert.
+     const result = await this.prisma.careReminderOccurrence.createMany({
+       data: rows,
+       skipDuplicates: true,
+@@ -121,54 +124,163 @@
+   // State transitions (atomic claim guards)
+   // ---------------------------------------------------------------------------
+ 
+-  /** PENDING → SENDING. Returns true if claim succeeded. */
+-  async claimForSending(id: string): Promise<boolean> {
++  /** PENDING -> SENDING. Delayed retries are claimable only when due. */
++  async claimForSending(id: string, now = new Date()): Promise<boolean> {
++    const r = await this.prisma.careReminderOccurrence.updateMany({
++      where: {
++        id,
++        status: 'PENDING',
++        OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
++      },
++      data: {
++        status: 'SENDING',
++        sendingStartedAt: now,
++        lastSendAttemptAt: now,
++        sendAttemptCount: { increment: 1 },
++      },
++    });
++    return r.count === 1;
++  }
++
++  /**
++   * Persist the canonical link/message before the external transport call.
++   * This narrows the crash window: recovery can inspect an existing message
++   * instead of blindly creating a second case and dispatching again.
++   */
++  async attachDispatchArtifacts(
++    id: string,
++    formLinkId: string,
++    outboundMessageId: string,
++  ): Promise<boolean> {
+     const r = await this.prisma.careReminderOccurrence.updateMany({
+-      where: { id, status: 'PENDING' },
+-      data: { status: 'SENDING' },
++      where: { id, status: 'SENDING' },
++      data: { formLinkId, outboundMessageId },
+     });
+     return r.count === 1;
+   }
+ 
+-  /** SENDING → SENT, with metadata. */
+-  async markSent(id: string, formLinkId: string, outboundMessageId: string | null): Promise<void> {
+-    await this.prisma.careReminderOccurrence.updateMany({
++  /** SENDING -> SENT, with canonical metadata. */
++  async markSent(
++    id: string,
++    formLinkId?: string | null,
++    outboundMessageId?: string | null,
++  ): Promise<boolean> {
++    const r = await this.prisma.careReminderOccurrence.updateMany({
+       where: { id, status: 'SENDING' },
+       data: {
+         status: 'SENT',
+         sentAt: new Date(),
+-        formLinkId,
+-        outboundMessageId: outboundMessageId ?? undefined,
++        sendingStartedAt: null,
++        nextRetryAt: null,
++        ...(formLinkId ? { formLinkId } : {}),
++        ...(outboundMessageId ? { outboundMessageId } : {}),
+         lastError: null,
+       },
+     });
++    return r.count === 1;
++  }
++
++  /**
++   * SENDING -> delayed PENDING retry, or terminal FAILED after max retries.
++   * maxRetries means retries after the initial attempt. With maxRetries=5,
++   * the sixth consecutive failure becomes terminal FAILED.
++   */
++  async markSendFailed(
++    id: string,
++    error: string,
++    options: { maxRetries: number; baseBackoffMs: number; maxBackoffMs: number; now?: Date },
++  ): Promise<SendFailureResult> {
++    const row = await this.prisma.careReminderOccurrence.findUnique({
++      where: { id },
++      select: { status: true, retryCount: true },
++    });
++    const now = options.now ?? new Date();
++    if (!row || row.status !== 'SENDING') {
++      return {
++        transitioned: false,
++        status: row?.status === 'FAILED' ? 'FAILED' : 'PENDING',
++        retryCount: row?.retryCount ?? 0,
++        nextRetryAt: null,
++        exhausted: row?.status === 'FAILED',
++      };
++    }
++
++    const retryCount = row.retryCount + 1;
++    const exhausted = retryCount > options.maxRetries;
++    const backoffMs = Math.min(
++      options.maxBackoffMs,
++      options.baseBackoffMs * Math.pow(2, Math.max(0, retryCount - 1)),
++    );
++    const nextRetryAt = exhausted ? null : new Date(now.getTime() + backoffMs);
++    const status: 'PENDING' | 'FAILED' = exhausted ? 'FAILED' : 'PENDING';
++
++    const updated = await this.prisma.careReminderOccurrence.updateMany({
++      where: { id, status: 'SENDING', retryCount: row.retryCount },
++      data: {
++        status,
++        sendingStartedAt: null,
++        retryCount,
++        nextRetryAt,
++        lastError: error.slice(0, 500),
++      },
++    });
++    return { transitioned: updated.count === 1, status, retryCount, nextRetryAt, exhausted };
+   }
+ 
+-  /** SENDING → PENDING with error. */
+-  async markSendFailed(id: string, error: string): Promise<void> {
+-    await this.prisma.careReminderOccurrence.updateMany({
+-      where: { id, status: 'SENDING' },
++  /**
++   * Recover an old SENDING row whose process disappeared before completing the
++   * state transition. The worker first checks the canonical outbound message;
++   * this method is used only when the DB cannot prove that sending succeeded.
++   */
++  async recoverStuckSending(
++    id: string,
++    error: string,
++    options: { maxRetries: number; baseBackoffMs: number; maxBackoffMs: number; now?: Date },
++  ): Promise<SendFailureResult> {
++    return this.markSendFailed(id, error, options);
++  }
++
++  /** Admin-only operational replay for terminal or delayed failures. */
++  async requestReplay(id: string, requestedBy: string) {
++    const row = await this.getByIdOrThrow(id);
++    if (!['FAILED', 'PENDING'].includes(row.status)) {
++      throw new BadRequestException(
++        `occurrence is in status ${row.status}; only FAILED or PENDING occurrences can be replayed`,
++      );
++    }
++    const now = new Date();
++    await this.prisma.careReminderOccurrence.update({
++      where: { id },
+       data: {
+         status: 'PENDING',
+-        lastError: error.slice(0, 500),
++        nextRetryAt: now,
++        sendingStartedAt: null,
++        retryCount: 0,
++        replayCount: { increment: 1 },
++        lastReplayRequestedAt: now,
++        lastReplayRequestedBy: requestedBy,
++        lastError: row.lastError
++          ? `人工重放：${row.lastError}`.slice(0, 500)
++          : '人工重放已请求',
+       },
+     });
++    return this.getByIdOrThrow(id);
+   }
+ 
+-  /** PENDING/SENT/CLICKED → MISSED if dueAt + window passed and not done. */
++  /** PENDING/SENT/CLICKED/FAILED -> MISSED after the completion window. */
+   async markMissed(id: string): Promise<boolean> {
+     const r = await this.prisma.careReminderOccurrence.updateMany({
+       where: {
+         id,
+-        status: { in: ['PENDING', 'SENT', 'CLICKED'] },
++        status: { in: ['PENDING', 'SENT', 'CLICKED', 'FAILED'] },
+         availableUntil: { lt: new Date() },
+       },
+-      data: { status: 'MISSED', missedAt: new Date() },
++      data: { status: 'MISSED', missedAt: new Date(), nextRetryAt: null },
+     });
+     return r.count === 1;
+   }
+ 
+-  /** MISSED → ESCALATED, attach task id. Idempotent — only fires once. */
++  /** MISSED -> ESCALATED, attach task id. Idempotent: only fires once. */
+   async markEscalated(id: string, escalatedTaskId: string): Promise<boolean> {
+     const r = await this.prisma.careReminderOccurrence.updateMany({
+       where: { id, status: 'MISSED', escalatedTaskId: null },
+@@ -177,13 +289,6 @@
+     return r.count === 1;
+   }
+ 
+-  /**
+-   * Mark COMPLETED from inside a transaction. Called by public-form.controller
+-   * submit handlers in the same tx as the business write.
+-   *
+-   * Returns the occurrence id if found and updated, otherwise null. Never throws
+-   * for "no occurrence" — many form-links won't have one (manual links pre-v3).
+-   */
+   async markCompletedByFormLinkInTx(
+     tx: Prisma.TransactionClient,
+     formLinkId: string,
+@@ -195,7 +300,6 @@
+       select: { id: true },
+     });
+     if (!occ) return null;
+-    // Use updateMany w/ guard, just in case of concurrent submissions.
+     const r = await tx.careReminderOccurrence.updateMany({
+       where: { id: occ.id, status: { notIn: ['COMPLETED', 'CANCELED'] } },
+       data: {
+@@ -203,6 +307,8 @@
+         completedAt: new Date(),
+         resultType,
+         resultId,
++        nextRetryAt: null,
++        sendingStartedAt: null,
+       },
+     });
+     return r.count === 1 ? occ.id : null;
+@@ -247,11 +353,11 @@
+ 
+   async cancel(id: string): Promise<void> {
+     const r = await this.prisma.careReminderOccurrence.updateMany({
+-      where: { id, status: { in: ['PENDING', 'SENT', 'CLICKED'] } },
+-      data: { status: 'CANCELED' },
++      where: { id, status: { in: ['PENDING', 'FAILED', 'SENT', 'CLICKED'] } },
++      data: { status: 'CANCELED', nextRetryAt: null, sendingStartedAt: null },
+     });
+     if (r.count !== 1) {
+-      throw new ForbiddenException('only PENDING / SENT / CLICKED occurrences can be canceled');
++      throw new ForbiddenException('only PENDING / FAILED / SENT / CLICKED occurrences can be canceled');
+     }
+   }
+ }
+--- a/apps/api/src/care-reminders/care-reminder-worker.service.ts
++++ b/apps/api/src/care-reminders/care-reminder-worker.service.ts
+@@ -5,55 +5,84 @@
+   OnApplicationShutdown,
+ } from '@nestjs/common';
+ import { TaskStatus } from '@prisma/client';
++import { randomUUID } from 'crypto';
++import { hostname } from 'os';
+ import { PrismaService } from '../prisma/prisma.service';
+-import { CareReminderScheduleService } from './care-reminder-schedule.service';
+-import { CareReminderOccurrenceService } from './care-reminder-occurrence.service';
+ import { FormLinkService } from '../patient-engagement/form-link.service';
++import { HospitalWechatOfficialAccountService } from '../patient-engagement/hospital-wechat-account.service';
+ import { OutboundMessageService } from '../patient-engagement/outbound-message.service';
+ import { WechatOfficialAccountService } from '../patient-engagement/wechat-official-account.service';
+-import { HospitalWechatOfficialAccountService } from '../patient-engagement/hospital-wechat-account.service';
++import { CareReminderOccurrenceService } from './care-reminder-occurrence.service';
++import { CareReminderScheduleService } from './care-reminder-schedule.service';
+ 
+ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+ const DEFAULT_HORIZON_DAYS = 3;
++const DEFAULT_HEARTBEAT_INTERVAL_MS = 20 * 1000;
++const DEFAULT_HEARTBEAT_STALE_AFTER_MS = 90 * 1000;
++const DEFAULT_STUCK_SENDING_AFTER_MS = 15 * 60 * 1000;
++const DEFAULT_MAX_RETRIES = 5;
++const DEFAULT_RETRY_BASE_MS = 60 * 1000;
++const DEFAULT_RETRY_MAX_MS = 30 * 60 * 1000;
++const DEFAULT_LOCK_HOLD_TIMEOUT_MS = 15 * 60 * 1000;
++const WORKER_ADVISORY_LOCK_KEY = 739_224_891;
++
++export type CareReminderWorkerSummary = {
++  status: 'SUCCEEDED' | 'FAILED' | 'SKIPPED_LOCKED' | 'SKIPPED_IN_FLIGHT';
++  generated: number;
++  dispatched: number;
++  dispatchFailed: number;
++  retried: number;
++  retryScheduled: number;
++  recoveredStuck: number;
++  recoveredAsSent: number;
++  missed: number;
++  escalated: number;
++  error?: string;
++};
++
++type DispatchResult = {
++  dispatched: number;
++  failed: number;
++  retried: number;
++  retryScheduled: number;
++};
++
++type RecoveryResult = {
++  recoveredStuck: number;
++  recoveredAsSent: number;
++  retryScheduled: number;
++};
+ 
+ /**
+  * CareReminderWorkerService
+- * --------------------------
+- * Single-instance setInterval-driven worker. Three passes per tick:
+- *
+- *   1. generate    — for every active schedule, materialize PENDING occurrences
+- *                    out to N days ahead. Idempotent via @@unique([scheduleId, dueAt]).
+- *   2. dispatch    — for PENDING occurrences with `availableFrom <= now`, create
+- *                    PatientFormLink + PatientOutboundMessage and ship them.
+- *   3. missed      — for occurrences past `availableUntil` and still un-completed,
+- *                    mark MISSED. If schedule.escalationAfterMinutes is set,
+- *                    escalate exactly once to a nurse Task.
++ * -------------------------
++ * Trial-ready reliability layer for the existing setInterval worker.
+  *
+- * Default cadence: every 5 minutes. Disabled by default to keep dev runs quiet —
+- * set CARE_REMINDER_WORKER_ENABLED=true to start it.
++ * This remains intentionally smaller than a durable queue architecture:
++ *  - each round is protected by a PostgreSQL transaction advisory lock;
++ *  - every replica publishes a persisted heartbeat;
++ *  - every round writes durable metrics;
++ *  - old SENDING rows recover after a crashed process;
++ *  - failures retry with exponential backoff, then require admin replay.
+  *
+- * Multi-instance safety: NONE. If you run >1 Nest replicas, only one of them
+- * should set CARE_REMINDER_WORKER_ENABLED=true. Future hardening: leader election
+- * via PG advisory lock, or move dispatch to Bull/Redis.
+- *
+- * For tests, callers can invoke `runOnce()` directly without the interval.
++ * Formal provider-side exactly-once delivery still requires the planned
++ * transactional outbox + BullMQ evolution. This layer prevents concurrent Nest
++ * replicas from actively dispatching the same occurrence and narrows the crash
++ * ambiguity window by persisting canonical artifacts before transport calls.
+  */
+ @Injectable()
+ export class CareReminderWorkerService
+   implements OnApplicationBootstrap, OnApplicationShutdown
+ {
+   private readonly logger = new Logger('CareReminderWorker');
++  private readonly instanceId = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
+   private timer: NodeJS.Timeout | null = null;
++  private initialTimer: NodeJS.Timeout | null = null;
++  private heartbeatTimer: NodeJS.Timeout | null = null;
+   private inFlight = false;
++  private activeRunId: string | null = null;
+   private lastRunAt: Date | null = null;
+-  private lastRunSummary: {
+-    generated: number;
+-    dispatched: number;
+-    dispatchFailed: number;
+-    missed: number;
+-    escalated: number;
+-    error?: string;
+-  } | null = null;
++  private lastRunSummary: CareReminderWorkerSummary | null = null;
+ 
+   constructor(
+     private readonly prisma: PrismaService,
+@@ -66,101 +95,512 @@
+   ) {}
+ 
+   // ---------------------------------------------------------------------------
+-  // lifecycle
++  // lifecycle + heartbeat
+   // ---------------------------------------------------------------------------
+ 
+   onApplicationBootstrap() {
+-    if (process.env.CARE_REMINDER_WORKER_ENABLED !== 'true') {
++    if (!this.enabled()) {
+       this.logger.log(
+         'Care-reminder worker disabled (set CARE_REMINDER_WORKER_ENABLED=true to enable).',
+       );
+       return;
+     }
+-    const intervalMs = Number(
+-      process.env.CARE_REMINDER_WORKER_INTERVAL_MS ?? DEFAULT_INTERVAL_MS,
+-    );
+-    // First run after 5s to avoid startup race.
+-    setTimeout(() => {
+-      this.runOnce().catch((e) => this.logger.error(`initial pass failed: ${(e as Error).message}`));
++
++    void this.touchHeartbeat({ startup: true });
++    this.heartbeatTimer = setInterval(() => {
++      void this.touchHeartbeat().catch((e) =>
++        this.logger.error(`heartbeat failed: ${(e as Error).message}`),
++      );
++    }, this.heartbeatIntervalMs());
++
++    this.initialTimer = setTimeout(() => {
++      this.initialTimer = null;
++      void this.runOnce().catch((e) =>
++        this.logger.error(`initial pass failed: ${(e as Error).message}`),
++      );
+       this.timer = setInterval(() => {
+-        this.runOnce().catch((e) => this.logger.error(`scheduled pass failed: ${(e as Error).message}`));
+-      }, intervalMs);
++        void this.runOnce().catch((e) =>
++          this.logger.error(`scheduled pass failed: ${(e as Error).message}`),
++        );
++      }, this.intervalMs());
+     }, 5_000);
+-    this.logger.log(`Care-reminder worker scheduled every ${intervalMs}ms.`);
++
++    this.logger.log(
++      `Care-reminder worker ${this.instanceId} scheduled every ${this.intervalMs()}ms; ` +
++        `heartbeat every ${this.heartbeatIntervalMs()}ms.`,
++    );
++  }
++
++  async onApplicationShutdown() {
++    if (this.initialTimer) clearTimeout(this.initialTimer);
++    if (this.timer) clearInterval(this.timer);
++    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
++    this.initialTimer = null;
++    this.timer = null;
++    this.heartbeatTimer = null;
++    if (this.enabled()) {
++      try {
++        await this.prisma.careReminderWorkerHeartbeat.updateMany({
++          where: { instanceId: this.instanceId },
++          data: { stoppedAt: new Date(), heartbeatAt: new Date() },
++        });
++      } catch (e) {
++        this.logger.warn(`failed to persist worker shutdown heartbeat: ${(e as Error).message}`);
++      }
++    }
++  }
++
++  private enabled() {
++    return process.env.CARE_REMINDER_WORKER_ENABLED === 'true';
+   }
+ 
+-  onApplicationShutdown() {
+-    if (this.timer) {
+-      clearInterval(this.timer);
+-      this.timer = null;
++  private numberEnv(name: string, fallback: number): number {
++    const parsed = Number(process.env[name] ?? fallback);
++    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
++  }
++
++  private intervalMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_INTERVAL_MS', DEFAULT_INTERVAL_MS);
++  }
++
++  private heartbeatIntervalMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_HEARTBEAT_INTERVAL_MS', DEFAULT_HEARTBEAT_INTERVAL_MS);
++  }
++
++  private heartbeatStaleAfterMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_HEARTBEAT_STALE_AFTER_MS', DEFAULT_HEARTBEAT_STALE_AFTER_MS);
++  }
++
++  private stuckSendingAfterMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_STUCK_SENDING_AFTER_MS', DEFAULT_STUCK_SENDING_AFTER_MS);
++  }
++
++  private maxRetries() {
++    return Math.floor(this.numberEnv('CARE_REMINDER_WORKER_MAX_RETRIES', DEFAULT_MAX_RETRIES));
++  }
++
++  private retryBaseMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_RETRY_BASE_MS', DEFAULT_RETRY_BASE_MS);
++  }
++
++  private retryMaxMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_RETRY_MAX_MS', DEFAULT_RETRY_MAX_MS);
++  }
++
++  private lockHoldTimeoutMs() {
++    return this.numberEnv('CARE_REMINDER_WORKER_LOCK_HOLD_TIMEOUT_MS', DEFAULT_LOCK_HOLD_TIMEOUT_MS);
++  }
++
++  private retryOptions(now?: Date) {
++    return {
++      maxRetries: this.maxRetries(),
++      baseBackoffMs: this.retryBaseMs(),
++      maxBackoffMs: this.retryMaxMs(),
++      ...(now ? { now } : {}),
++    };
++  }
++
++  private async touchHeartbeat(options?: { startup?: boolean }) {
++    const now = new Date();
++    await this.prisma.careReminderWorkerHeartbeat.upsert({
++      where: { instanceId: this.instanceId },
++      create: {
++        instanceId: this.instanceId,
++        startedAt: now,
++        heartbeatAt: now,
++        stoppedAt: null,
++      },
++      update: {
++        heartbeatAt: now,
++        stoppedAt: options?.startup ? null : undefined,
++      },
++    });
++    if (this.activeRunId) {
++      await this.prisma.careReminderWorkerRun.updateMany({
++        where: { id: this.activeRunId, status: 'RUNNING' },
++        data: { heartbeatAt: now },
++      });
+     }
+   }
+ 
+-  getStatus() {
++  // ---------------------------------------------------------------------------
++  // status / persisted observability
++  // ---------------------------------------------------------------------------
++
++  async getStatus() {
++    const now = new Date();
++    const heartbeatCutoff = new Date(now.getTime() - this.heartbeatStaleAfterMs());
++    const stuckCutoff = new Date(now.getTime() - this.stuckSendingAfterMs());
++    const [instances, recentRuns, latestSuccessfulRun, statusGroups, retryScheduled, stuckSending] =
++      await Promise.all([
++        this.prisma.careReminderWorkerHeartbeat.findMany({
++          orderBy: { heartbeatAt: 'desc' },
++          take: 25,
++        }),
++        this.prisma.careReminderWorkerRun.findMany({
++          orderBy: { startedAt: 'desc' },
++          take: 20,
++        }),
++        this.prisma.careReminderWorkerRun.findFirst({
++          where: { status: 'SUCCEEDED' },
++          orderBy: { finishedAt: 'desc' },
++        }),
++        this.prisma.careReminderOccurrence.groupBy({
++          by: ['status'],
++          _count: { _all: true },
++        }),
++        this.prisma.careReminderOccurrence.count({
++          where: { status: 'PENDING', nextRetryAt: { gt: now } },
++        }),
++        this.prisma.careReminderOccurrence.count({
++          where: {
++            status: 'SENDING',
++            OR: [
++              { sendingStartedAt: { lt: stuckCutoff } },
++              { sendingStartedAt: null, updatedAt: { lt: stuckCutoff } },
++            ],
++          },
++        }),
++      ]);
++
++    const backlogByStatus = Object.fromEntries(
++      statusGroups.map((row) => [row.status, row._count._all]),
++    );
++
+     return {
+-      enabled: process.env.CARE_REMINDER_WORKER_ENABLED === 'true',
+-      running: this.timer !== null,
++      enabled: this.enabled(),
++      instanceId: this.instanceId,
++      running: this.timer !== null || this.initialTimer !== null,
+       inFlight: this.inFlight,
+-      intervalMs: Number(
+-        process.env.CARE_REMINDER_WORKER_INTERVAL_MS ?? DEFAULT_INTERVAL_MS,
+-      ),
++      intervalMs: this.intervalMs(),
++      heartbeatIntervalMs: this.heartbeatIntervalMs(),
++      heartbeatStaleAfterMs: this.heartbeatStaleAfterMs(),
++      stuckSendingAfterMs: this.stuckSendingAfterMs(),
++      maxRetries: this.maxRetries(),
++      retryBaseMs: this.retryBaseMs(),
++      retryMaxMs: this.retryMaxMs(),
+       lastRunAt: this.lastRunAt?.toISOString() ?? null,
+       lastRunSummary: this.lastRunSummary,
++      latestSuccessfulRunAt: latestSuccessfulRun?.finishedAt?.toISOString() ?? null,
++      latestSuccessfulRun,
++      backlog: {
++        byStatus: backlogByStatus,
++        retryScheduled,
++        stuckSending,
++      },
++      instances: instances.map((instance) => ({
++        ...instance,
++        heartbeatInterrupted:
++          instance.stoppedAt == null && instance.heartbeatAt.getTime() < heartbeatCutoff.getTime(),
++        active:
++          instance.stoppedAt == null && instance.heartbeatAt.getTime() >= heartbeatCutoff.getTime(),
++      })),
++      recentRuns,
+     };
+   }
+ 
+   // ---------------------------------------------------------------------------
+-  // runOnce — also callable from smoke tests / dev-tools controller
++  // runOnce — PG advisory lock + durable run metrics
+   // ---------------------------------------------------------------------------
+ 
+-  async runOnce(): Promise<NonNullable<typeof this.lastRunSummary>> {
++  async runOnce(): Promise<CareReminderWorkerSummary> {
+     if (this.inFlight) {
+-      this.logger.warn('previous pass still in flight; skipping this tick.');
+-      return this.lastRunSummary ?? { generated: 0, dispatched: 0, dispatchFailed: 0, missed: 0, escalated: 0 };
++      this.logger.warn('previous pass still in flight on this instance; skipping this tick.');
++      return this.recordSkippedRun('SKIPPED_IN_FLIGHT', 'previous local pass still running');
+     }
+-    this.inFlight = true;
+-    const horizonDays = Number(
+-      process.env.CARE_REMINDER_WORKER_HORIZON_DAYS ?? DEFAULT_HORIZON_DAYS,
+-    );
+-    let generated = 0;
+-    let dispatched = 0;
+-    let dispatchFailed = 0;
+-    let missed = 0;
+-    let escalated = 0;
+-    let errorMsg: string | undefined;
+ 
++    this.inFlight = true;
+     try {
+-      generated = await this.passGenerate(horizonDays);
+-      const dispatchResult = await this.passDispatch();
+-      dispatched = dispatchResult.dispatched;
+-      dispatchFailed = dispatchResult.failed;
+-      const missedResult = await this.passMissed();
+-      missed = missedResult.missed;
+-      escalated = missedResult.escalated;
++      return await this.prisma.$transaction(
++        async (lockTx) => {
++          const lockRows = await lockTx.$queryRaw<Array<{ acquired: boolean }>>`
++            SELECT pg_try_advisory_xact_lock(${WORKER_ADVISORY_LOCK_KEY}) AS acquired
++          `;
++          if (!lockRows[0]?.acquired) {
++            this.logger.log('another API instance owns the care-reminder advisory lock; skipping tick.');
++            return this.recordSkippedRun('SKIPPED_LOCKED', 'advisory lock held by another instance');
++          }
++          return this.executeLeaderRound();
++        },
++        {
++          maxWait: 5_000,
++          timeout: this.lockHoldTimeoutMs(),
++        },
++      );
+     } catch (e) {
+-      errorMsg = (e as Error).message;
+-      this.logger.error(`runOnce error: ${errorMsg}`);
++      const message = (e as Error).message;
++      this.logger.error(`worker advisory-lock round failed: ${message}`);
++      return this.recordInfrastructureFailure(message);
+     } finally {
+       this.inFlight = false;
+-      this.lastRunAt = new Date();
+-      this.lastRunSummary = { generated, dispatched, dispatchFailed, missed, escalated, ...(errorMsg ? { error: errorMsg } : {}) };
+     }
+-    return this.lastRunSummary!;
++  }
++
++  private emptySummary(
++    status: CareReminderWorkerSummary['status'],
++    error?: string,
++  ): CareReminderWorkerSummary {
++    return {
++      status,
++      generated: 0,
++      dispatched: 0,
++      dispatchFailed: 0,
++      retried: 0,
++      retryScheduled: 0,
++      recoveredStuck: 0,
++      recoveredAsSent: 0,
++      missed: 0,
++      escalated: 0,
++      ...(error ? { error } : {}),
++    };
++  }
++
++  private async recordSkippedRun(
++    status: 'SKIPPED_LOCKED' | 'SKIPPED_IN_FLIGHT',
++    reason: string,
++  ): Promise<CareReminderWorkerSummary> {
++    const now = new Date();
++    const summary = this.emptySummary(status, reason);
++    try {
++      await this.prisma.careReminderWorkerRun.create({
++        data: {
++          instanceId: this.instanceId,
++          status,
++          startedAt: now,
++          finishedAt: now,
++          error: reason,
++        },
++      });
++      await this.touchHeartbeat();
++    } catch (e) {
++      this.logger.warn(`failed to persist skipped run: ${(e as Error).message}`);
++    }
++    this.lastRunAt = now;
++    this.lastRunSummary = summary;
++    return summary;
++  }
++
++  private async recordInfrastructureFailure(error: string): Promise<CareReminderWorkerSummary> {
++    const now = new Date();
++    const summary = this.emptySummary('FAILED', error);
++    try {
++      await this.prisma.careReminderWorkerRun.create({
++        data: {
++          instanceId: this.instanceId,
++          status: 'FAILED',
++          startedAt: now,
++          finishedAt: now,
++          error: error.slice(0, 1000),
++        },
++      });
++      await this.prisma.careReminderWorkerHeartbeat.upsert({
++        where: { instanceId: this.instanceId },
++        create: {
++          instanceId: this.instanceId,
++          startedAt: now,
++          heartbeatAt: now,
++          lastRunAt: now,
++          lastFailedAt: now,
++          lastSummary: summary as any,
++        },
++        update: {
++          heartbeatAt: now,
++          lastRunAt: now,
++          lastFailedAt: now,
++          lastSummary: summary as any,
++        },
++      });
++    } catch (persistError) {
++      this.logger.warn(`failed to persist infrastructure failure: ${(persistError as Error).message}`);
++    }
++    this.lastRunAt = now;
++    this.lastRunSummary = summary;
++    return summary;
++  }
++
++  private async executeLeaderRound(): Promise<CareReminderWorkerSummary> {
++    const startedAt = new Date();
++    const run = await this.prisma.careReminderWorkerRun.create({
++      data: {
++        instanceId: this.instanceId,
++        status: 'RUNNING',
++        startedAt,
++        heartbeatAt: startedAt,
++      },
++    });
++    this.activeRunId = run.id;
++    this.lastRunAt = startedAt;
++    await this.prisma.careReminderWorkerHeartbeat.upsert({
++      where: { instanceId: this.instanceId },
++      create: {
++        instanceId: this.instanceId,
++        startedAt,
++        heartbeatAt: startedAt,
++        lastRunAt: startedAt,
++        lastRunId: run.id,
++      },
++      update: {
++        heartbeatAt: startedAt,
++        lastRunAt: startedAt,
++        lastRunId: run.id,
++        stoppedAt: null,
++      },
++    });
++
++    let summary = this.emptySummary('SUCCEEDED');
++    try {
++      const recovery = await this.recoverStuckSending();
++      summary.recoveredStuck = recovery.recoveredStuck;
++      summary.recoveredAsSent = recovery.recoveredAsSent;
++      summary.retryScheduled += recovery.retryScheduled;
++
++      summary.generated = await this.passGenerate(
++        this.numberEnv('CARE_REMINDER_WORKER_HORIZON_DAYS', DEFAULT_HORIZON_DAYS),
++      );
++      const dispatch = await this.passDispatch();
++      summary.dispatched = dispatch.dispatched;
++      summary.dispatchFailed = dispatch.failed;
++      summary.retried = dispatch.retried;
++      summary.retryScheduled += dispatch.retryScheduled;
++
++      const missed = await this.passMissed();
++      summary.missed = missed.missed;
++      summary.escalated = missed.escalated;
++    } catch (e) {
++      const message = (e as Error).message;
++      summary = { ...summary, status: 'FAILED', error: message };
++      this.logger.error(`runOnce error: ${message}`);
++    } finally {
++      const finishedAt = new Date();
++      this.activeRunId = null;
++      this.lastRunAt = finishedAt;
++      this.lastRunSummary = summary;
++      await this.prisma.careReminderWorkerRun.update({
++        where: { id: run.id },
++        data: {
++          status: summary.status,
++          finishedAt,
++          heartbeatAt: finishedAt,
++          generated: summary.generated,
++          dispatched: summary.dispatched,
++          dispatchFailed: summary.dispatchFailed,
++          retried: summary.retried,
++          retryScheduled: summary.retryScheduled,
++          recoveredStuck: summary.recoveredStuck,
++          recoveredAsSent: summary.recoveredAsSent,
++          missed: summary.missed,
++          escalated: summary.escalated,
++          error: summary.error?.slice(0, 1000),
++        },
++      });
++      await this.prisma.careReminderWorkerHeartbeat.update({
++        where: { instanceId: this.instanceId },
++        data: {
++          heartbeatAt: finishedAt,
++          lastRunAt: finishedAt,
++          lastRunId: run.id,
++          lastSummary: summary as any,
++          ...(summary.status === 'SUCCEEDED'
++            ? { lastSucceededAt: finishedAt }
++            : { lastFailedAt: finishedAt }),
++        },
++      });
++      this.logger.log(
++        `round=${run.id} status=${summary.status} generated=${summary.generated} ` +
++          `sent=${summary.dispatched} failed=${summary.dispatchFailed} retried=${summary.retried} ` +
++          `retryScheduled=${summary.retryScheduled} recovered=${summary.recoveredStuck} ` +
++          `escalated=${summary.escalated}`,
++      );
++    }
++    return summary;
++  }
++
++  // ---------------------------------------------------------------------------
++  // recovery for crashed SENDING rows
++  // ---------------------------------------------------------------------------
++
++  async recoverStuckSending(): Promise<RecoveryResult> {
++    const now = new Date();
++    const cutoff = new Date(now.getTime() - this.stuckSendingAfterMs());
++    const stuck = await this.prisma.careReminderOccurrence.findMany({
++      where: {
++        status: 'SENDING',
++        OR: [
++          { sendingStartedAt: { lt: cutoff } },
++          { sendingStartedAt: null, updatedAt: { lt: cutoff } },
++        ],
++      },
++      orderBy: { updatedAt: 'asc' },
++      take: 500,
++    });
++
++    let recoveredStuck = 0;
++    let recoveredAsSent = 0;
++    let retryScheduled = 0;
++    for (const occ of stuck) {
++      const message = occ.outboundMessageId
++        ? await this.prisma.patientOutboundMessage.findUnique({ where: { id: occ.outboundMessageId } })
++        : null;
++      if (message && ['SENT', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
++        const marked = await this.occurrences.markSent(
++          occ.id,
++          occ.formLinkId ?? message.formLinkId,
++          message.id,
++        );
++        if (marked) {
++          recoveredStuck += 1;
++          recoveredAsSent += 1;
++        }
++        continue;
++      }
++
++      const result = await this.occurrences.recoverStuckSending(
++        occ.id,
++        '检测到长期停留在 SENDING，已由 Worker 自动恢复',
++        this.retryOptions(now),
++      );
++      if (result.transitioned) {
++        recoveredStuck += 1;
++        if (!result.exhausted) retryScheduled += 1;
++      }
++    }
++    return { recoveredStuck, recoveredAsSent, retryScheduled };
+   }
+ 
+   // ---------------------------------------------------------------------------
+-  // pass 1: generate occurrences
++  // explicit targeted dispatch for nurse send-now
++  // ---------------------------------------------------------------------------
++
++  async dispatchOccurrenceNow(id: string) {
++    const occ = await this.loadOccurrenceForDispatch(id);
++    if (!occ || occ.status !== 'PENDING') return this.occurrences.getByIdOrThrow(id);
++
++    const claimed = await this.occurrences.claimForSending(occ.id);
++    if (!claimed) return this.occurrences.getByIdOrThrow(id);
++
++    try {
++      const { formLink, message } = await this.dispatchOne(occ);
++      if (message?.status === 'SENT' || message?.status === 'PENDING') {
++        await this.occurrences.markSent(occ.id, formLink?.id, message?.id);
++      } else {
++        await this.occurrences.markSendFailed(
++          occ.id,
++          message?.errorMessage ?? 'unknown dispatch failure',
++          this.retryOptions(),
++        );
++      }
++    } catch (e) {
++      await this.occurrences.markSendFailed(occ.id, (e as Error).message, this.retryOptions());
++      throw e;
++    }
++    return this.occurrences.getByIdOrThrow(id);
++  }
++
++  // ---------------------------------------------------------------------------
++  // pass 1: reconcile + generate occurrences
+   // ---------------------------------------------------------------------------
+ 
+   private async passGenerate(horizonDays: number): Promise<number> {
+-    // v3.3.3: reconcile source-bound schedules to their MedicationRecord /
+-    // VitalMonitoringPlan BEFORE generating occurrences. Otherwise, if a nurse
+-    // just changed e.g. a blood-pressure plan's times but nobody has opened the
+-    // care-reminders page (which reconciles on read) and the reconcile script
+-    // hasn't run, the worker would generate reminders from stale schedule times.
+-    // syncAllSchedulesForPatient() also backfills missing sourceId and flips
+-    // isActive to match the source plan, so the fresh query below reflects the
+-    // true, current state.
+     const sourceBound = await this.prisma.careReminderSchedule.findMany({
+       where: { sourceType: { in: ['MEDICATION', 'VITAL'] } },
+       select: { patientId: true },
+@@ -170,48 +610,44 @@
+       try {
+         await this.schedules.syncAllSchedulesForPatient(patientId);
+       } catch (e) {
+-        // Never let one patient's reconcile failure abort the whole worker pass.
+         this.logger.error(
+           `reconcile before generate failed for patient ${patientId}: ${(e as Error).message}`,
+         );
+       }
+     }
+ 
+-    // Re-query AFTER reconcile so we generate from the up-to-date schedules
+-    // (times/frequency aligned to the plan; plan-inactive bindings now isActive=false).
+     const activeSchedules = await this.prisma.careReminderSchedule.findMany({
+       where: { isActive: true },
+       include: { hospitalTenant: { select: { timezone: true } } },
+     });
+ 
+     let totalCreated = 0;
+-    for (const sched of activeSchedules) {
+-      const timezone = sched.hospitalTenant?.timezone || 'Asia/Shanghai';
+-      const r = await this.occurrences.generateForSchedule({
+-        schedule: sched,
+-        timezone,
++    for (const schedule of activeSchedules) {
++      const result = await this.occurrences.generateForSchedule({
++        schedule,
++        timezone: schedule.hospitalTenant?.timezone || 'Asia/Shanghai',
+         daysAhead: horizonDays,
+       });
+-      totalCreated += r.created;
++      totalCreated += result.created;
+     }
+     return totalCreated;
+   }
+ 
+   // ---------------------------------------------------------------------------
+-  // pass 2: dispatch
++  // pass 2: dispatch due reminders with delayed retry gating
+   // ---------------------------------------------------------------------------
+ 
+-  private async passDispatch(): Promise<{ dispatched: number; failed: number }> {
++  private async passDispatch(): Promise<DispatchResult> {
+     const now = new Date();
+-    // Window: anything currently inside the reminder window.
+     const pending = await this.prisma.careReminderOccurrence.findMany({
+       where: {
+         status: 'PENDING',
+         availableFrom: { lte: now },
+         availableUntil: { gte: now },
++        OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+       },
+       orderBy: { dueAt: 'asc' },
+-      take: 200, // cap per tick
++      take: 200,
+       include: {
+         schedule: true,
+         patient: { include: { wechatIdentities: { take: 5, orderBy: { createdAt: 'desc' } } } },
+@@ -220,36 +656,81 @@
+ 
+     let dispatched = 0;
+     let failed = 0;
++    let retried = 0;
++    let retryScheduled = 0;
+     for (const occ of pending) {
+-      // Spec point 9: each occurrence creates at most ONE active form link.
+-      // The PENDING → SENDING claim is the gate.
+-      const claimed = await this.occurrences.claimForSending(occ.id);
+-      if (!claimed) continue; // another worker pass grabbed it, or it transitioned
++      const wasRetry = occ.retryCount > 0;
++      const claimed = await this.occurrences.claimForSending(occ.id, now);
++      if (!claimed) continue;
++      if (wasRetry) retried += 1;
+ 
+       try {
+-        const { formLink, linkUrl, message } = await this.dispatchOne(occ);
++        const { formLink, message } = await this.dispatchOne(occ);
+         if (message?.status === 'SENT' || message?.status === 'PENDING') {
+-          await this.occurrences.markSent(occ.id, formLink.id, message.id);
++          await this.occurrences.markSent(occ.id, formLink?.id, message?.id);
+           dispatched += 1;
+         } else {
+-          await this.occurrences.markSendFailed(occ.id, message?.errorMessage ?? 'unknown dispatch failure');
++          const result = await this.occurrences.markSendFailed(
++            occ.id,
++            message?.errorMessage ?? 'unknown dispatch failure',
++            this.retryOptions(now),
++          );
++          if (result.transitioned && !result.exhausted) retryScheduled += 1;
+           failed += 1;
+         }
+       } catch (e) {
+-        await this.occurrences.markSendFailed(occ.id, (e as Error).message);
++        const result = await this.occurrences.markSendFailed(
++          occ.id,
++          (e as Error).message,
++          this.retryOptions(now),
++        );
++        if (result.transitioned && !result.exhausted) retryScheduled += 1;
+         failed += 1;
+       }
+     }
++    return { dispatched, failed, retried, retryScheduled };
++  }
+ 
+-    return { dispatched, failed };
++  private async loadOccurrenceForDispatch(id: string) {
++    return this.prisma.careReminderOccurrence.findUnique({
++      where: { id },
++      include: {
++        schedule: true,
++        patient: {
++          include: {
++            wechatIdentities: { take: 5, orderBy: { createdAt: 'desc' } },
++          },
++        },
++      },
++    });
+   }
+ 
++  /**
++   * Reuse existing canonical artifacts after retry/recovery. For a new row,
++   * attach formLinkId/outboundMessageId before the external provider call.
++   */
+   private async dispatchOne(occ: any) {
+-    const tenantId: string = occ.hospitalTenantId;
+-    const patient = occ.patient;
+-    const schedule = occ.schedule;
++    const current = await this.prisma.careReminderOccurrence.findUnique({ where: { id: occ.id } });
++    if (current?.formLinkId && current.outboundMessageId) {
++      const [formLink, message] = await Promise.all([
++        this.prisma.patientFormLink.findUnique({ where: { id: current.formLinkId } }),
++        this.prisma.patientOutboundMessage.findUnique({ where: { id: current.outboundMessageId } }),
++      ]);
++      const formLinkUsable =
++        formLink?.status === 'ACTIVE' &&
++        (!formLink.expiresAt || formLink.expiresAt.getTime() > Date.now()) &&
++        !formLink.revokedAt;
++      if (formLink && message && formLinkUsable) {
++        if (['SENT', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
++          return { formLink, token: null, linkUrl: message.linkUrl ?? '', message };
++        }
++        return this.dispatchExistingMessage(occ, formLink, message);
++      }
++    }
+ 
+-    // Step 1: create the form link.
++    const schedule = occ.schedule;
++    const patient = occ.patient;
++    const tenantId: string = occ.hospitalTenantId;
+     const { formLink, token, linkUrl } = await this.formLink.create({
+       hospitalTenantId: tenantId,
+       patientId: occ.patientId,
+@@ -268,113 +749,82 @@
+       createdBy: null,
+     });
+ 
+-    // Step 2: resolve channel using v2.1 rules.
+-    const account = await this.accounts.getAccountForTenant(tenantId);
+-    const scopedOpenId = (() => {
+-      if (!account) return null;
+-      const match = (patient.wechatIdentities || []).find(
+-        (i: any) =>
+-          i.hospitalTenantId === tenantId &&
+-          i.appId === account.appId &&
+-          i.isVerified,
+-      );
+-      return match?.openId ?? null;
+-    })();
+-    const canWechat = await this.wechat.tenantCanReceiveWechat(tenantId);
+-
+-    const primaryChannel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | 'MANUAL_COPY' =
+-      scopedOpenId && canWechat ? 'WECHAT_OFFICIAL_ACCOUNT' :
+-      patient.phone ? 'SMS' :
+-      'MANUAL_COPY';
+-
+-    // Step 3: create + dispatch outbound message.
+-    const messageType = this.occurrenceTypeToMessageType(occ.occurrenceType);
+-    const recipient = primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' ? scopedOpenId : primaryChannel === 'SMS' ? patient.phone : null;
+-    const content = this.buildContent(occ, schedule, linkUrl);
+-
++    const route = await this.resolveRoute(tenantId, patient);
+     const message = await this.outbound.create({
+       hospitalTenantId: tenantId,
+       patientId: occ.patientId,
+       formLinkId: formLink.id,
+-      channel: primaryChannel,
+-      messageType,
++      channel: route.channel,
++      messageType: this.occurrenceTypeToMessageType(occ.occurrenceType),
+       title: occ.title,
+-      content,
++      content: this.buildContent(occ, schedule, linkUrl),
+       linkUrl,
+-      recipient,
++      recipient: route.recipient,
+       createdBy: null,
+       initialStatus: 'PENDING',
+     });
+ 
+-    if (primaryChannel !== 'MANUAL_COPY') {
+-      const dispatched = await this.outbound.dispatch(message.id, {
+-        openId: primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' ? recipient : null,
+-        phone: primaryChannel === 'SMS' ? recipient : null,
+-      });
+-      // v3.2: record this as the INITIAL delivery attempt on the canonical message.
+-      // (We're already inside `if (primaryChannel !== 'MANUAL_COPY')`, so the
+-      // channel here is WECHAT_OFFICIAL_ACCOUNT or SMS.)
+-      try {
+-        await this.outbound.recordAttempt({
+-          messageId: message.id,
+-          hospitalTenantId: tenantId,
+-          patientId: occ.patientId,
+-          formLinkId: formLink.id,
+-          channel: primaryChannel,
+-          status: dispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+-          providerMessageId: dispatched?.providerMessageId ?? null,
+-          errorMessage: dispatched?.status === 'SENT' ? null : dispatched?.errorMessage ?? '发送失败',
+-          triggerReason: 'INITIAL',
+-        });
+-        await this.outbound.recomputeDelivery(message.id);
+-      } catch { /* attempts table may be pre-v3.2 */ }
++    const attached = await this.occurrences.attachDispatchArtifacts(occ.id, formLink.id, message.id);
++    if (!attached) {
++      throw new Error('occurrence lost SENDING claim before dispatch artifacts were persisted');
++    }
+ 
+-      // v2.1 SMS fallback on WeChat failure.
+-      if (
+-        primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' &&
+-        dispatched?.status === 'FAILED' &&
+-        patient.phone
+-      ) {
+-        const fb = await this.outbound.create({
+-          hospitalTenantId: tenantId,
+-          patientId: occ.patientId,
+-          formLinkId: formLink.id,
+-          channel: 'SMS',
+-          messageType,
+-          title: occ.title,
+-          content,
+-          linkUrl,
+-          recipient: patient.phone,
+-          createdBy: null,
+-          initialStatus: 'PENDING',
+-        });
+-        const fbDispatched = await this.outbound.dispatch(fb.id, {
+-          openId: null,
+-          phone: patient.phone,
+-        });
+-        try {
+-          await this.outbound.recordAttempt({
+-            messageId: message.id,
+-            hospitalTenantId: tenantId,
+-            patientId: occ.patientId,
+-            formLinkId: formLink.id,
+-            channel: 'SMS',
+-            status: fbDispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+-            providerMessageId: fbDispatched?.providerMessageId ?? null,
+-            errorMessage: fbDispatched?.status === 'SENT' ? null : fbDispatched?.errorMessage ?? '发送失败',
+-            triggerReason: 'AUTO_FALLBACK',
+-          });
+-          await this.outbound.recomputeDelivery(message.id);
+-        } catch { /* attempts table may be pre-v3.2 */ }
+-        const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: fb.id } });
+-        return { formLink, token, linkUrl, message: refreshed };
+-      }
++    if (route.channel === 'MANUAL_COPY') return { formLink, token, linkUrl, message };
++    return this.dispatchExistingMessage(occ, formLink, message, route);
++  }
+ 
+-      const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: message.id } });
+-      return { formLink, token, linkUrl, message: refreshed };
+-    }
++  private async resolveRoute(tenantId: string, patient: any) {
++    const account = await this.accounts.getAccountForTenant(tenantId);
++    const scopedOpenId = (() => {
++      if (!account) return null;
++      const match = (patient.wechatIdentities || []).find(
++        (identity: any) =>
++          identity.hospitalTenantId === tenantId && identity.appId === account.appId && identity.isVerified,
++      );
++      return match?.openId ?? null;
++    })();
++    const canWechat = await this.wechat.tenantCanReceiveWechat(tenantId);
++    const channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | 'MANUAL_COPY' =
++      scopedOpenId && canWechat ? 'WECHAT_OFFICIAL_ACCOUNT' : patient.phone ? 'SMS' : 'MANUAL_COPY';
++    const recipient = channel === 'WECHAT_OFFICIAL_ACCOUNT' ? scopedOpenId : channel === 'SMS' ? patient.phone : null;
++    return { channel, recipient, scopedOpenId, phone: patient.phone ?? null };
++  }
++
++  private async dispatchExistingMessage(
++    occ: any,
++    formLink: any,
++    message: any,
++    route?: { channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | 'MANUAL_COPY'; recipient: string | null; scopedOpenId: string | null; phone: string | null },
++  ) {
++    const resolved = route ?? (await this.resolveRoute(occ.hospitalTenantId, occ.patient));
++    const channel = message.channel === 'MANUAL_COPY' ? resolved.channel : message.channel;
++    if (channel === 'MANUAL_COPY') {
++      return { formLink, token: null, linkUrl: message.linkUrl ?? '', message };
++    }
++
++    const primary = await this.outbound.attemptDispatch({
++      messageId: message.id,
++      channel,
++      openId: channel === 'WECHAT_OFFICIAL_ACCOUNT' ? resolved.scopedOpenId : null,
++      phone: channel === 'SMS' ? resolved.phone : null,
++      triggerReason: message.lastAttemptAt ? 'WORKER_RETRY' : 'INITIAL',
++    });
+ 
+-    return { formLink, token, linkUrl, message };
++    if (
++      channel === 'WECHAT_OFFICIAL_ACCOUNT' &&
++      primary.dispatched?.status === 'FAILED' &&
++      resolved.phone
++    ) {
++      const fallback = await this.outbound.attemptDispatch({
++        messageId: message.id,
++        channel: 'SMS',
++        openId: null,
++        phone: resolved.phone,
++        triggerReason: 'AUTO_FALLBACK',
++      });
++      return { formLink, token: null, linkUrl: message.linkUrl ?? '', message: fallback.message };
++    }
++    return { formLink, token: null, linkUrl: message.linkUrl ?? '', message: primary.message };
+   }
+ 
+   // ---------------------------------------------------------------------------
+@@ -383,11 +833,9 @@
+ 
+   private async passMissed(): Promise<{ missed: number; escalated: number }> {
+     const now = new Date();
+-
+-    // mark MISSED
+     const stale = await this.prisma.careReminderOccurrence.findMany({
+       where: {
+-        status: { in: ['PENDING', 'SENT', 'CLICKED'] },
++        status: { in: ['PENDING', 'FAILED', 'SENT', 'CLICKED'] },
+         availableUntil: { lt: now },
+       },
+       take: 500,
+@@ -397,12 +845,8 @@
+       if (await this.occurrences.markMissed(occ.id)) missed += 1;
+     }
+ 
+-    // escalate: MISSED + schedule.escalationAfterMinutes set + within escalation window
+     const candidates = await this.prisma.careReminderOccurrence.findMany({
+-      where: {
+-        status: 'MISSED',
+-        escalatedTaskId: null,
+-      },
++      where: { status: 'MISSED', escalatedTaskId: null },
+       include: { schedule: true, patient: { select: { responsibleNurseId: true } } },
+       take: 500,
+     });
+@@ -413,7 +857,6 @@
+       const escalateAt = (occ.missedAt ?? occ.availableUntil).getTime() + after * 60_000;
+       if (escalateAt > now.getTime()) continue;
+ 
+-      // Create the nurse task first, then atomically attach.
+       const task = await this.prisma.task.create({
+         data: {
+           patientId: occ.patientId,
+@@ -429,11 +872,13 @@
+       if (won) {
+         escalated += 1;
+       } else {
+-        // Lost the race; delete the orphan task we just made.
+-        try { await this.prisma.task.delete({ where: { id: task.id } }); } catch { /* ignore */ }
++        try {
++          await this.prisma.task.delete({ where: { id: task.id } });
++        } catch {
++          // best-effort orphan cleanup only
++        }
+       }
+     }
+-
+     return { missed, escalated };
+   }
+ 
+@@ -441,32 +886,42 @@
+   // helpers
+   // ---------------------------------------------------------------------------
+ 
+-  private occurrenceTypeToFormLinkType(t: string): string {
+-    switch (t) {
+-      case 'MEDICATION_CHECKIN': return 'MEDICATION_CHECKIN';
+-      case 'VITAL_RECHECK': return 'VITAL_RECHECK';
+-      case 'QUESTIONNAIRE': return 'QUESTIONNAIRE';
+-      case 'GENERAL_MESSAGE': return 'GENERAL_MESSAGE';
+-      default: return 'GENERIC_NOTICE';
++  private occurrenceTypeToFormLinkType(type: string): string {
++    switch (type) {
++      case 'MEDICATION_CHECKIN':
++        return 'MEDICATION_CHECKIN';
++      case 'VITAL_RECHECK':
++        return 'VITAL_RECHECK';
++      case 'QUESTIONNAIRE':
++        return 'QUESTIONNAIRE';
++      case 'GENERAL_MESSAGE':
++        return 'GENERAL_MESSAGE';
++      default:
++        return 'GENERIC_NOTICE';
+     }
+   }
+ 
+-  private occurrenceTypeToMessageType(t: string): string {
+-    switch (t) {
+-      case 'MEDICATION_CHECKIN': return 'MEDICATION_REMINDER';
+-      case 'VITAL_RECHECK': return 'VITAL_RECHECK_REMINDER';
+-      case 'QUESTIONNAIRE': return 'QUESTIONNAIRE_REMINDER';
+-      case 'GENERAL_MESSAGE': return 'QUESTIONNAIRE_REMINDER';
+-      default: return 'QUESTIONNAIRE_REMINDER';
++  private occurrenceTypeToMessageType(type: string): string {
++    switch (type) {
++      case 'MEDICATION_CHECKIN':
++        return 'MEDICATION_REMINDER';
++      case 'VITAL_RECHECK':
++        return 'VITAL_RECHECK_REMINDER';
++      case 'QUESTIONNAIRE':
++        return 'QUESTIONNAIRE_REMINDER';
++      default:
++        return 'QUESTIONNAIRE_REMINDER';
+     }
+   }
+ 
+-  private occurrenceTypeToTaskType(t: string): string {
+-    switch (t) {
+-      case 'MEDICATION_CHECKIN': return 'MEDICATION_ADHERENCE_FOLLOW_UP';
+-      case 'VITAL_RECHECK': return 'RISK_ALERT_FOLLOW_UP';
+-      case 'GENERAL_MESSAGE': return 'GENERAL_FOLLOW_UP';
+-      default: return 'GENERAL_FOLLOW_UP';
++  private occurrenceTypeToTaskType(type: string): string {
++    switch (type) {
++      case 'MEDICATION_CHECKIN':
++        return 'MEDICATION_ADHERENCE_FOLLOW_UP';
++      case 'VITAL_RECHECK':
++        return 'RISK_ALERT_FOLLOW_UP';
++      default:
++        return 'GENERAL_FOLLOW_UP';
+     }
+   }
+ 
+--- a/apps/api/src/care-reminders/care-reminders.controller.ts
++++ b/apps/api/src/care-reminders/care-reminders.controller.ts
+@@ -74,7 +74,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+ 
+     const medication = await this.prisma.medicationRecord.findUnique({
+       where: { id: dto.medicationId },
+@@ -131,7 +131,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+ 
+     // v3.3: a VITAL reminder MUST be bound to a VitalMonitoringPlan — care
+     // reminders only ever derive from the monitoring plan, never free-standing.
+@@ -199,7 +199,7 @@
+   ) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.update(id, dto);
+   }
+ 
+@@ -208,7 +208,7 @@
+   async pauseSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.pause(id);
+   }
+ 
+@@ -217,7 +217,7 @@
+   async resumeSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.resume(id);
+   }
+ 
+@@ -228,7 +228,7 @@
+   async cancelSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     const result = await this.schedules.cancelSchedule(id);
+     await this.audit.record({
+       user,
+@@ -333,7 +333,7 @@
+   async sendNow(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+ 
+     if (occ.status !== 'PENDING') {
+       // Spec point 9: reuse existing link if already SENT.
+@@ -343,11 +343,10 @@
+       throw new BadRequestException(`occurrence is in status ${occ.status}; cannot send-now`);
+     }
+ 
+-    // Trigger a single dispatch by running the worker pass scoped to this occ.
+-    // Easiest path: just invoke runOnce() — it'll claim and dispatch the
+-    // PENDING occurrence. We then return the refreshed row.
+-    await this.worker.runOnce();
+-    const refreshed = await this.occurrences.getByIdOrThrow(id);
++    // Explicit nurse action: dispatch this exact occurrence immediately.
++    // Do not run the global scheduled pass: that would send unrelated patients'
++    // reminders and would still skip this row when it is outside its time window.
++    const refreshed = await this.worker.dispatchOccurrenceNow(id);
+     await this.audit.record({
+       user,
+       action: 'CARE_REMINDER_SEND_NOW',
+@@ -367,7 +366,7 @@
+   async resendOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+     const result = await this.resend.resend(id);
+     await this.audit.record({
+       user,
+@@ -384,12 +383,46 @@
+     return result;
+   }
+ 
++  /**
++   * Admin-only operational replay for FAILED / delayed PENDING rows.
++   * This is deliberately separate from nurse resend: replay repairs an
++   * automated delivery failure, while resend appends a human-requested attempt
++   * to an already-sent patient-facing case.
++   */
++  @Roles(UserRole.ADMIN)
++  @Post('occurrences/:id/replay')
++  async replayOccurrence(
++    @Param('id') id: string,
++    @Body() body: { runNow?: boolean },
++    @CurrentUser() user: RequestUser,
++    @Req() req: any,
++  ) {
++    const occ = await this.occurrences.getByIdOrThrow(id);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
++    const replayed = await this.occurrences.requestReplay(id, user.id);
++    const afterRun = body?.runNow ? await this.worker.dispatchOccurrenceNow(id) : replayed;
++    await this.audit.record({
++      user,
++      action: 'CARE_REMINDER_OCCURRENCE_REPLAY_REQUESTED',
++      targetType: 'CareReminderOccurrence',
++      targetId: id,
++      ipAddress: req?.ip,
++      afterData: {
++        runNow: body?.runNow === true,
++        status: afterRun.status,
++        retryCount: afterRun.retryCount,
++        replayCount: afterRun.replayCount,
++      },
++    });
++    return afterRun;
++  }
++
+   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+   @Post('occurrences/:id/cancel')
+   async cancelOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+     await this.occurrences.cancel(id);
+     return this.occurrences.getByIdOrThrow(id);
+   }
+@@ -417,7 +450,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+     const result = await this.directMessages.create({
+       hospitalTenantId,
+       patientId,
+@@ -459,6 +492,21 @@
+   }
+ 
+   @Roles(UserRole.ADMIN)
++  @Post('worker/recover-stuck')
++  async recoverStuckWorkerRows(@CurrentUser() user: RequestUser, @Req() req: any) {
++    const summary = await this.worker.recoverStuckSending();
++    await this.audit.record({
++      user,
++      action: 'CARE_REMINDER_WORKER_RECOVER_STUCK',
++      targetType: 'CareReminderWorker',
++      targetId: 'worker',
++      ipAddress: req?.ip,
++      afterData: summary,
++    });
++    return summary;
++  }
++
++  @Roles(UserRole.ADMIN)
+   @Post('worker/run-once')
+   async workerRunOnce(@CurrentUser() user: RequestUser, @Req() req: any) {
+     const summary = await this.worker.runOnce();
+@@ -490,3 +538,4 @@
+ }
+ 
+ 
++
+--- a/apps/api/prisma/schema.prisma
++++ b/apps/api/prisma/schema.prisma
+@@ -1488,6 +1488,15 @@
+   // care-reminders v3.1 — resend bookkeeping
+   resendCount       Int      @default(0)
+   lastResentAt      DateTime?
++  // care-reminder-worker-v7 — durable retry and crash recovery metadata
++  sendAttemptCount      Int       @default(0)
++  retryCount            Int       @default(0)
++  nextRetryAt           DateTime?
++  sendingStartedAt      DateTime?
++  lastSendAttemptAt     DateTime?
++  replayCount           Int       @default(0)
++  lastReplayRequestedAt DateTime?
++  lastReplayRequestedBy String?
+   createdAt         DateTime @default(now())
+   updatedAt         DateTime @updatedAt
+ 
+@@ -1499,6 +1508,8 @@
+   @@index([hospitalTenantId, patientId, dueAt])
+   @@index([status, dueAt])
+   @@index([formLinkId])
++  @@index([status, nextRetryAt])
++  @@index([status, sendingStartedAt])
+ }
+ 
+ model PatientDirectMessage {
+@@ -1589,3 +1600,48 @@
+   @@index([taskId])
+   @@index([riskAlertId])
+ }
++
++// ============================================================================
++// care-reminder-worker-v7 — heartbeat + per-round metrics
++// ============================================================================
++
++model CareReminderWorkerHeartbeat {
++  instanceId      String   @id
++  startedAt       DateTime @default(now())
++  heartbeatAt     DateTime
++  stoppedAt       DateTime?
++  lastRunAt       DateTime?
++  lastSucceededAt DateTime?
++  lastFailedAt    DateTime?
++  lastRunId       String?
++  lastSummary     Json?
++  createdAt       DateTime @default(now())
++  updatedAt       DateTime @updatedAt
++
++  @@index([heartbeatAt])
++}
++
++model CareReminderWorkerRun {
++  id              String   @id @default(uuid())
++  instanceId      String
++  status          String
++  startedAt       DateTime @default(now())
++  heartbeatAt     DateTime?
++  finishedAt      DateTime?
++  generated       Int      @default(0)
++  dispatched      Int      @default(0)
++  dispatchFailed  Int      @default(0)
++  retried         Int      @default(0)
++  retryScheduled  Int      @default(0)
++  recoveredStuck  Int      @default(0)
++  recoveredAsSent Int      @default(0)
++  missed          Int      @default(0)
++  escalated       Int      @default(0)
++  error           String?
++  createdAt       DateTime @default(now())
++
++  @@index([status, startedAt])
++  @@index([finishedAt])
++  @@index([instanceId, startedAt])
++}
++
+--- /dev/null
++++ b/apps/api/prisma/migrations/20260609143000_care_reminder_worker_v7_reliability/migration.sql
+@@ -0,0 +1,65 @@
++-- care_reminder_worker_v7_reliability
++-- Trial-ready protections for the setInterval care reminder worker:
++-- retry/backoff state, stale-SENDING recovery metadata, instance heartbeat,
++-- and durable per-round metrics.
++
++ALTER TABLE "CareReminderOccurrence"
++  ADD COLUMN "sendAttemptCount" INTEGER NOT NULL DEFAULT 0,
++  ADD COLUMN "retryCount" INTEGER NOT NULL DEFAULT 0,
++  ADD COLUMN "nextRetryAt" TIMESTAMP(3),
++  ADD COLUMN "sendingStartedAt" TIMESTAMP(3),
++  ADD COLUMN "lastSendAttemptAt" TIMESTAMP(3),
++  ADD COLUMN "replayCount" INTEGER NOT NULL DEFAULT 0,
++  ADD COLUMN "lastReplayRequestedAt" TIMESTAMP(3),
++  ADD COLUMN "lastReplayRequestedBy" TEXT;
++
++CREATE INDEX "CareReminderOccurrence_status_nextRetryAt_idx"
++  ON "CareReminderOccurrence"("status", "nextRetryAt");
++CREATE INDEX "CareReminderOccurrence_status_sendingStartedAt_idx"
++  ON "CareReminderOccurrence"("status", "sendingStartedAt");
++
++CREATE TABLE "CareReminderWorkerHeartbeat" (
++  "instanceId"       TEXT         NOT NULL,
++  "startedAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  "heartbeatAt"      TIMESTAMP(3) NOT NULL,
++  "stoppedAt"        TIMESTAMP(3),
++  "lastRunAt"        TIMESTAMP(3),
++  "lastSucceededAt"  TIMESTAMP(3),
++  "lastFailedAt"     TIMESTAMP(3),
++  "lastRunId"        TEXT,
++  "lastSummary"      JSONB,
++  "createdAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  "updatedAt"        TIMESTAMP(3) NOT NULL,
++  CONSTRAINT "CareReminderWorkerHeartbeat_pkey" PRIMARY KEY ("instanceId")
++);
++
++CREATE INDEX "CareReminderWorkerHeartbeat_heartbeatAt_idx"
++  ON "CareReminderWorkerHeartbeat"("heartbeatAt");
++
++CREATE TABLE "CareReminderWorkerRun" (
++  "id"               TEXT         NOT NULL,
++  "instanceId"       TEXT         NOT NULL,
++  "status"           TEXT         NOT NULL,
++  "startedAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  "heartbeatAt"      TIMESTAMP(3),
++  "finishedAt"       TIMESTAMP(3),
++  "generated"        INTEGER      NOT NULL DEFAULT 0,
++  "dispatched"       INTEGER      NOT NULL DEFAULT 0,
++  "dispatchFailed"   INTEGER      NOT NULL DEFAULT 0,
++  "retried"          INTEGER      NOT NULL DEFAULT 0,
++  "retryScheduled"   INTEGER      NOT NULL DEFAULT 0,
++  "recoveredStuck"   INTEGER      NOT NULL DEFAULT 0,
++  "recoveredAsSent"  INTEGER      NOT NULL DEFAULT 0,
++  "missed"           INTEGER      NOT NULL DEFAULT 0,
++  "escalated"        INTEGER      NOT NULL DEFAULT 0,
++  "error"            TEXT,
++  "createdAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++  CONSTRAINT "CareReminderWorkerRun_pkey" PRIMARY KEY ("id")
++);
++
++CREATE INDEX "CareReminderWorkerRun_status_startedAt_idx"
++  ON "CareReminderWorkerRun"("status", "startedAt");
++CREATE INDEX "CareReminderWorkerRun_finishedAt_idx"
++  ON "CareReminderWorkerRun"("finishedAt");
++CREATE INDEX "CareReminderWorkerRun_instanceId_startedAt_idx"
++  ON "CareReminderWorkerRun"("instanceId", "startedAt");
+--- /dev/null
++++ b/apps/api/prisma/check-care-reminder-worker-v7.js
+@@ -0,0 +1,99 @@
++#!/usr/bin/env node
++/*
++ * Operational checker for care-reminder-worker-v7.
++ * Run from apps/api after migration + generate while one or more API instances
++ * are running. It reports heartbeat health, recent round metrics, backlog, stale
++ * SENDING rows, and automatic duplicate-success evidence.
++ */
++const { PrismaClient } = require('@prisma/client');
++const prisma = new PrismaClient();
++
++function envNumber(name, fallback) {
++  const value = Number(process.env[name] || fallback);
++  return Number.isFinite(value) && value > 0 ? value : fallback;
++}
++
++async function main() {
++  const now = new Date();
++  const heartbeatStaleAfterMs = envNumber('CARE_REMINDER_WORKER_HEARTBEAT_STALE_AFTER_MS', 90_000);
++  const stuckAfterMs = envNumber('CARE_REMINDER_WORKER_STUCK_SENDING_AFTER_MS', 15 * 60_000);
++  const heartbeatCutoff = new Date(now.getTime() - heartbeatStaleAfterMs);
++  const stuckCutoff = new Date(now.getTime() - stuckAfterMs);
++
++  const [instances, runs, statuses, retryScheduled, stuckSending, duplicateAutomaticSuccesses] =
++    await Promise.all([
++      prisma.careReminderWorkerHeartbeat.findMany({ orderBy: { heartbeatAt: 'desc' }, take: 50 }),
++      prisma.careReminderWorkerRun.findMany({ orderBy: { startedAt: 'desc' }, take: 20 }),
++      prisma.careReminderOccurrence.groupBy({ by: ['status'], _count: { _all: true } }),
++      prisma.careReminderOccurrence.count({ where: { status: 'PENDING', nextRetryAt: { gt: now } } }),
++      prisma.careReminderOccurrence.count({
++        where: {
++          status: 'SENDING',
++          OR: [
++            { sendingStartedAt: { lt: stuckCutoff } },
++            { sendingStartedAt: null, updatedAt: { lt: stuckCutoff } },
++          ],
++        },
++      }),
++      prisma.$queryRaw`
++        SELECT o."id" AS "occurrenceId", COUNT(a."id")::int AS "successfulAutomaticAttempts"
++        FROM "CareReminderOccurrence" o
++        JOIN "PatientOutboundAttempt" a ON a."messageId" = o."outboundMessageId"
++        WHERE a."status" = 'SENT'
++          AND COALESCE(a."triggerReason", 'INITIAL') <> 'NURSE_RESEND'
++        GROUP BY o."id"
++        HAVING COUNT(a."id") > 1
++        ORDER BY COUNT(a."id") DESC
++      `,
++    ]);
++
++  const view = {
++    checkedAt: now.toISOString(),
++    workerInstances: instances.map((instance) => ({
++      instanceId: instance.instanceId,
++      heartbeatAt: instance.heartbeatAt.toISOString(),
++      stoppedAt: instance.stoppedAt?.toISOString() || null,
++      lastSucceededAt: instance.lastSucceededAt?.toISOString() || null,
++      active: instance.stoppedAt == null && instance.heartbeatAt >= heartbeatCutoff,
++      heartbeatInterrupted: instance.stoppedAt == null && instance.heartbeatAt < heartbeatCutoff,
++    })),
++    recentRuns: runs.map((run) => ({
++      id: run.id,
++      instanceId: run.instanceId,
++      status: run.status,
++      startedAt: run.startedAt.toISOString(),
++      finishedAt: run.finishedAt?.toISOString() || null,
++      generated: run.generated,
++      dispatched: run.dispatched,
++      dispatchFailed: run.dispatchFailed,
++      retried: run.retried,
++      retryScheduled: run.retryScheduled,
++      recoveredStuck: run.recoveredStuck,
++      recoveredAsSent: run.recoveredAsSent,
++      missed: run.missed,
++      escalated: run.escalated,
++      error: run.error,
++    })),
++    backlogByStatus: Object.fromEntries(statuses.map((row) => [row.status, row._count._all])),
++    retryScheduled,
++    stuckSending,
++    duplicateAutomaticSuccesses,
++  };
++
++  console.log(JSON.stringify(view, null, 2));
++  if (duplicateAutomaticSuccesses.length) {
++    console.error('[FAIL] automatic duplicate successful attempts detected');
++    process.exitCode = 1;
++  } else {
++    console.log('[PASS] no occurrence has more than one successful automatic delivery attempt');
++  }
++}
++
++main()
++  .catch((error) => {
++    console.error(error);
++    process.exitCode = 1;
++  })
++  .finally(async () => {
++    await prisma.$disconnect();
++  });

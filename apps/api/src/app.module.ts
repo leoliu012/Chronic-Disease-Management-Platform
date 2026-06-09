@@ -20,6 +20,7 @@ import { SecurityModule } from './security/security.module';
 import { JwtAuthGuard } from './security/jwt-auth.guard';
 import { RolesGuard } from './security/roles.guard';
 import { AuditInterceptor } from './security/audit.interceptor';
+import { ClinicalAccessScopeGuard } from './security/clinical-access-scope.guard';
 import { PatientAppModule } from './patient-app/patient-app.module';
 import { ClinicalRulesModule } from './clinical-rules/clinical-rules.module';
 import { IntegrationsModule } from './integrations/integrations.module';
@@ -33,6 +34,8 @@ import { GatewayModule } from './gateway/gateway.module';
 import { ChronicLeadsModule } from './chronic-leads/chronic-leads.module';
 import { PatientEngagementModule } from './patient-engagement/patient-engagement.module';
 import { CareRemindersModule } from './care-reminders/care-reminders.module';
+import { HealthModule } from './health/health.module';
+import { AdminOpsModule } from './admin-ops/admin-ops.module';
 
 const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
@@ -64,6 +67,8 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
     ChronicLeadsModule,
     PatientEngagementModule,
     CareRemindersModule,
+    HealthModule,
+    AdminOpsModule,
     ...developmentOnlyModules,
     MedicationsModule,
     QuestionnairesModule,
@@ -79,9 +84,16 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
       useClass: RolesGuard,
     },
     {
+      provide: APP_GUARD,
+      useClass: ClinicalAccessScopeGuard,
+    },
+    {
       provide: APP_INTERCEPTOR,
       useClass: AuditInterceptor,
     },
   ],
 })
 export class AppModule {}
+
+
+

@@ -1,0 +1,489 @@
+/* ============================================================================
+   care-reminders-center-v1.css
+   ----------------------------
+   1) 修复状态徽章在窄列里换行成两行的问题（微信随访表 / 慢病提醒中心 / 患者档案
+      慢病提醒面板共用 .pe-admin-status，本次一处修复全部生效）。
+   2) 让"慢病提醒中心"与患者档案里的"慢病提醒"更贴近中国医院后台工作台：
+      概览统计条、筛选栏、类型色带、二级分组线、紧凑表格和移动端兜底。
+   本文件在各组件里于 patient-engagement-admin-tab.css 之后导入，故同名规则以
+   本文件为准（cascade later-wins）。
+============================================================================ */
+
+/* ---- 1. 状态徽章不再换行（根因修复，全局生效） ---- */
+.pe-admin-status {
+  display: inline-block;
+  white-space: nowrap;
+  line-height: 1.4;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+/* 慢病提醒中心用到的语义状态色（已升级 / 已错过 / 发送中 / 已打开） */
+.pe-admin-status-escalated { background: #fee2e2; color: #991b1b; }
+.pe-admin-status-missed { background: #fde68a; color: #92400e; }
+.pe-admin-status-sending { background: #e0f2fe; color: #075985; }
+
+/* ---- 2. 微信随访表：给状态/类型列兜底，避免被挤到换行 ---- */
+.pe-admin-messages-table td .pe-admin-delivery { min-width: 96px; }
+.pe-admin-actions-cell { align-content: flex-start; }
+.pe-admin-actions-cell button { white-space: nowrap; }
+
+/* ============================================================================
+   慢病提醒中心（独立页）
+============================================================================ */
+
+.crc-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 28px;
+  background: #f5f8fb;
+}
+
+.crc-care-panel {
+  gap: 14px;
+}
+
+.crc-page .pe-admin-page-header {
+  margin-bottom: 0;
+  padding: 0 2px 2px;
+}
+
+.crc-page .pe-admin-page-header h2 {
+  color: #1e3552;
+  font-weight: 800;
+}
+
+.crc-page .pe-admin-messages,
+.crc-care-panel .pe-admin-messages {
+  border-color: #d8e2ef;
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(20, 57, 91, 0.04);
+}
+
+.crc-page .pe-admin-messages h3,
+.crc-care-panel .pe-admin-messages h3 {
+  color: #1e3552;
+  font-weight: 800;
+}
+
+/* 概览统计条 —— 与 .pe-admin-summary-card 同质感 */
+.crc-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+.crc-stat {
+  background: #ffffff;
+  border: 1px solid #d8e2ef;
+  border-left: 4px solid #2f6fb3;
+  border-radius: 8px;
+  padding: 11px 12px 10px;
+  box-shadow: 0 4px 12px rgba(20, 57, 91, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  text-align: left;
+}
+.crc-stat-label {
+  font-size: 12px;
+  color: #5f7188;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crc-stat-value {
+  font-size: 22px;
+  font-weight: 800;
+  color: #12385f;
+  line-height: 1.1;
+}
+.crc-stat-pending { border-left-color: #7a8999; }
+.crc-stat-sent { border-left-color: #2f6fb3; }
+.crc-stat-clicked { border-left-color: #b7791f; }
+.crc-stat-missed { border-left-color: #d68a10; }
+.crc-stat-escalated { border-left-color: #c2410c; }
+.crc-stat.is-alert .crc-stat-value { color: #b3331f; }
+.crc-stat.is-active {
+  border-color: #2f6fb3;
+  box-shadow: 0 0 0 1px #2f6fb3 inset, 0 8px 18px rgba(34, 99, 165, 0.12);
+}
+.crc-stat.is-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.crc-stat.is-clickable:hover {
+  border-color: #9bb6d3;
+  transform: translateY(-1px);
+}
+
+/* 筛选栏：复用 .pe-admin-filter-* —— 这里只补一个搜索框尺寸 + 排序对齐 */
+.crc-page .pe-admin-filter-bar {
+  background: #f4f8fb;
+  border-color: #d8e2ef;
+}
+.crc-page .pe-admin-filter-field span {
+  color: #526172;
+  font-weight: 700;
+}
+.crc-filter-search { min-width: 200px; }
+.crc-filter-field-grow { flex: 1 1 200px; }
+
+/* 表格滚动容器 + 粘性表头（长列表时表头不丢） */
+.crc-table-wrap {
+  max-height: 62vh;
+  overflow: auto;
+  border: 1px solid #d8e2ef;
+  border-radius: 8px;
+}
+.crc-table-wrap .pe-admin-messages-table {
+  margin: 0;
+}
+.crc-table-wrap .pe-admin-messages-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: inset 0 -1px 0 #d8e2ef;
+}
+
+/* 列宽 / 不换行：让计划时间、类型、状态保持单行，标题/患者可换行 */
+.crc-col-time { white-space: nowrap; width: 1%; }
+.crc-col-type { white-space: nowrap; width: 1%; }
+.crc-col-status { white-space: nowrap; width: 1%; }
+.crc-col-patient a { color: #1f5fa3; text-decoration: none; }
+.crc-col-patient a:hover { text-decoration: underline; }
+.crc-col-patient small {
+  display: block;
+  margin-top: 3px;
+  color: #65778d;
+}
+
+/* 行 hover 反馈，和列表类页面一致 */
+.crc-table-wrap .pe-admin-messages-table tbody tr:hover { background: #f6fafc; }
+
+/* 可点击排序的表头 */
+.crc-sort-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.crc-sort-th:hover { color: #1f5fa3; }
+.crc-sort-arrow { font-size: 11px; color: #94a3b8; margin-left: 4px; }
+
+/* 空状态卡片 */
+.crc-empty {
+  padding: 40px 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 14px;
+  border: 1px dashed #cbd7e6;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+@media (max-width: 1100px) {
+  .crc-stat-strip { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .crc-page { padding: 16px; }
+  .crc-stat-strip { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ============================================================================
+   v3.4 — 两级分组（类型 → 子类型）可折叠视图
+============================================================================ */
+.crc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  flex-wrap: wrap;
+}
+.crc-toolbar-spacer { flex: 1 1 auto; }
+
+.crc-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.crc-group {
+  --crc-accent: #2f6fb3;
+  --crc-accent-soft: #eef6ff;
+  --crc-accent-border: #b9d5f4;
+  border: 1px solid #d8e2ef;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 5px 14px rgba(20, 57, 91, 0.04);
+}
+.crc-group-vital {
+  --crc-accent: #2f6fb3;
+  --crc-accent-soft: #eef6ff;
+  --crc-accent-border: #b9d5f4;
+}
+.crc-group-medication {
+  --crc-accent: #0f766e;
+  --crc-accent-soft: #f0fdfa;
+  --crc-accent-border: #99d6ce;
+}
+.crc-group-questionnaire {
+  --crc-accent: #8a5b12;
+  --crc-accent-soft: #fff8e6;
+  --crc-accent-border: #f0d38a;
+}
+.crc-group-message,
+.crc-group-default {
+  --crc-accent: #526172;
+  --crc-accent-soft: #f4f7fa;
+  --crc-accent-border: #cbd7e6;
+}
+.crc-group-head,
+.crc-sub-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.crc-group-head {
+  min-height: 58px;
+  padding: 10px 14px 10px 12px;
+  background: var(--crc-accent-soft);
+  border-bottom: 1px solid var(--crc-accent-border);
+  color: #1e3552;
+  font-size: 14px;
+}
+.crc-group-head:hover { background: #f8fbff; }
+.crc-group-mark {
+  flex: 0 0 4px;
+  width: 4px;
+  height: 34px;
+  border-radius: 4px;
+  background: var(--crc-accent);
+}
+.crc-group-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.crc-group-label {
+  color: #1e3552;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.crc-group-meta {
+  color: #65778d;
+  font-size: 12px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crc-group-metrics {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.crc-alert-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid #f1b7ad;
+  border-radius: 999px;
+  background: #fff5f3;
+  color: #b3331f;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.crc-sub {
+  position: relative;
+  background: #ffffff;
+}
+.crc-sub::before {
+  content: "";
+  position: absolute;
+  left: 28px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #dbe4ef;
+}
+.crc-sub-head {
+  position: relative;
+  min-height: 42px;
+  padding: 9px 14px 9px 42px;
+  color: #29415f;
+  font-size: 13px;
+  background: #ffffff;
+  border-top: 1px solid #eef3f8;
+}
+.crc-sub-head:hover { background: #f6fafc; }
+.crc-sub-branch {
+  position: absolute;
+  left: 28px;
+  width: 14px;
+  height: 1px;
+  background: #dbe4ef;
+}
+.crc-sub-label {
+  min-width: 0;
+  color: #24364a;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crc-chevron {
+  flex: none;
+  width: 16px;
+  color: var(--crc-accent);
+  transition: transform 0.15s ease;
+  display: inline-block;
+  font-size: 13px;
+}
+.crc-chevron.is-collapsed { transform: rotate(-90deg); }
+
+.crc-count-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  background: #ffffff;
+  color: #29415f;
+  border: 1px solid #d8e2ef;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.crc-count-pill.is-alert { background: #fee2e2; color: #991b1b; }
+.crc-count-pill.is-sub {
+  margin-left: auto;
+  min-height: 22px;
+  padding: 2px 8px;
+  background: #f4f7fa;
+  color: #526172;
+  font-weight: 700;
+}
+
+.crc-sub-body {
+  padding: 0 12px 12px 42px;
+  background: #fbfdff;
+  overflow-x: auto;
+}
+.crc-sub-body .pe-admin-messages-table {
+  margin: 0;
+}
+.crc-leaf-table {
+  min-width: 680px;
+  border: 1px solid #dfe7f0;
+  border-radius: 8px;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+.crc-leaf-table th,
+.crc-leaf-table td {
+  border-bottom-color: #edf2f7;
+}
+.crc-leaf-table th {
+  background: #f3f7fb;
+  color: #29415f;
+  font-weight: 800;
+}
+.crc-leaf-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.crc-sub-body .pe-admin-messages-table tbody tr:hover { background: #f6fafc; }
+
+@media (max-width: 720px) {
+  .crc-group-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .crc-group-main {
+    flex: 1 1 calc(100% - 44px);
+  }
+  .crc-group-metrics {
+    flex: 1 1 100%;
+    margin-left: 30px;
+    justify-content: flex-start;
+  }
+  .crc-sub-head {
+    padding-left: 34px;
+  }
+  .crc-sub::before,
+  .crc-sub-branch {
+    left: 22px;
+  }
+  .crc-sub-body {
+    padding-left: 12px;
+  }
+  .crc-leaf-table {
+    min-width: 640px;
+  }
+}
+
+/* ============================================================================
+   v3.5 — 所有"链接型"按钮改为实体按键
+   pe-admin-link-button 原本是透明无边框的纯文字（看起来像可点击文字）。现在统一
+   为实体按键，沿用既有 pe-admin-secondary 的设计（填充 + 边框）。本文件在基础样式
+   之后导入，同优先级后者生效，故无需改任何 TSX。
+============================================================================ */
+.pe-admin-link-button {
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.2;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  color: #0f172a;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.pe-admin-link-button:hover:not(:disabled) {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}
+.pe-admin-link-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 弹窗 / 抽屉头部的关闭 × 也做成实体按键（原来是无边框透明字符） */
+.pe-admin-modal header button,
+.pe-admin-drawer header button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.pe-admin-modal header button:hover,
+.pe-admin-drawer header button:hover {
+  background: #e2e8f0;
+  border-color: #94a3b8;
+}

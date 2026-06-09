@@ -2,106 +2,156 @@ import {
   CallHandler,
   ExecutionContext,
   Injectable,
+  Logger,
   NestInterceptor,
 } from '@nestjs/common';
-import { Observable, tap } from 'rxjs';
+import { Reflector } from '@nestjs/core';
+import { Observable, catchError, from, map, mergeMap, of, throwError } from 'rxjs';
+import {
+  AUDIT_METADATA_KEY,
+  type AuditPolicy,
+  resolveAuditDetails,
+  resolveAuditString,
+} from './audit.decorator';
 import { AuditService } from './audit.service';
 import type { RequestUser } from './request-user.type';
 
 type AuditedRequest = {
   method: string;
-  path: string;
+  path?: string;
+  originalUrl?: string;
+  params?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+  body?: Record<string, unknown>;
   headers: Record<string, string | string[] | undefined>;
   socket: { remoteAddress?: string };
   user?: RequestUser;
 };
 
-type AuditRouteMatch = {
-  action: string;
-  targetType: string;
-  targetId?: string | null;
+type AuditedResponse = {
+  statusCode?: number;
 };
-
-function matchAuditRoute(method: string, path: string): AuditRouteMatch | null {
-  if (method === 'GET' && /^\/patients\/[^/]+$/.test(path)) {
-    return {
-      action: 'VIEW_PATIENT',
-      targetType: 'Patient',
-      targetId: path.split('/')[2],
-    };
-  }
-
-  if (method === 'POST' && path === '/patients') {
-    return { action: 'CREATE_PATIENT', targetType: 'Patient' };
-  }
-
-  const followUpMatch = path.match(/^\/patients\/([^/]+)\/follow-ups$/);
-  if (method === 'POST' && followUpMatch) {
-    return {
-      action: 'CREATE_FOLLOW_UP',
-      targetType: 'FollowUpRecord',
-      targetId: followUpMatch[1],
-    };
-  }
-
-  const alertMatch = path.match(/^\/risk-alerts\/([^/]+)\/(in-progress|resolve|dismiss)$/);
-  if (method === 'PATCH' && alertMatch) {
-    return {
-      action: 'HANDLE_ALERT',
-      targetType: 'RiskAlert',
-      targetId: alertMatch[1],
-    };
-  }
-
-  if (method === 'GET' && path === '/his/patients/export') {
-    return { action: 'EXPORT_DATA', targetType: 'Patient' };
-  }
-
-  if (method === 'DELETE' && path.startsWith('/dev-tools/test-data')) {
-    return { action: 'CLEAN_TEST_DATA', targetType: 'DevelopmentTestData' };
-  }
-
-  return null;
-}
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
-  constructor(private readonly auditService: AuditService) {}
+  private readonly logger = new Logger(AuditInterceptor.name);
+
+  constructor(
+    private readonly reflector: Reflector,
+    private readonly auditService: AuditService,
+  ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const policy = this.reflector.getAllAndOverride<AuditPolicy>(
+      AUDIT_METADATA_KEY,
+      [context.getHandler(), context.getClass()],
+    );
     const request = context.switchToHttp().getRequest<AuditedRequest>();
-    const match = matchAuditRoute(request.method, request.path);
+    const response = context.switchToHttp().getResponse<AuditedResponse>();
 
-    if (!match || !request.user) {
-      return next.handle();
-    }
-
-    const forwardedFor = request.headers['x-forwarded-for'];
-    const ipAddress = Array.isArray(forwardedFor)
-      ? forwardedFor[0]
-      : forwardedFor || request.socket.remoteAddress;
+    if (!policy || !request.user) return next.handle();
 
     return next.handle().pipe(
-      tap(async (responseBody) => {
-        const responseId =
-          responseBody && typeof responseBody === 'object' && 'id' in responseBody
-            ? (responseBody as { id?: string }).id
-            : undefined;
+      mergeMap((responseBody) =>
+        from(
+          this.record(policy, request, responseBody, {
+            outcome: 'SUCCESS',
+            statusCode: response.statusCode ?? 200,
+          }),
+        ).pipe(
+          map(() => responseBody),
+          catchError((auditError: unknown) => {
+            this.logAuditFailure(policy, auditError);
+            return of(responseBody);
+          }),
+        ),
+      ),
+      catchError((error: unknown) =>
+        from(
+          this.record(policy, request, undefined, {
+            outcome: 'FAILURE',
+            statusCode: this.errorStatus(error) ?? response.statusCode ?? 500,
+            errorName: this.errorName(error),
+          }),
+        ).pipe(
+          catchError((auditError: unknown) => {
+            this.logAuditFailure(policy, auditError);
+            return of(undefined);
+          }),
+          mergeMap(() => throwError(() => error)),
+        ),
+      ),
+    );
+  }
 
-        await this.auditService.record({
-          user: request.user,
-          action: match.action,
-          targetType: match.targetType,
-          targetId: match.targetId,
-          ipAddress: ipAddress?.toString(),
-          afterData: {
-            method: request.method,
-            path: request.path,
-            status: 'SUCCESS',
-            ...(responseId ? { responseId } : {}),
-          },
-        });
-      }),
+  private async record(
+    policy: AuditPolicy,
+    request: AuditedRequest,
+    responseBody: unknown,
+    result: {
+      outcome: 'SUCCESS' | 'FAILURE';
+      statusCode: number;
+      errorName?: string;
+    },
+  ) {
+    const resolutionContext = {
+      params: request.params,
+      query: request.query,
+      body: request.body,
+      response: responseBody,
+    };
+    const targetId =
+      resolveAuditString(resolutionContext, policy.targetIdFrom) ??
+      resolveAuditString(resolutionContext, 'response.id');
+    const patientId = resolveAuditString(
+      resolutionContext,
+      policy.patientIdFrom,
+    );
+
+    await this.auditService.record({
+      user: request.user,
+      action: policy.action,
+      targetType: policy.target,
+      targetId,
+      ipAddress: this.ipAddress(request),
+      afterData: {
+        outcome: result.outcome,
+        method: request.method,
+        path: request.path ?? request.originalUrl ?? '',
+        statusCode: result.statusCode,
+        ...(patientId ? { patientId } : {}),
+        ...resolveAuditDetails(resolutionContext, policy.detailsFrom),
+        ...(result.errorName ? { errorName: result.errorName } : {}),
+      },
+    });
+  }
+
+  private ipAddress(request: AuditedRequest) {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    return (
+      Array.isArray(forwardedFor)
+        ? forwardedFor[0]
+        : forwardedFor || request.socket.remoteAddress
+    )?.toString();
+  }
+
+  private errorStatus(error: unknown): number | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const status = (error as { status?: unknown; statusCode?: unknown }).status ??
+      (error as { statusCode?: unknown }).statusCode;
+    return typeof status === 'number' ? status : undefined;
+  }
+
+  private errorName(error: unknown): string {
+    if (error instanceof Error) return error.name.slice(0, 120);
+    return 'UnknownError';
+  }
+
+  private logAuditFailure(policy: AuditPolicy, error: unknown) {
+    this.logger.error(
+      `failed to persist audit event ${policy.action}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     );
   }
 }

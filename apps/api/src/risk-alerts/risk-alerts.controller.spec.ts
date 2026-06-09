@@ -7,7 +7,9 @@ describe('RiskAlertsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [RiskAlertsController],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     controller = module.get<RiskAlertsController>(RiskAlertsController);
   });

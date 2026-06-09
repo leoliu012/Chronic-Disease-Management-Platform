@@ -1,0 +1,400 @@
+--- a/apps/api/src/care-reminders/care-reminder-worker.service.ts
++++ b/apps/api/src/care-reminders/care-reminder-worker.service.ts
+@@ -149,6 +149,67 @@
+   }
+ 
+   // ---------------------------------------------------------------------------
++  // targeted dispatch — for the explicit nurse "send now" action
++  // ---------------------------------------------------------------------------
++
++  /**
++   * Dispatch exactly one selected PENDING occurrence immediately.
++   *
++   * The scheduled worker intentionally sends only rows inside their normal
++   * availableFrom/availableUntil window. The explicit nurse action has
++   * different semantics: it bypasses that timing window, but still uses the
++   * same atomic PENDING -> SENDING claim and the same dispatch pipeline.
++   */
++  async dispatchOccurrenceNow(id: string) {
++    const occ = await this.prisma.careReminderOccurrence.findUnique({
++      where: { id },
++      include: {
++        schedule: true,
++        patient: {
++          include: {
++            wechatIdentities: {
++              take: 5,
++              orderBy: { createdAt: 'desc' },
++            },
++          },
++        },
++      },
++    });
++
++    if (!occ) {
++      return this.occurrences.getByIdOrThrow(id);
++    }
++
++    if (occ.status !== 'PENDING') {
++      return this.occurrences.getByIdOrThrow(id);
++    }
++
++    const claimed = await this.occurrences.claimForSending(occ.id);
++    if (!claimed) {
++      // A scheduled pass or another explicit send won the race. Return the
++      // authoritative row rather than creating a second link/message.
++      return this.occurrences.getByIdOrThrow(id);
++    }
++
++    try {
++      const { formLink, message } = await this.dispatchOne(occ);
++      if (message?.status === 'SENT' || message?.status === 'PENDING') {
++        await this.occurrences.markSent(occ.id, formLink.id, message?.id ?? null);
++      } else {
++        await this.occurrences.markSendFailed(
++          occ.id,
++          message?.errorMessage ?? 'unknown dispatch failure',
++        );
++      }
++    } catch (e) {
++      await this.occurrences.markSendFailed(occ.id, (e as Error).message);
++      throw e;
++    }
++
++    return this.occurrences.getByIdOrThrow(id);
++  }
++
++  // ---------------------------------------------------------------------------
+   // pass 1: generate occurrences
+   // ---------------------------------------------------------------------------
+ 
+@@ -307,71 +368,35 @@
+     });
+ 
+     if (primaryChannel !== 'MANUAL_COPY') {
+-      const dispatched = await this.outbound.dispatch(message.id, {
++      // v3.2 canonical-case model: one PatientOutboundMessage per reminder.
++      // Every channel try (initial WeChat/SMS, fallback SMS, nurse resend) is a
++      // PatientOutboundAttempt under that same message. Never create a second
++      // PatientOutboundMessage just because the transport falls back to SMS.
++      const primaryAttempt = await this.outbound.attemptDispatch({
++        messageId: message.id,
++        channel: primaryChannel,
+         openId: primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' ? recipient : null,
+         phone: primaryChannel === 'SMS' ? recipient : null,
++        triggerReason: 'INITIAL',
+       });
+-      // v3.2: record this as the INITIAL delivery attempt on the canonical message.
+-      // (We're already inside `if (primaryChannel !== 'MANUAL_COPY')`, so the
+-      // channel here is WECHAT_OFFICIAL_ACCOUNT or SMS.)
+-      try {
+-        await this.outbound.recordAttempt({
+-          messageId: message.id,
+-          hospitalTenantId: tenantId,
+-          patientId: occ.patientId,
+-          formLinkId: formLink.id,
+-          channel: primaryChannel,
+-          status: dispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+-          providerMessageId: dispatched?.providerMessageId ?? null,
+-          errorMessage: dispatched?.status === 'SENT' ? null : dispatched?.errorMessage ?? '发送失败',
+-          triggerReason: 'INITIAL',
+-        });
+-        await this.outbound.recomputeDelivery(message.id);
+-      } catch { /* attempts table may be pre-v3.2 */ }
+-
+-      // v2.1 SMS fallback on WeChat failure.
++
++      // SMS fallback stays under the same canonical case row.
+       if (
+         primaryChannel === 'WECHAT_OFFICIAL_ACCOUNT' &&
+-        dispatched?.status === 'FAILED' &&
++        primaryAttempt.dispatched?.status === 'FAILED' &&
+         patient.phone
+       ) {
+-        const fb = await this.outbound.create({
+-          hospitalTenantId: tenantId,
+-          patientId: occ.patientId,
+-          formLinkId: formLink.id,
++        const fallbackAttempt = await this.outbound.attemptDispatch({
++          messageId: message.id,
+           channel: 'SMS',
+-          messageType,
+-          title: occ.title,
+-          content,
+-          linkUrl,
+-          recipient: patient.phone,
+-          createdBy: null,
+-          initialStatus: 'PENDING',
+-        });
+-        const fbDispatched = await this.outbound.dispatch(fb.id, {
+           openId: null,
+           phone: patient.phone,
++          triggerReason: 'AUTO_FALLBACK',
+         });
+-        try {
+-          await this.outbound.recordAttempt({
+-            messageId: message.id,
+-            hospitalTenantId: tenantId,
+-            patientId: occ.patientId,
+-            formLinkId: formLink.id,
+-            channel: 'SMS',
+-            status: fbDispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+-            providerMessageId: fbDispatched?.providerMessageId ?? null,
+-            errorMessage: fbDispatched?.status === 'SENT' ? null : fbDispatched?.errorMessage ?? '发送失败',
+-            triggerReason: 'AUTO_FALLBACK',
+-          });
+-          await this.outbound.recomputeDelivery(message.id);
+-        } catch { /* attempts table may be pre-v3.2 */ }
+-        const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: fb.id } });
+-        return { formLink, token, linkUrl, message: refreshed };
++        return { formLink, token, linkUrl, message: fallbackAttempt.message };
+       }
+ 
+-      const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: message.id } });
+-      return { formLink, token, linkUrl, message: refreshed };
++      return { formLink, token, linkUrl, message: primaryAttempt.message };
+     }
+ 
+     return { formLink, token, linkUrl, message };
+--- a/apps/api/src/care-reminders/care-reminders.controller.ts
++++ b/apps/api/src/care-reminders/care-reminders.controller.ts
+@@ -74,7 +74,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+ 
+     const medication = await this.prisma.medicationRecord.findUnique({
+       where: { id: dto.medicationId },
+@@ -131,7 +131,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+ 
+     // v3.3: a VITAL reminder MUST be bound to a VitalMonitoringPlan — care
+     // reminders only ever derive from the monitoring plan, never free-standing.
+@@ -199,7 +199,7 @@
+   ) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.update(id, dto);
+   }
+ 
+@@ -208,7 +208,7 @@
+   async pauseSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.pause(id);
+   }
+ 
+@@ -217,7 +217,7 @@
+   async resumeSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     return this.schedules.resume(id);
+   }
+ 
+@@ -228,7 +228,7 @@
+   async cancelSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const sched = await this.schedules.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
++    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
+     const result = await this.schedules.cancelSchedule(id);
+     await this.audit.record({
+       user,
+@@ -333,7 +333,7 @@
+   async sendNow(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+ 
+     if (occ.status !== 'PENDING') {
+       // Spec point 9: reuse existing link if already SENT.
+@@ -343,11 +343,10 @@
+       throw new BadRequestException(`occurrence is in status ${occ.status}; cannot send-now`);
+     }
+ 
+-    // Trigger a single dispatch by running the worker pass scoped to this occ.
+-    // Easiest path: just invoke runOnce() — it'll claim and dispatch the
+-    // PENDING occurrence. We then return the refreshed row.
+-    await this.worker.runOnce();
+-    const refreshed = await this.occurrences.getByIdOrThrow(id);
++    // Explicit nurse action: dispatch this exact occurrence immediately.
++    // Do not run the global scheduled pass: that would send unrelated patients'
++    // reminders and would still skip this row when it is outside its time window.
++    const refreshed = await this.worker.dispatchOccurrenceNow(id);
+     await this.audit.record({
+       user,
+       action: 'CARE_REMINDER_SEND_NOW',
+@@ -367,7 +366,7 @@
+   async resendOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+     const result = await this.resend.resend(id);
+     await this.audit.record({
+       user,
+@@ -389,7 +388,7 @@
+   async cancelOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+     this.tenant.assertWriteAllowed(user);
+     const occ = await this.occurrences.getByIdOrThrow(id);
+-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
++    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+     await this.occurrences.cancel(id);
+     return this.occurrences.getByIdOrThrow(id);
+   }
+@@ -417,7 +416,7 @@
+     @Req() req: any,
+   ) {
+     this.tenant.assertWriteAllowed(user);
+-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
++    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
+     const result = await this.directMessages.create({
+       hospitalTenantId,
+       patientId,
+--- a/apps/api/scripts/smoke-care-reminders.js
++++ b/apps/api/scripts/smoke-care-reminders.js
+@@ -3,12 +3,13 @@
+ // Repeatable smoke for care-reminders v3.1. Runs against a live API + DB.
+ //
+ // What changed vs v3:
+-//   - The medication send-now / resend / H5-submit flow now uses a FRESH
+-//     schedule created at runtime (scheduledTimes = current tenant-local HH:MM
+-//     with wide check-in windows) instead of a seeded occurrence, so the smoke
+-//     is idempotent: re-running it without re-seeding still passes.
+-//   - Adds resend coverage (spec III): resend a SENT occurrence -> new outbound
+-//     message (link reused while still active); resend after COMPLETED -> 4xx.
++//   - Source-bound schedules are reconciled from MedicationRecord /
++//     VitalMonitoringPlan. The smoke therefore selects a PENDING occurrence
++//     explicitly instead of accidentally reusing a historical COMPLETED row.
++//   - If the generated horizon has already been consumed by earlier smoke runs,
++//     a future PENDING fixture is inserted for the targeted send-now check.
++//   - Adds resend coverage (spec III): resend a SENT occurrence -> append a
++//     NURSE_RESEND attempt to the canonical message; after COMPLETED -> 4xx.
+ //   - Asserts GET /care-reminders/today honours the ±24h window + from/to.
+ //
+ // Prereqs:
+@@ -25,6 +26,7 @@
+ 
+ const fs = require('fs');
+ const path = require('path');
++const { PrismaClient } = require('@prisma/client');
+ const API_BASE = process.env.API_BASE || process.env.SMOKE_API_BASE || 'http://localhost:3000';
+ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+@@ -97,6 +99,58 @@
+   return { count: msgs.length, withUrl: msgs.find((m) => m.linkUrl) || null };
+ }
+ 
++/**
++ * Select an unconsumed occurrence for the explicit send-now flow.
++ *
++ * A source-bound schedule is stable across smoke runs, so historical rows stay
++ * attached to it. Prefer a generated PENDING row. If all rows in the generated
++ * horizon were consumed by previous runs, insert one dedicated future fixture.
++ * Its normal dispatch window deliberately starts in the future: send-now must
++ * still dispatch it immediately.
++ */
++async function ensurePendingOccurrence(adminToken, patientId, schedule) {
++  const listed = await call(adminToken, 'GET', `/care-reminders/patients/${patientId}/occurrences`);
++  const allMine = (listed.body || []).filter((o) => o.scheduleId === schedule?.id);
++  const pending = allMine
++    .filter((o) => o.status === 'PENDING')
++    .sort((a, b) => +new Date(b.dueAt) - +new Date(a.dueAt));
++
++  if (pending[0]) {
++    return {
++      occurrence: pending[0],
++      total: allMine.length,
++      pending: pending.length,
++      fixture: 'generated',
++    };
++  }
++
++  const prisma = new PrismaClient();
++  try {
++    const dueAt = new Date(Date.now() + 48 * 3600 * 1000 + Math.floor(Math.random() * 60_000));
++    const created = await prisma.careReminderOccurrence.create({
++      data: {
++        hospitalTenantId: schedule.hospitalTenantId,
++        patientId,
++        scheduleId: schedule.id,
++        occurrenceType: schedule.reminderType,
++        title: `【smoke v3.1】targeted send-now fixture ${dueAt.toISOString()}`,
++        dueAt,
++        availableFrom: new Date(dueAt.getTime() - 60 * 60 * 1000),
++        availableUntil: new Date(dueAt.getTime() + 4 * 60 * 60 * 1000),
++        status: 'PENDING',
++      },
++    });
++    return {
++      occurrence: created,
++      total: allMine.length + 1,
++      pending: 1,
++      fixture: 'synthetic-fallback',
++    };
++  } finally {
++    await prisma.$disconnect();
++  }
++}
++
+ async function main() {
+   console.log(`\n[smoke care-reminders v3.1] target = ${API_BASE} (tz=${TENANT_TZ})\n`);
+ 
+@@ -245,13 +299,14 @@
+   }
+ 
+   // ---------------------------------------------------------------
+-  // 4. worker generates occurrences
++  // 4. worker pass completes. On a rerun, generated=0 is valid because
++  //    occurrence materialization is intentionally idempotent.
+   // ---------------------------------------------------------------
+   {
+     const r = await call(adminToken, 'POST', '/care-reminders/worker/run-once');
+     record(
+-      '4. worker run-once generates occurrences',
+-      r.status === 201 && r.body?.generated > 0,
++      '4. worker run-once completes',
++      r.status === 201 && Number.isInteger(r.body?.generated) && !r.body?.error,
+       `generated=${r.body?.generated} dispatched=${r.body?.dispatched} missed=${r.body?.missed}`,
+     );
+   }
+@@ -289,17 +344,18 @@
+   }
+ 
+   // ---------------------------------------------------------------
+-  // 6. pick THIS schedule's occurrence closest to now
++  // 6. select an unconsumed PENDING row for THIS schedule.
++  //    Historical COMPLETED rows remain for audit and must never be reused.
+   // ---------------------------------------------------------------
+   let occId = null;
+   {
+-    const r = await call(adminToken, 'GET', `/care-reminders/patients/${PATIENT}/occurrences`);
+-    const now = Date.now();
+-    const mine = (r.body || [])
+-      .filter((o) => o.scheduleId === medSched?.id)
+-      .sort((a, b) => Math.abs(+new Date(a.dueAt) - now) - Math.abs(+new Date(b.dueAt) - now));
+-    occId = mine[0]?.id ?? null;
+-    record('6. occurrence generated for this schedule', Boolean(occId), `count=${mine.length}`);
++    const picked = await ensurePendingOccurrence(adminToken, PATIENT, medSched);
++    occId = picked.occurrence?.id ?? null;
++    record(
++      '6. PENDING occurrence selected for targeted send-now',
++      Boolean(occId) && picked.occurrence?.status === 'PENDING',
++      `pending=${picked.pending} total=${picked.total} fixture=${picked.fixture} dueAt=${picked.occurrence?.dueAt ?? 'none'}`,
++    );
+   }
+ 
+   // ---------------------------------------------------------------

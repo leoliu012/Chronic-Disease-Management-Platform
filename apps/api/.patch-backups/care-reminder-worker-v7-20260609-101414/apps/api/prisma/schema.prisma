@@ -1,0 +1,1591 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+enum DiseaseType {
+  HYPERTENSION
+  TYPE_2_DIABETES
+  COPD
+  CORONARY_HEART_DISEASE
+  HYPERLIPIDEMIA
+  OBESITY
+  OTHER
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  VERY_HIGH
+}
+
+enum DataSource {
+  HIS
+  EMR
+  LIS
+  MINI_PROGRAM
+  NURSE_INPUT
+  MANUAL_IMPORT
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  CANCELED
+}
+
+enum AlertStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+enum RiskEpisodeStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  DISMISSED
+}
+
+
+enum UserRole {
+  ADMIN
+  DOCTOR
+  NURSE
+  MANAGER
+}
+
+
+enum PatientBindingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+
+enum HospitalVisitReminderStatus {
+  ACTIVE
+  ARRIVED
+  NO_SHOW
+  REFUSED
+  REVOKED
+}
+
+enum EncounterType {
+  OUTPATIENT
+  INPATIENT
+  EMERGENCY
+  CHECKUP
+}
+
+enum MedicalRecordType {
+  OUTPATIENT_NOTE
+  INPATIENT_RECORD
+  DISCHARGE_SUMMARY
+  PROGRESS_NOTE
+  CONSULTATION_NOTE
+}
+
+
+enum IntegrationSystemType {
+  HIS
+  EMR
+  LIS
+  PHARMACY
+  CHECKUP
+  MESSAGE
+  OTHER
+}
+
+enum IntegrationSyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  PARTIAL_FAILED
+  FAILED
+}
+
+enum IntegrationRecordStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+// IntegrationPromotionStatus — gateway-promote-pipeline
+//
+// 审计层 (IntegrationRecordStatus) 表示「外部数据是否成功被网关接收」，
+// 这里则表示「已接收的审计记录是否已 promote 到 Patient / VitalRecord /
+// DiseaseProfile / EncounterRecord / MedicalRecordSummary /
+// HospitalMedicationOrder 等正式业务表」。
+//
+//   NOT_REQUIRED — 不需要 promote（例如 IntegrationsService 旧的 mock-sync
+//                  在写审计之前就直接落了业务表；或 SKIPPED 重复事件）
+//   PENDING      — 已审计、待人工/批量 promote
+//   PROMOTED     — 已成功落到业务表（localTargetType / localTargetId 同时填充）
+//   CONFLICT     — promote 命中冲突，需要人工核验（例如同院内号、不同身份证）
+//   FAILED       — promote 抛错（patient 不存在、字段缺失等），可重试
+enum IntegrationPromotionStatus {
+  NOT_REQUIRED
+  PENDING
+  PROMOTED
+  CONFLICT
+  FAILED
+}
+
+enum ExternalRecordStatus {
+  STAGED
+  IMPORTED
+  FAILED
+}
+
+model Patient {
+  id              String   @id @default(uuid())
+  hospitalPatientId String? @unique
+  name            String
+  gender          Gender   @default(UNKNOWN)
+  birthDate       DateTime?
+  phone           String?
+  idCardNo        String?
+  address         String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+
+  responsibleDoctorId String?
+  responsibleNurseId  String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  responsibleDoctor   User? @relation("PatientDoctor", fields: [responsibleDoctorId], references: [id])
+  responsibleNurse    User? @relation("PatientNurse", fields: [responsibleNurseId], references: [id])
+
+  diseaseProfiles DiseaseProfile[]
+  vitalRecords    VitalRecord[]
+  followUps       FollowUpRecord[]
+  tasks           Task[]
+  taskProcessingEvents TaskProcessingEvent[]
+
+  riskAlerts     RiskAlert[]
+  riskEpisodes   RiskEpisode[]
+  medicationRecords MedicationRecord[]
+  medicationCheckIns MedicationCheckIn[]
+  questionnaireResults QuestionnaireResult[]
+  vitalMonitoringPlans VitalMonitoringPlan[]
+  hospitalVisitReminders HospitalVisitReminder[]
+  encounterRecords EncounterRecord[]
+  medicalRecordSummaries MedicalRecordSummary[]
+  examReportRecords ExamReportRecord[]
+  hospitalMedicationOrders HospitalMedicationOrder[]
+
+  promotedFromLeads        ChronicLead[]      @relation("LeadPromotedPatient")
+
+  @@index([responsibleDoctorId])
+  @@index([responsibleNurseId])
+  @@index([createdAt])
+
+  // patient-engagement-wechat-h5-v1
+  hospitalTenantId String?
+  hospitalTenant   HospitalTenant? @relation(fields: [hospitalTenantId], references: [id])
+  wechatIdentities PatientWechatIdentity[]
+  formLinks        PatientFormLink[]
+  outboundMessages PatientOutboundMessage[]
+
+  @@index([hospitalTenantId])
+  // care-reminders v3
+  careReminderSchedules   CareReminderSchedule[]
+  careReminderOccurrences CareReminderOccurrence[]
+  patientDirectMessages   PatientDirectMessage[]
+  // patient_engagement_v3_2
+  outboundAttempts        PatientOutboundAttempt[]
+  hospitalVisitFeedbacks  HospitalVisitFeedback[]
+}
+
+model DiseaseProfile {
+  id             String      @id @default(uuid())
+  patientId      String
+  diseaseType    DiseaseType
+  diagnosisDate  DateTime?
+  diseaseStage   String?
+  complications  String?
+  comorbidities  String?
+  riskLevel      RiskLevel   @default(LOW)
+  dataSource     DataSource  @default(NURSE_INPUT)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId])
+  @@index([diseaseType])
+  @@index([riskLevel])
+  @@index([patientId, riskLevel])
+}
+
+model VitalRecord {
+  id          String     @id @default(uuid())
+  patientId   String
+  type        String
+  value       Float
+  unit        String
+  measuredAt  DateTime
+  dataSource  DataSource @default(MINI_PROGRAM)
+  isAbnormal  Boolean    @default(false)
+  note        String?
+  monitoringPlanId String?
+  scheduledAt DateTime?
+
+  createdAt   DateTime @default(now())
+
+  patient     Patient @relation(fields: [patientId], references: [id])
+  monitoringPlan VitalMonitoringPlan? @relation(fields: [monitoringPlanId], references: [id])
+
+  @@index([patientId, measuredAt])
+  @@index([patientId, type, measuredAt])
+  @@index([monitoringPlanId, measuredAt])
+  @@index([isAbnormal, measuredAt])
+}
+
+model FollowUpRecord {
+  id              String   @id @default(uuid())
+  patientId        String
+  followUpType     String
+  followUpTime     DateTime
+  content          String?
+  result           String?
+  suggestion       String?
+  nextFollowUpTime DateTime?
+  operatorId       String?
+
+  createdAt        DateTime @default(now())
+
+  patient          Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, followUpTime])
+  @@index([operatorId, followUpTime])
+}
+
+model Task {
+  id          String     @id @default(uuid())
+  patientId   String
+  title       String
+  type        String
+  status      TaskStatus @default(PENDING)
+  dueAt       DateTime?
+  assigneeId  String?
+  relatedAlertId String?
+  riskEpisodeId String?
+  // Database-level concurrency guard: exactly one open disposition task may
+  // hold an episode token. Closing clears it so history remains append-only.
+  openRiskEpisodeKey String? @unique
+  // Lower number = more urgent. 0=VERY_HIGH, 1=HIGH, 2=MEDIUM, 3=routine.
+  priority    Int        @default(3)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  patient     Patient @relation(fields: [patientId], references: [id])
+  processingEvents TaskProcessingEvent[]
+  riskEpisode RiskEpisode? @relation("TaskRiskEpisode", fields: [riskEpisodeId], references: [id], onDelete: SetNull)
+  referencedAsOpenByEpisodes RiskEpisode[] @relation("RiskEpisodeOpenTask")
+
+  @@index([patientId, status, dueAt])
+  @@index([assigneeId, status, dueAt])
+  @@index([relatedAlertId])
+  @@index([riskEpisodeId, status])
+  @@index([priority, status, dueAt])
+}
+
+model TaskProcessingEvent {
+  id                  String   @id @default(uuid())
+  taskId              String
+  patientId           String
+  eventType           String
+  title               String
+  description         String?
+  sourceType          String?
+  sourceId            String?
+  operatorId          String?
+  electronicSignature String?
+  createdAt           DateTime @default(now())
+
+  task                Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  patient             Patient  @relation(fields: [patientId], references: [id])
+
+  @@index([taskId, createdAt])
+  @@index([patientId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  operatorId  String?
+  action      String
+  targetType  String
+  targetId    String?
+  ipAddress   String?
+  beforeData  Json?
+  afterData   Json?
+  createdAt   DateTime @default(now())
+
+  @@index([operatorId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId, createdAt])
+}
+
+model RiskAlert {
+  id                String      @id @default(uuid())
+  patientId          String
+  riskType           String
+  riskLevel          RiskLevel   @default(MEDIUM)
+  title              String
+  description        String?
+  triggerRule        String?
+  sourceVitalRecordId String?
+  sourceQuestionnaireResultId String?
+  riskEpisodeId      String?
+  status             AlertStatus @default(OPEN)
+
+  handledBy          String?
+  handledAt          DateTime?
+  handlingNote       String?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  patient            Patient @relation(fields: [patientId], references: [id])
+  riskEpisode        RiskEpisode? @relation(fields: [riskEpisodeId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, status, createdAt])
+  @@index([status, riskLevel, createdAt])
+  @@index([sourceVitalRecordId])
+  @@index([sourceQuestionnaireResultId])
+  @@index([riskEpisodeId, status])
+}
+
+model RiskEpisode {
+  id               String            @id @default(uuid())
+  patientId        String
+  riskCategory     String
+  correlationKey   String
+  // Only OPEN / IN_PROGRESS episodes keep openKey. Closing clears it so a
+  // future signal can start a new episode without colliding with history.
+  openKey           String?           @unique
+  firstTriggeredAt DateTime          @default(now())
+  lastTriggeredAt  DateTime          @default(now())
+  peakRiskLevel    RiskLevel
+  status           RiskEpisodeStatus @default(OPEN)
+  openTaskId       String?
+  triggerCount     Int               @default(1)
+  latestEvidence   Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  patient          Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  openTask         Task?             @relation("RiskEpisodeOpenTask", fields: [openTaskId], references: [id], onDelete: SetNull)
+  alerts           RiskAlert[]
+  tasks            Task[]            @relation("TaskRiskEpisode")
+
+  @@index([patientId, status, lastTriggeredAt])
+  @@index([riskCategory, status, lastTriggeredAt])
+  @@index([correlationKey, status])
+  @@index([openTaskId])
+}
+
+model VitalMonitoringPlan {
+  id             String     @id @default(uuid())
+  patientId      String
+  vitalType      String
+  displayName    String
+  unit           String
+  frequencyUnit  String     @default("DAY")
+  timesPerUnit   Int        @default(1)
+  customMeasureTimes Json?
+  customMeasureDays Json?
+  reminderLeadMinutes Int   @default(180)
+  checkInWindowBeforeMinutes Int @default(180)
+  missedWindowAfterMinutes Int @default(180)
+  sourcePreset   String?
+  evidenceBasis  String?
+  evidenceSource String?
+  isActive       Boolean    @default(true)
+  lastCheckInAt  DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+  vitalRecords   VitalRecord[]
+
+  @@index([patientId, isActive])
+  @@index([patientId, vitalType])
+}
+
+model MedicationRecord {
+  id             String     @id @default(uuid())
+  patientId      String
+  medicationName String
+  dosage         String
+
+  // Backward-compatible display text generated from structured schedule fields.
+  frequency      String
+  frequencyUnit  String     @default("DAY")
+  timesPerUnit   Int        @default(1)
+  timingRelation String     @default("NONE")
+  customDoseTimes Json?
+  customDoseDays Json?
+  reminderLeadMinutes Int   @default(180)
+  checkInWindowBeforeMinutes Int @default(180)
+  missedWindowAfterMinutes Int @default(180)
+
+  instructions   String?
+  startDate      DateTime?
+  endDate        DateTime?
+  dataSource     DataSource @default(NURSE_INPUT)
+  isActive       Boolean    @default(true)
+  lastCheckInAt  DateTime?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  patient        Patient @relation(fields: [patientId], references: [id])
+  checkIns       MedicationCheckIn[]
+
+  @@index([patientId, isActive])
+  @@index([patientId, medicationName])
+}
+
+model MedicationCheckIn {
+  id           String   @id @default(uuid())
+  medicationId String
+  patientId    String
+  taken        Boolean  @default(true)
+  checkedAt    DateTime
+  scheduledAt  DateTime?
+  note         String?
+
+  createdAt    DateTime @default(now())
+
+  medication   MedicationRecord @relation(fields: [medicationId], references: [id])
+  patient      Patient @relation(fields: [patientId], references: [id])
+
+  @@index([medicationId, scheduledAt])
+  @@index([patientId, checkedAt])
+}
+
+model QuestionnaireResult {
+  id                String     @id @default(uuid())
+  patientId          String
+  questionnaireType  String
+  score              Int
+  riskLevel          RiskLevel  @default(LOW)
+  riskConclusion     String
+  answers            Json?
+  note               String?
+  dataSource         DataSource @default(MINI_PROGRAM)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  patient            Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, createdAt])
+  @@index([patientId, riskLevel, createdAt])
+}
+
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  displayName  String
+  role         UserRole
+  passwordHash String
+  isActive     Boolean  @default(true)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  patientsAsDoctor Patient[] @relation("PatientDoctor")
+  patientsAsNurse  Patient[] @relation("PatientNurse")
+
+  reviewedLeads    ChronicLead[] @relation("LeadReviewer")
+
+  @@index([role, isActive])
+
+  // patient-engagement-wechat-h5-v1
+  hospitalTenantId String?
+  hospitalTenant   HospitalTenant? @relation(fields: [hospitalTenantId], references: [id])
+
+  @@index([hospitalTenantId])
+  // care-reminders v3
+  sentDirectMessages PatientDirectMessage[] @relation("UserSentDirectMessages")
+}
+
+model PatientBindingRequest {
+  id                String               @id @default(uuid())
+  demoOpenId        String
+  patientId         String
+  hospitalPatientId String?
+  phone             String
+  idCardLast4       String?
+  status            PatientBindingStatus @default(PENDING)
+  rejectReason      String?
+  reviewedBy        String?
+  reviewedAt        DateTime?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([demoOpenId, status, createdAt])
+  @@index([patientId, status])
+  @@index([status, createdAt])
+}
+
+model PatientSession {
+  id          String   @id @default(uuid())
+  demoOpenId  String
+  patientId   String
+  tokenHash   String   @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+
+  createdAt   DateTime @default(now())
+
+  @@index([demoOpenId, patientId])
+  @@index([patientId, expiresAt])
+  @@index([expiresAt])
+}
+
+
+// ============================================================================
+// PatientConsent — 患者端统一知情同意书记录
+//
+// 设计要点（patient-self-consent-bind）:
+//   不论患者来自邀约库 (ChronicLead)、已有 Patient 档案，还是 HIS 暂存患者信息，
+//   只要患者在小程序绑定流程里勾选并签署《知情同意与隐私授权协议》，
+//   就在这张表落一条独立、可追溯的同意书记录。
+//
+//   - 与 ChronicLead / Patient / PatientBindingRequest 为松耦合（仅存 id，不建外键），
+//     因为同意书是在「提交绑定申请」之前先签的，签署时这些行可能还不存在。
+//   - 一个 demoOpenId 对同一识别对象重复签署时，旧记录会被置为 SUPERSEDED，
+//     始终只保留一条 SIGNED 的有效同意书。
+// ============================================================================
+
+enum PatientConsentSource {
+  MINI_PROGRAM
+  NURSE_PROXY
+  DOCTOR_PROXY
+}
+
+enum PatientConsentStatus {
+  SIGNED
+  SUPERSEDED
+  REVOKED
+}
+
+model PatientConsent {
+  id                  String               @id @default(uuid())
+
+  // ---- 患者端可信标识 ----
+  demoOpenId          String
+  hospitalPatientId   String?
+
+  // ---- 松耦合关联（签署时可能尚不存在）----
+  chronicLeadId       String?
+  patientId           String?
+  bindingRequestId    String?
+
+  // ---- 同意书内容快照 ----
+  consentVersion      String
+  consentSource       PatientConsentSource @default(MINI_PROGRAM)
+  consentTextSnapshot String?
+  matchType           String?
+
+  // ---- 签署证据 ----
+  signedAt            DateTime             @default(now())
+  ipAddress           String?
+  userAgent           String?
+
+  status              PatientConsentStatus @default(SIGNED)
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([demoOpenId, status, createdAt])
+  @@index([chronicLeadId])
+  @@index([patientId])
+  @@index([bindingRequestId])
+  @@index([hospitalPatientId])
+}
+
+
+model HospitalVisitReminder {
+  id                String                      @id @default(uuid())
+  patientId         String
+  sourceRiskAlertId String?
+  sourceTaskId      String?
+  riskEpisodeId    String?
+  reason            String
+  note              String?
+  status            HospitalVisitReminderStatus @default(ACTIVE)
+
+  remindedBy        String?
+  remindedAt        DateTime                    @default(now())
+
+  revokedBy         String?
+  revokedAt         DateTime?
+  revokeReason      String?
+
+  arrivedAt         DateTime?
+  arrivalConfirmedBy String?
+
+  noShowAt          DateTime?
+  noShowConfirmedBy String?
+
+  refusedAt         DateTime?
+  refusalConfirmedBy String?
+
+  outcomeNote       String?
+
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  patient           Patient                     @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, status, remindedAt])
+  @@index([status, remindedAt])
+  @@index([sourceRiskAlertId])
+  @@index([sourceTaskId])
+  @@index([riskEpisodeId])
+}
+
+model DiseaseRuleTemplate {
+  id              String      @id @default(uuid())
+  diseaseType     DiseaseType
+  templateName    String
+  description     String?
+  managementGoal  String?
+  riskBasis       String?
+  version         String      @default("v1")
+  isActive        Boolean     @default(true)
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  vitalThresholdRules VitalThresholdRule[]
+  followUpPolicies    FollowUpPolicy[]
+  questionnaireTemplates QuestionnaireTemplate[]
+
+  @@unique([diseaseType, version])
+  @@index([diseaseType, isActive])
+}
+
+model VitalThresholdRule {
+  id                String      @id @default(uuid())
+  templateId         String
+  vitalType          String
+  displayName        String
+  unit               String
+  operator           String
+  thresholdValue     Float
+  thresholdValueMax  Float?
+  riskLevel          RiskLevel
+  alertTitle         String
+  alertDescription   String?
+  followUpAction     String?
+  sortOrder          Int         @default(100)
+  isActive           Boolean     @default(true)
+
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  template            DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, isActive])
+  @@index([vitalType, isActive])
+  @@index([riskLevel, isActive])
+}
+
+model FollowUpPolicy {
+  id                    String      @id @default(uuid())
+  templateId             String
+  riskLevel              RiskLevel
+  followUpType           String
+  dueWithinHours         Int
+  frequencyDescription   String
+  taskTitle              String
+  instruction            String?
+  isActive               Boolean     @default(true)
+
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+
+  template                DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, riskLevel, isActive])
+  @@index([riskLevel, isActive])
+}
+
+model QuestionnaireTemplate {
+  id                  String      @id @default(uuid())
+  templateId           String
+  questionnaireType    String
+  title                String
+  description          String?
+  scoringRule          Json?
+  riskBands            Json?
+  isActive             Boolean     @default(true)
+
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  template              DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, isActive])
+  @@index([questionnaireType, isActive])
+}
+
+model IntegrationSource {
+  id          String                @id @default(uuid())
+  code        String                @unique
+  name        String
+  systemType  IntegrationSystemType
+  baseUrl     String?
+  description String?
+  isEnabled   Boolean               @default(true)
+
+  // gateway-promote-pipeline:
+  // 是否在审计写入后由 InboundEventService 自动调用 IntegrationPromoteService。
+  // 默认 false —— 数据先进审计层，由管理员在【接口中心】手动点 promote。
+  // 把某个来源（例如医院已经稳定的 HL7 通道）切到 true 之后，新事件会同步
+  // 尝试 promote；遇到冲突照样进入 CONFLICT 队列，不会污染主数据。
+  autoPromote Boolean               @default(false)
+
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  syncBatches  IntegrationSyncBatch[]
+  syncRecords  IntegrationSyncRecord[]
+  fieldMappings IntegrationFieldMapping[]
+  apiKeys      GatewayApiKey[]
+
+  @@index([systemType, isEnabled])
+}
+
+model IntegrationSyncBatch {
+  id           String                 @id @default(uuid())
+  sourceId     String
+  batchType    String
+  status       IntegrationSyncStatus  @default(PENDING)
+  startedAt    DateTime               @default(now())
+  finishedAt   DateTime?
+  totalCount   Int                    @default(0)
+  successCount Int                    @default(0)
+  failedCount  Int                    @default(0)
+  operatorId   String?
+  message      String?
+
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  source        IntegrationSource      @relation(fields: [sourceId], references: [id])
+  records       IntegrationSyncRecord[]
+
+  @@index([sourceId, status, startedAt])
+  @@index([batchType, status, startedAt])
+}
+
+model IntegrationSyncRecord {
+  id                 String                  @id @default(uuid())
+  sourceId           String
+  batchId            String
+  externalRecordType String
+  externalRecordId   String
+  localTargetType    String?
+  localTargetId      String?
+  status             IntegrationRecordStatus
+  errorMessage        String?
+  rawData             Json?
+  normalizedData      Json?
+
+  // gateway-promote-pipeline:
+  // 审计 (status) 与 promote (promotionStatus) 是两条独立的状态线。
+  // promotionMessage 在 CONFLICT/FAILED 时给出人类可读的原因。
+  // promotedAt 仅在 promotionStatus = PROMOTED 时填充，便于 SLA 统计。
+  promotionStatus     IntegrationPromotionStatus @default(NOT_REQUIRED)
+  promotionMessage    String?
+  promotedAt          DateTime?
+
+  // gateway-production-hardening: retry / backoff metadata
+  // GatewayPromotionWorker uses these to re-promote FAILED records
+  // with exponential backoff until promotionAttempts exhausts
+  // the configured max, after which an alert is emitted.
+  promotionAttempts   Int       @default(0)
+  nextRetryAt         DateTime?
+  lastFailedAt        DateTime?
+  lastFailureReason   String?
+
+  createdAt           DateTime                @default(now())
+
+  source              IntegrationSource       @relation(fields: [sourceId], references: [id])
+  batch               IntegrationSyncBatch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, externalRecordType, externalRecordId])
+  @@index([batchId, status])
+  @@index([localTargetType, localTargetId])
+  @@index([promotionStatus, createdAt])
+  @@index([sourceId, promotionStatus])
+  @@index([promotionStatus, nextRetryAt])
+}
+
+model IntegrationFieldMapping {
+  id            String             @id @default(uuid())
+  sourceId      String
+  targetModel   String
+  externalField String
+  localField    String
+  displayName   String?
+  transformRule String?
+  defaultValue  String?
+  isRequired    Boolean            @default(false)
+  isActive      Boolean            @default(true)
+
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  source        IntegrationSource  @relation(fields: [sourceId], references: [id])
+
+  @@unique([sourceId, targetModel, externalField])
+  @@index([sourceId, targetModel, isActive])
+}
+
+model ExternalPatientRecord {
+  id                String               @id @default(uuid())
+  sourceId          String
+  externalPatientId String
+  hospitalPatientId String
+  name              String
+  gender            Gender               @default(UNKNOWN)
+  birthDate         DateTime?
+  phone             String?
+  idCardNo          String?
+  address           String?
+  rawData           Json?
+  importStatus      ExternalRecordStatus @default(STAGED)
+  localPatientId     String?
+  errorMessage       String?
+
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  @@unique([sourceId, externalPatientId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localPatientId])
+}
+
+model ExternalDiagnosisRecord {
+  id                  String               @id @default(uuid())
+  sourceId            String
+  externalDiagnosisId String
+  hospitalPatientId   String
+  diseaseType         DiseaseType
+  diagnosisDate       DateTime?
+  diseaseStage        String?
+  complications       String?
+  comorbidities       String?
+  riskLevel           RiskLevel            @default(LOW)
+  rawData             Json?
+  importStatus        ExternalRecordStatus @default(STAGED)
+  localDiseaseProfileId String?
+  errorMessage        String?
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@unique([sourceId, externalDiagnosisId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localDiseaseProfileId])
+}
+
+model ExternalLabResultRecord {
+  id                  String               @id @default(uuid())
+  sourceId            String
+  externalLabResultId String
+  hospitalPatientId   String
+  labItemCode         String
+  labItemName         String
+  vitalType           String
+  value               Float
+  unit                String
+  measuredAt          DateTime
+  rawData             Json?
+  importStatus        ExternalRecordStatus @default(STAGED)
+  localVitalRecordId   String?
+  errorMessage        String?
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@unique([sourceId, externalLabResultId])
+  @@index([hospitalPatientId, measuredAt])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localVitalRecordId])
+}
+
+model ExternalPrescriptionRecord {
+  id                      String               @id @default(uuid())
+  sourceId                String
+  externalPrescriptionId  String
+  hospitalPatientId       String
+  medicationName          String
+  dosage                  String
+  frequency               String
+  instructions            String?
+  startDate               DateTime?
+  endDate                 DateTime?
+  rawData                 Json?
+  importStatus            ExternalRecordStatus @default(STAGED)
+  localMedicationRecordId  String?
+  errorMessage            String?
+
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  @@unique([sourceId, externalPrescriptionId])
+  @@index([hospitalPatientId])
+  @@index([sourceId, importStatus, createdAt])
+  @@index([localMedicationRecordId])
+}
+
+model EncounterRecord {
+  id                String   @id @default(uuid())
+  patientId         String
+  hospitalPatientId String?
+  externalVisitId   String?
+  visitType         EncounterType
+  departmentName    String?
+  doctorName        String?
+  visitTime         DateTime
+  chiefComplaint    String?
+  diagnosisSummary  String?
+  treatmentSummary  String?
+  dataSource        DataSource @default(HIS)
+  sourceSystem      String?
+  rawData           Json?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  patient           Patient @relation(fields: [patientId], references: [id])
+  hospitalMedicationOrders HospitalMedicationOrder[]
+
+  @@index([patientId, visitTime])
+  @@index([visitType, visitTime])
+  @@index([externalVisitId])
+}
+
+model MedicalRecordSummary {
+  id              String   @id @default(uuid())
+  patientId       String
+  externalRecordId String?
+  recordType      MedicalRecordType
+  recordTime      DateTime
+  departmentName  String?
+  title           String
+  summary         String?
+  diagnosisText   String?
+  treatmentPlan   String?
+  doctorAdvice    String?
+  dataSource      DataSource @default(EMR)
+  sourceSystem    String?
+  rawData         Json?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  patient         Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, recordTime])
+  @@index([recordType, recordTime])
+  @@index([externalRecordId])
+}
+
+model ExamReportRecord {
+  id              String   @id @default(uuid())
+  patientId       String
+  externalExamId  String?
+  examType        String
+  examName        String
+  examTime        DateTime
+  departmentName  String?
+  finding         String?
+  conclusion      String?
+  reportUrl       String?
+  dataSource      DataSource @default(HIS)
+  sourceSystem    String?
+  rawData         Json?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  patient         Patient @relation(fields: [patientId], references: [id])
+
+  @@index([patientId, examTime])
+  @@index([examType, examTime])
+  @@index([externalExamId])
+}
+
+model HospitalMedicationOrder {
+  id                    String   @id @default(uuid())
+  patientId             String
+  externalOrderId       String?
+  encounterRecordId     String?
+  medicationName        String
+  dosage                String
+  frequency             String
+  route                 String?
+  duration              String?
+  prescribedBy          String?
+  prescribedAt          DateTime
+  dataSource            DataSource @default(HIS)
+  sourceSystem          String?
+  rawData               Json?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  patient               Patient @relation(fields: [patientId], references: [id])
+  encounterRecord       EncounterRecord? @relation(fields: [encounterRecordId], references: [id])
+
+  @@index([patientId, prescribedAt])
+  @@index([encounterRecordId])
+  @@index([externalOrderId])
+}
+
+
+// ============================================================================
+// ChronicLead — patient-prestart-gate
+//
+// 网关捞到的高危慢病信号在患者签署知情同意之前，先落到这张待邀约池表，
+// 不能进入正式档案。任何把线索升档为 Patient 的动作都必须经过：
+//   1) 护士在【高危线索】页面【签约】按钮 (consentSource = NURSE_CONFIRM)，或
+//   2) 患者扫码进入微信小程序并签署电子知情同意 (consentSource = MINI_PROGRAM_SIGN)，或
+//   3) 医生在桌面 PC 上代为确认 (consentSource = DOCTOR_CONFIRM)。
+//
+// 单向状态机:
+//   PENDING_REVIEW → CONTACTED → SIGNED  (终态)
+//   PENDING_REVIEW → DEFERRED  → PENDING_REVIEW (可循环)
+//   PENDING_REVIEW → REJECTED  (终态)
+//   PENDING_REVIEW → EXPIRED   (cron 自动清理 30 天未处理)
+// ============================================================================
+
+enum LeadStatus {
+  PENDING_REVIEW
+  CONTACTED
+  SIGNED
+  REJECTED
+  DEFERRED
+  EXPIRED
+}
+
+enum LeadSourceChannel {
+  HL7_DISCHARGE
+  HL7_OUTPATIENT
+  HL7_ABNORMAL_OBSERVATION
+  FHIR_DISCHARGE
+  FHIR_ENCOUNTER
+  FHIR_CONDITION
+  FHIR_OBSERVATION
+  HIS_EVENT_DISCHARGE
+  HIS_EVENT_ENCOUNTER
+  HIS_EVENT_LAB
+  INTERMEDIATE_DB
+  MANUAL
+}
+
+enum LeadConsentSource {
+  MINI_PROGRAM_SIGN
+  NURSE_CONFIRM
+  DOCTOR_CONFIRM
+}
+
+model ChronicLead {
+  id                 String              @id @default(uuid())
+
+  // ---- 患者识别四件套 (任一非空即可) ----
+  hospitalPatientId  String?
+  idCardNo           String?
+  phone              String?
+  externalPatientId  String?
+
+  // ---- 患者快照 (来源系统截至命中时刻的视图) ----
+  name               String?
+  gender             Gender              @default(UNKNOWN)
+  birthDate          DateTime?
+
+  // ---- 来源 ----
+  sourceChannel      LeadSourceChannel
+  sourceRecordId     String?
+  sourceBatchId      String?
+
+  // ---- 临床证据 ----
+  suspectedDisease   DiseaseType?
+  diagnosisIcd       String?
+  diagnosisText      String?
+  riskHint           RiskLevel           @default(MEDIUM)
+  evidenceSummary    String?
+
+  // ---- 状态机 + 签约证据 ----
+  status             LeadStatus          @default(PENDING_REVIEW)
+  consentSource      LeadConsentSource?
+  consentRef         String?
+
+  // 护士/医生 review
+  reviewedById       String?
+  reviewedAt         DateTime?
+  rejectReason       String?
+  contactNote        String?
+  deferNote          String?
+
+  // ---- 升档 (Patient 落库) ----
+  promotedPatientId  String?
+  promotedAt         DateTime?
+
+  // ---- 网关去重 / 频次 ----
+  hitCount           Int                 @default(1)
+  lastSeenAt         DateTime            @default(now())
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  reviewedBy         User?               @relation("LeadReviewer", fields: [reviewedById], references: [id])
+  promotedPatient    Patient?            @relation("LeadPromotedPatient", fields: [promotedPatientId], references: [id])
+
+  @@index([status, lastSeenAt])
+  @@index([hospitalPatientId])
+  @@index([idCardNo])
+  @@index([phone])
+  @@index([suspectedDisease, riskHint])
+  @@index([sourceChannel, lastSeenAt])
+}
+
+
+
+model GatewayApiKey {
+  id            String    @id @default(uuid())
+  sourceId      String
+
+  // Public-visible prefix shown in admin UI / logs / header.
+  // The full header value is `gwk_<prefix>_<secret>`. The secret part
+  // is never persisted — only its SHA-256 is, in `keyHash`.
+  prefix        String    @unique
+  keyHash       String
+
+  description   String?
+
+  // CIDR strings (e.g. "10.1.0.0/16", "::1/128"). Empty array = allow all
+  // IPs (but key match is still required). Evaluated AFTER any global
+  // GATEWAY_GLOBAL_IP_ALLOWLIST env-level allowlist.
+  ipAllowlist   String[]  @default([])
+
+  lastUsedAt    DateTime?
+  lastUsedIp    String?
+  usageCount    Int       @default(0)
+
+  revokedAt     DateTime?
+  revokedBy     String?
+  revokedReason String?
+
+  createdAt     DateTime  @default(now())
+  createdBy     String?
+  updatedAt     DateTime  @updatedAt
+
+  source        IntegrationSource @relation(fields: [sourceId], references: [id])
+
+  @@index([sourceId, revokedAt])
+}
+
+
+// ============================================================================
+// patient-engagement-wechat-h5-v1
+//
+// 患者触达统一入口：平台服务号 + H5 一次性链接 + 短信兜底 + 手动复制。
+// 小程序保留作为深度用户入口，但不再是患者主路径。
+// 平台一套服务号统一承载，各医院在平台后台多租户管理自己的患者/任务/发送记录。
+// ============================================================================
+
+model HospitalTenant {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  displayName String?
+  isActive    Boolean  @default(true)
+  // care-reminders v3
+  timezone    String   @default("Asia/Shanghai")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users           User[]
+  patients        Patient[]
+  formLinks       PatientFormLink[]
+  messages        PatientOutboundMessage[]
+  // patient_engagement_hospital_wechat_v2
+  wechatIdentities      PatientWechatIdentity[]
+  wechatOfficialAccount HospitalWechatOfficialAccount?
+  // care-reminders v3
+  careReminderSchedules   CareReminderSchedule[]
+  careReminderOccurrences CareReminderOccurrence[]
+  patientDirectMessages   PatientDirectMessage[]
+}
+
+model PatientWechatIdentity {
+  id               String   @id @default(uuid())
+  // patient_engagement_hospital_wechat_v2: 必填 — openId 必须归属到一家医院.
+  hospitalTenantId String
+  patientId        String
+  appId            String
+  openId           String
+  unionId          String?
+  source           String   // OFFICIAL_ACCOUNT_H5 / MINI_PROGRAM / MANUAL_BIND
+  isVerified       Boolean  @default(false)
+  verifiedAt       DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  patient        Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  hospitalTenant HospitalTenant @relation(fields: [hospitalTenantId], references: [id], onDelete: Cascade)
+
+  @@unique([hospitalTenantId, appId, openId])
+  @@index([patientId])
+  @@index([hospitalTenantId])
+  @@index([unionId])
+}
+
+model PatientFormLink {
+  id                         String    @id @default(uuid())
+  hospitalTenantId           String?
+  patientId                  String
+  taskId                     String?
+  riskAlertId                String?
+  type                       String
+  // QUESTIONNAIRE / VITAL_RECHECK / MEDICATION_CHECKIN / HOSPITAL_VISIT_CONFIRM
+  // / CONSENT_ONLY / GENERIC_NOTICE
+  tokenHash                  String    @unique
+  shortCode                  String?   @unique
+  title                      String
+  description                String?
+  payload                    Json?
+  expiresAt                  DateTime
+  usedAt                     DateTime?
+  revokedAt                  DateTime?
+  revokeReason               String?
+  maxSubmit                  Int       @default(1)
+  submitCount                Int       @default(0)
+  status                     String    @default("ACTIVE")
+  // ACTIVE / USED / EXPIRED / REVOKED
+  requiresIdentityCheck      Boolean   @default(false)
+  identityCheckFailureCount  Int       @default(0)
+  identityLockedUntil        DateTime?
+  createdBy                  String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  patient        Patient                  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  hospitalTenant HospitalTenant?          @relation(fields: [hospitalTenantId], references: [id])
+  messages       PatientOutboundMessage[]
+
+  @@index([hospitalTenantId])
+  @@index([patientId, type, status])
+  @@index([taskId])
+  @@index([riskAlertId])
+  @@index([expiresAt])
+  // patient_engagement_v3_2 — submission linkage
+  submissionType String?
+  submissionId   String?
+  submittedAt    DateTime?
+}
+
+model PatientOutboundMessage {
+  id                String    @id @default(uuid())
+  hospitalTenantId  String?
+  patientId         String
+  formLinkId        String?
+  channel           String
+  // WECHAT_OFFICIAL_ACCOUNT / SMS / MANUAL_COPY
+  messageType       String
+  // QUESTIONNAIRE_REMINDER / VITAL_RECHECK_REMINDER / MEDICATION_REMINDER / HOSPITAL_VISIT_REMINDER
+  recipientMasked   String?
+  recipientRawHash  String?
+  templateId        String?
+  title             String
+  content           String
+  linkUrl           String?
+  status            String    @default("PENDING")
+  // PENDING / SENT / FAILED / CLICKED / SUBMITTED / CANCELED
+  providerMessageId String?
+  errorMessage      String?
+  sentAt            DateTime?
+  clickedAt         DateTime?
+  submittedAt       DateTime?
+  createdBy         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  patient        Patient          @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  formLink       PatientFormLink? @relation(fields: [formLinkId], references: [id])
+  hospitalTenant HospitalTenant?  @relation(fields: [hospitalTenantId], references: [id])
+
+  @@index([hospitalTenantId])
+  @@index([patientId, channel, status])
+  @@index([formLinkId])
+  @@index([messageType, createdAt])
+  // patient_engagement_v3_2
+  attempts          PatientOutboundAttempt[]
+  lastAttemptAt     DateTime?
+  deliverySummary   Json?
+}
+
+model EngagementEventLog {
+  id         String   @id @default(uuid())
+  patientId  String?
+  formLinkId String?
+  eventType  String
+  // LINK_CREATED / MESSAGE_SENT / MESSAGE_FAILED / LINK_OPENED /
+  // IDENTITY_CHECK_PASSED / IDENTITY_CHECK_FAILED / FORM_SUBMITTED /
+  // TOKEN_EXPIRED / TOKEN_REUSED / TOKEN_REVOKED
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([patientId, createdAt])
+  @@index([formLinkId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+
+// ============================================================================
+// patient_engagement_hospital_wechat_v2
+//
+// 每家医院独立微信服务号 (一家医院 = 一行).
+// appSecret / accessToken 都加密存储 (AES-256-GCM, key 来自 PATIENT_ENGAGEMENT_SECRET_KEY).
+// 模板消息 ID 在医院维度配置, 不再从 .env 读取.
+// ============================================================================
+
+model HospitalWechatOfficialAccount {
+  id                       String   @id @default(uuid())
+  hospitalTenantId         String   @unique
+  accountName              String?
+  originalId               String?
+  appId                    String
+  appSecretEncrypted       String
+  qrCodeUrl                String?
+  h5BaseUrl                String?
+  oauthCallbackDomain      String?
+  templateQuestionnaireId  String?
+  templateVitalId          String?
+  templateMedicationId     String?
+  templateHospitalVisitId  String?
+  isEnabled                Boolean   @default(false)
+  isVerified               Boolean   @default(false)
+  accessTokenEncrypted     String?
+  accessTokenExpiresAt     DateTime?
+  lastTokenRefreshAt       DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  hospitalTenant HospitalTenant @relation(fields: [hospitalTenantId], references: [id], onDelete: Cascade)
+
+  @@index([appId])
+}
+
+
+// ============================================================================
+// care-reminders v3
+// ============================================================================
+
+model CareReminderSchedule {
+  id                          String   @id @default(uuid())
+  hospitalTenantId            String
+  patientId                   String
+  // 来源: MEDICATION / VITAL / QUESTIONNAIRE / FOLLOW_UP / MANUAL_MESSAGE
+  sourceType                  String
+  // MedicationRecord.id / VitalMonitoringPlan.id / Task.id ...
+  sourceId                    String?
+  title                       String
+  description                 String?
+  // MEDICATION_CHECKIN / VITAL_RECHECK / QUESTIONNAIRE / GENERAL_MESSAGE
+  reminderType                String
+  // DAY / WEEK / MONTH
+  frequencyUnit               String   @default("DAY")
+  timesPerUnit                Int      @default(1)
+  // ["08:00", "20:00"]  — wall-clock in tenant timezone
+  scheduledTimes              Json?
+  // weekly: ["MON", "WED", "FRI"]
+  scheduledDays               Json?
+  // arbitrary payload (medicationId, vitalType, etc.)
+  payload                     Json?
+  reminderLeadMinutes         Int      @default(0)
+  checkInWindowBeforeMinutes  Int      @default(180)
+  checkInWindowAfterMinutes   Int      @default(180)
+  escalationAfterMinutes      Int?
+  isActive                    Boolean  @default(true)
+  pausedAt                    DateTime?
+  startDate                   DateTime?
+  endDate                     DateTime?
+  createdBy                   String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  hospitalTenant HospitalTenant            @relation(fields: [hospitalTenantId], references: [id], onDelete: Cascade)
+  patient        Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  occurrences    CareReminderOccurrence[]
+
+  @@index([hospitalTenantId, patientId, isActive])
+  @@index([sourceType, sourceId])
+}
+
+model CareReminderOccurrence {
+  id                String   @id @default(uuid())
+  hospitalTenantId  String
+  patientId         String
+  scheduleId        String
+  // MEDICATION_CHECKIN / VITAL_RECHECK / QUESTIONNAIRE / GENERAL_MESSAGE
+  occurrenceType    String
+  title             String
+  dueAt             DateTime
+  availableFrom     DateTime
+  availableUntil    DateTime
+  // PENDING / SENDING / SENT / CLICKED / COMPLETED / MISSED / ESCALATED / CANCELED
+  status            String   @default("PENDING")
+  formLinkId        String?
+  outboundMessageId String?
+  sentAt            DateTime?
+  completedAt       DateTime?
+  missedAt          DateTime?
+  escalatedAt       DateTime?
+  escalatedTaskId   String?
+  // MedicationCheckIn / VitalRecord / QuestionnaireResult / DirectMessageAck
+  resultType        String?
+  resultId          String?
+  lastError         String?
+  // care-reminders v3.1 — resend bookkeeping
+  resendCount       Int      @default(0)
+  lastResentAt      DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  hospitalTenant HospitalTenant       @relation(fields: [hospitalTenantId], references: [id], onDelete: Cascade)
+  patient        Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  schedule       CareReminderSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, dueAt])
+  @@index([hospitalTenantId, patientId, dueAt])
+  @@index([status, dueAt])
+  @@index([formLinkId])
+}
+
+model PatientDirectMessage {
+  id                String   @id @default(uuid())
+  hospitalTenantId  String
+  patientId         String
+  senderId          String
+  title             String
+  content           String
+  // NORMAL / IMPORTANT / URGENT
+  priority          String   @default("NORMAL")
+  // WECHAT_OFFICIAL_ACCOUNT / SMS / MANUAL_COPY
+  channel           String
+  formLinkId        String?
+  outboundMessageId String?
+  // PENDING / SENT / FAILED / CLICKED / ACKNOWLEDGED
+  status            String   @default("PENDING")
+  requiresAck       Boolean  @default(false)
+  acknowledgedAt    DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  hospitalTenant HospitalTenant @relation(fields: [hospitalTenantId], references: [id], onDelete: Cascade)
+  patient        Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  sender         User           @relation("UserSentDirectMessages", fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([hospitalTenantId, patientId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([formLinkId])
+}
+
+
+// ============================================================================
+// patient_engagement_v3_2 — delivery attempts + structured visit feedback
+// ============================================================================
+
+model PatientOutboundAttempt {
+  id                String   @id @default(uuid())
+  messageId         String
+  hospitalTenantId  String?
+  patientId         String
+  formLinkId        String?
+  // WECHAT_OFFICIAL_ACCOUNT / SMS
+  channel           String
+  // SENT / FAILED
+  status            String
+  recipientMasked   String?
+  providerMessageId String?
+  errorMessage      String?
+  attemptNo         Int
+  // INITIAL / AUTO_FALLBACK / NURSE_RESEND
+  triggerReason     String?
+  triggeredBy       String?
+  sentAt            DateTime?
+  createdAt         DateTime @default(now())
+
+  message PatientOutboundMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  patient Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, createdAt])
+  @@index([hospitalTenantId, patientId, createdAt])
+  @@index([channel, status])
+}
+
+model HospitalVisitFeedback {
+  id                      String   @id @default(uuid())
+  hospitalTenantId        String
+  patientId               String
+  formLinkId              String?
+  messageId               String?
+  hospitalVisitReminderId String?
+  taskId                  String?
+  riskAlertId             String?
+  // WILL_VISIT / ARRIVED / CANNOT_VISIT / REFUSED
+  action                  String
+  note                    String?
+  submittedAt             DateTime @default(now())
+  source                  String   @default("H5_LINK")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([hospitalTenantId, patientId, submittedAt])
+  @@index([formLinkId])
+  @@index([messageId])
+  @@index([hospitalVisitReminderId])
+  @@index([taskId])
+  @@index([riskAlertId])
+}

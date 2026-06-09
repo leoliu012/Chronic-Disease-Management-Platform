@@ -7,7 +7,9 @@ describe('RiskAlertsService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [RiskAlertsService],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     service = module.get<RiskAlertsService>(RiskAlertsService);
   });

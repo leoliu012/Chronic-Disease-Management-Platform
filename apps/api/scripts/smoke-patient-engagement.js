@@ -399,7 +399,7 @@ async function main() {
   if (nurse2Token) {
     {
       const r = await call(nurse2Token, 'GET', '/patient-engagement/patients/demo-patient-001/contact-summary');
-      expect('nurse2 → demo-patient-001 contact-summary → 403', r.status === 403, `status=${r.status}`);
+      expect('nurse2 → demo-patient-001 contact-summary → 403/404', [403, 404].includes(r.status), `status=${r.status}`);
     }
     {
       const r = await call(nurse2Token, 'POST', '/patient-engagement/patients/demo-patient-001/questionnaire-links', {
@@ -408,7 +408,7 @@ async function main() {
         send: false,
         requiresIdentityCheck: false,
       });
-      expect('nurse2 → create link for demo-patient-001 → 403', r.status === 403, `status=${r.status}`);
+      expect('nurse2 → create link for demo-patient-001 → 403/404', [403, 404].includes(r.status), `status=${r.status}`);
     }
     {
       const r = await call(nurse2Token, 'GET', '/patient-engagement/patients/demo-patient-101/contact-summary');

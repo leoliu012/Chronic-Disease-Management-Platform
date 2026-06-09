@@ -13,12 +13,16 @@ import { CreateRiskAlertDto } from './dto/create-risk-alert.dto';
 import { HandleRiskAlertDto } from './dto/handle-risk-alert.dto';
 import { QueryRiskAlertsDto } from './dto/query-risk-alerts.dto';
 import { Roles } from '../security/roles.decorator';
+import { CurrentUser } from '../security/current-user.decorator';
+import type { RequestUser } from '../security/request-user.type';
+import { Audit } from '../security/audit.decorator';
 
 @Controller()
 export class RiskAlertsController {
   constructor(private readonly riskAlertsService: RiskAlertsService) {}
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'CREATE_RISK_ALERT', target: 'RiskAlert', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/risk-alerts')
   create(
     @Param('patientId') patientId: string,
@@ -29,8 +33,8 @@ export class RiskAlertsController {
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
   @Get('risk-alerts')
-  findAll(@Query() query: QueryRiskAlertsDto) {
-    return this.riskAlertsService.findAll(query);
+  findAll(@Query() query: QueryRiskAlertsDto, @CurrentUser() user: RequestUser) {
+    return this.riskAlertsService.findAll(query, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
@@ -43,29 +47,35 @@ export class RiskAlertsController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
+  @Audit({ action: 'VIEW_RISK_ALERT', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Get('risk-alerts/:id')
   findOne(@Param('id') id: string) {
     return this.riskAlertsService.findOne(id);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'START_RISK_ALERT_PROCESSING', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/in-progress')
   markInProgress(
     @Param('id') id: string,
     @Body() dto: HandleRiskAlertDto,
+    @CurrentUser() user: RequestUser,
   ) {
-    return this.riskAlertsService.markInProgress(id, dto);
+    return this.riskAlertsService.markInProgress(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'CLOSE_RISK_EPISODE_RESOLVED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/resolve')
-  resolve(@Param('id') id: string, @Body() dto: HandleRiskAlertDto) {
-    return this.riskAlertsService.resolve(id, dto);
+  resolve(@Param('id') id: string, @Body() dto: HandleRiskAlertDto, @CurrentUser() user: RequestUser) {
+    return this.riskAlertsService.resolve(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'CLOSE_RISK_EPISODE_DISMISSED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/dismiss')
-  dismiss(@Param('id') id: string, @Body() dto: HandleRiskAlertDto) {
-    return this.riskAlertsService.dismiss(id, dto);
+  dismiss(@Param('id') id: string, @Body() dto: HandleRiskAlertDto, @CurrentUser() user: RequestUser) {
+    return this.riskAlertsService.dismiss(id, dto, user);
   }
 }
+

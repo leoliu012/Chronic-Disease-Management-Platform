@@ -15,7 +15,9 @@ import { UserRole } from '@prisma/client';
 import { Roles } from '../security/roles.decorator';
 import { CurrentUser } from '../security/current-user.decorator';
 import type { RequestUser } from '../security/request-user.type';
+import { ClinicalAccessScopeService } from '../security/clinical-access-scope.service';
 import { AuditService } from '../security/audit.service';
+import { Audit } from '../security/audit.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { PatientEngagementTenantService } from '../patient-engagement/patient-engagement-tenant.service';
 import { CareReminderScheduleService } from './care-reminder-schedule.service';
@@ -42,6 +44,7 @@ export class CareRemindersController {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly tenant: PatientEngagementTenantService,
+    private readonly access: ClinicalAccessScopeService,
     private readonly schedules: CareReminderScheduleService,
     private readonly occurrences: CareReminderOccurrenceService,
     private readonly worker: CareReminderWorkerService,
@@ -72,7 +75,7 @@ export class CareRemindersController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
+    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
 
     const medication = await this.prisma.medicationRecord.findUnique({
       where: { id: dto.medicationId },
@@ -129,7 +132,7 @@ export class CareRemindersController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
+    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
 
     // v3.3: a VITAL reminder MUST be bound to a VitalMonitoringPlan — care
     // reminders only ever derive from the monitoring plan, never free-standing.
@@ -197,7 +200,7 @@ export class CareRemindersController {
   ) {
     this.tenant.assertWriteAllowed(user);
     const sched = await this.schedules.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
+    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
     return this.schedules.update(id, dto);
   }
 
@@ -206,7 +209,7 @@ export class CareRemindersController {
   async pauseSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
     this.tenant.assertWriteAllowed(user);
     const sched = await this.schedules.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
+    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
     return this.schedules.pause(id);
   }
 
@@ -215,7 +218,7 @@ export class CareRemindersController {
   async resumeSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser) {
     this.tenant.assertWriteAllowed(user);
     const sched = await this.schedules.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
+    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
     return this.schedules.resume(id);
   }
 
@@ -226,7 +229,7 @@ export class CareRemindersController {
   async cancelSchedule(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
     this.tenant.assertWriteAllowed(user);
     const sched = await this.schedules.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(sched.patientId, user);
+    await this.tenant.assertPatientWritableToUser(sched.patientId, user);
     const result = await this.schedules.cancelSchedule(id);
     await this.audit.record({
       user,
@@ -265,10 +268,14 @@ export class CareRemindersController {
   /** Tenant-scoped "today's reminders" overview. */
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
   @Get('today')
-  async todayOverview(@CurrentUser() user: RequestUser) {
+  async todayOverview(
+    @CurrentUser() user: RequestUser,
+    @Query('hospitalTenantId') hospitalTenantId?: string,
+  ) {
+    const patientScope = await this.access.buildPatientScope(user, hospitalTenantId);
     const tenantId =
       user.role === UserRole.ADMIN
-        ? null
+        ? hospitalTenantId || user.hospitalTenantId
         : await this.tenant.resolveUserHospitalTenantId(user);
     if (user.role !== UserRole.ADMIN && !tenantId) {
       throw new ForbiddenException('user is not bound to a tenant');
@@ -280,6 +287,7 @@ export class CareRemindersController {
     return this.prisma.careReminderOccurrence.findMany({
       where: {
         ...(tenantId ? { hospitalTenantId: tenantId } : {}),
+        patient: patientScope,
         dueAt: { gte: startOfWindow, lte: endOfWindow },
       },
       orderBy: { dueAt: 'asc' },
@@ -293,10 +301,14 @@ export class CareRemindersController {
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE, UserRole.MANAGER)
   @Get('missed')
-  async missedOverview(@CurrentUser() user: RequestUser) {
+  async missedOverview(
+    @CurrentUser() user: RequestUser,
+    @Query('hospitalTenantId') hospitalTenantId?: string,
+  ) {
+    const patientScope = await this.access.buildPatientScope(user, hospitalTenantId);
     const tenantId =
       user.role === UserRole.ADMIN
-        ? null
+        ? hospitalTenantId || user.hospitalTenantId
         : await this.tenant.resolveUserHospitalTenantId(user);
     if (user.role !== UserRole.ADMIN && !tenantId) {
       throw new ForbiddenException('user is not bound to a tenant');
@@ -304,6 +316,7 @@ export class CareRemindersController {
     return this.prisma.careReminderOccurrence.findMany({
       where: {
         ...(tenantId ? { hospitalTenantId: tenantId } : {}),
+        patient: patientScope,
         status: { in: ['MISSED', 'ESCALATED'] },
         dueAt: { gte: new Date(Date.now() - 30 * 24 * 3600 * 1000) },
       },
@@ -317,11 +330,12 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_CARE_REMINDER_NOW', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
   @Post('occurrences/:id/send-now')
   async sendNow(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
     this.tenant.assertWriteAllowed(user);
     const occ = await this.occurrences.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
+    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
 
     if (occ.status !== 'PENDING') {
       // Spec point 9: reuse existing link if already SENT.
@@ -331,11 +345,10 @@ export class CareRemindersController {
       throw new BadRequestException(`occurrence is in status ${occ.status}; cannot send-now`);
     }
 
-    // Trigger a single dispatch by running the worker pass scoped to this occ.
-    // Easiest path: just invoke runOnce() — it'll claim and dispatch the
-    // PENDING occurrence. We then return the refreshed row.
-    await this.worker.runOnce();
-    const refreshed = await this.occurrences.getByIdOrThrow(id);
+    // Explicit nurse action: dispatch this exact occurrence immediately.
+    // Do not run the global scheduled pass: that would send unrelated patients'
+    // reminders and would still skip this row when it is outside its time window.
+    const refreshed = await this.worker.dispatchOccurrenceNow(id);
     await this.audit.record({
       user,
       action: 'CARE_REMINDER_SEND_NOW',
@@ -351,11 +364,12 @@ export class CareRemindersController {
   // append a NURSE_RESEND delivery attempt (no new message row). The
   // service throws BadRequest (400) for completed / non-resendable states.
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'RESEND_CARE_REMINDER', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
   @Post('occurrences/:id/resend')
   async resendOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
     this.tenant.assertWriteAllowed(user);
     const occ = await this.occurrences.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
+    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
     const result = await this.resend.resend(id);
     await this.audit.record({
       user,
@@ -372,12 +386,47 @@ export class CareRemindersController {
     return result;
   }
 
+  /**
+   * Admin-only operational replay for FAILED / delayed PENDING rows.
+   * This is deliberately separate from nurse resend: replay repairs an
+   * automated delivery failure, while resend appends a human-requested attempt
+   * to an already-sent patient-facing case.
+   */
+  @Roles(UserRole.ADMIN)
+  @Audit({ action: 'REPLAY_CARE_REMINDER_OCCURRENCE', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Post('occurrences/:id/replay')
+  async replayOccurrence(
+    @Param('id') id: string,
+    @Body() body: { runNow?: boolean },
+    @CurrentUser() user: RequestUser,
+    @Req() req: any,
+  ) {
+    const occ = await this.occurrences.getByIdOrThrow(id);
+    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
+    const replayed = await this.occurrences.requestReplay(id, user.id);
+    const afterRun = body?.runNow ? await this.worker.dispatchOccurrenceNow(id) : replayed;
+    await this.audit.record({
+      user,
+      action: 'CARE_REMINDER_OCCURRENCE_REPLAY_REQUESTED',
+      targetType: 'CareReminderOccurrence',
+      targetId: id,
+      ipAddress: req?.ip,
+      afterData: {
+        runNow: body?.runNow === true,
+        status: afterRun.status,
+        retryCount: afterRun.retryCount,
+        replayCount: afterRun.replayCount,
+      },
+    });
+    return afterRun;
+  }
+
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   @Post('occurrences/:id/cancel')
   async cancelOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser) {
     this.tenant.assertWriteAllowed(user);
     const occ = await this.occurrences.getByIdOrThrow(id);
-    await this.tenant.assertPatientVisibleToUser(occ.patientId, user);
+    await this.tenant.assertPatientWritableToUser(occ.patientId, user);
     await this.occurrences.cancel(id);
     return this.occurrences.getByIdOrThrow(id);
   }
@@ -397,6 +446,7 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
+  @Audit({ action: 'SEND_PATIENT_DIRECT_MESSAGE', target: 'PatientDirectMessage', targetIdFrom: 'response.directMessage.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/messages')
   async createDirectMessage(
     @Param('patientId') patientId: string,
@@ -405,7 +455,7 @@ export class CareRemindersController {
     @Req() req: any,
   ) {
     this.tenant.assertWriteAllowed(user);
-    const { hospitalTenantId } = await this.tenant.assertPatientVisibleToUser(patientId, user);
+    const { hospitalTenantId } = await this.tenant.assertPatientWritableToUser(patientId, user);
     const result = await this.directMessages.create({
       hospitalTenantId,
       patientId,
@@ -447,6 +497,23 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN)
+  @Audit({ action: 'RECOVER_STUCK_CARE_REMINDERS', target: 'CareReminderWorker', targetIdFrom: 'response.instanceId' })
+  @Post('worker/recover-stuck')
+  async recoverStuckWorkerRows(@CurrentUser() user: RequestUser, @Req() req: any) {
+    const summary = await this.worker.recoverStuckSending();
+    await this.audit.record({
+      user,
+      action: 'CARE_REMINDER_WORKER_RECOVER_STUCK',
+      targetType: 'CareReminderWorker',
+      targetId: 'worker',
+      ipAddress: req?.ip,
+      afterData: summary,
+    });
+    return summary;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Audit({ action: 'RUN_CARE_REMINDER_WORKER_ONCE', target: 'CareReminderWorker' })
   @Post('worker/run-once')
   async workerRunOnce(@CurrentUser() user: RequestUser, @Req() req: any) {
     const summary = await this.worker.runOnce();
@@ -476,3 +543,7 @@ export class CareRemindersController {
     return map[vitalType] || vitalType;
   }
 }
+
+
+
+

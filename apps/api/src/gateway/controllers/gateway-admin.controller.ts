@@ -33,12 +33,10 @@ import {
   Param,
   Post,
   Query,
-  Req,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
-import type { Request } from 'express';
 import { CurrentUser } from '../../security/current-user.decorator';
-import { AuditService } from '../../security/audit.service';
+import { Audit } from '../../security/audit.decorator';
 import type { RequestUser } from '../../security/request-user.type';
 import { Roles } from '../../security/roles.decorator';
 import {
@@ -64,7 +62,6 @@ export class GatewayAdminController {
     private readonly apiKeys: GatewayApiKeyService,
     private readonly auditReport: GatewayAuditReportService,
     private readonly promotionWorker: GatewayPromotionWorkerService,
-    private readonly audit: AuditService,
   ) {}
 
   /* ----------------------------------------------------------------- */
@@ -107,20 +104,11 @@ export class GatewayAdminController {
     return { total: items.length, items };
   }
 
+  @Audit({ action: 'RUN_GATEWAY_INTERMEDIATE_POLL', target: 'IntegrationSyncBatch' })
   @Post('intermediate/poll-now')
   @HttpCode(HttpStatus.OK)
-  async pollNow(
-    @CurrentUser() user: RequestUser,
-    @Req() req: Request,
-  ) {
+  async pollNow() {
     const result = await this.poller.pollNow();
-    await this.audit.record({
-      user,
-      action: 'GATEWAY_INTERMEDIATE_POLL_NOW',
-      targetType: 'IntegrationSyncBatch',
-      ipAddress: req.ip,
-      afterData: result,
-    });
     return { status: 'OK', ...result };
   }
 
@@ -128,30 +116,17 @@ export class GatewayAdminController {
   /*  API Key 管理 (gateway-production-hardening)                       */
   /* ----------------------------------------------------------------- */
 
+  @Audit({ action: 'ISSUE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'response.id', detailsFrom: { sourceId: 'response.sourceId', prefix: 'response.prefix' } })
   @Post('api-keys')
   async issueApiKey(
     @Body() body: IssueApiKeyDto,
     @CurrentUser() user: RequestUser,
-    @Req() req: Request,
   ) {
     const issued = await this.apiKeys.issue({
       sourceId: body.sourceId,
       description: body.description,
       ipAllowlist: body.ipAllowlist,
       createdBy: user.id,
-    });
-    await this.audit.record({
-      user,
-      action: 'GATEWAY_API_KEY_ISSUED',
-      targetType: 'GatewayApiKey',
-      targetId: issued.id,
-      ipAddress: req.ip,
-      afterData: {
-        sourceId: issued.sourceId,
-        prefix: issued.prefix,
-        ipAllowlist: issued.ipAllowlist,
-        description: issued.description,
-      },
     });
     // 注意: fullKey 仅在此次返回, 绝不进 AuditLog
     return {
@@ -194,24 +169,16 @@ export class GatewayAdminController {
     };
   }
 
+  @Audit({ action: 'REVOKE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'params.id', detailsFrom: { prefix: 'response.prefix' } })
   @Delete('api-keys/:id')
   async revokeApiKey(
     @Param('id') id: string,
     @Body() body: RevokeApiKeyDto,
     @CurrentUser() user: RequestUser,
-    @Req() req: Request,
   ) {
     const revoked = await this.apiKeys.revoke(id, {
       revokedBy: user.id,
       reason: body?.reason,
-    });
-    await this.audit.record({
-      user,
-      action: 'GATEWAY_API_KEY_REVOKED',
-      targetType: 'GatewayApiKey',
-      targetId: id,
-      ipAddress: req.ip,
-      afterData: { reason: body?.reason ?? null, prefix: revoked.prefix },
     });
     return {
       id: revoked.id,
@@ -236,6 +203,7 @@ export class GatewayAdminController {
     return { overview, topFailures, keyUsage };
   }
 
+  @Audit({ action: 'EXPORT_GATEWAY_AUDIT_REPORT', target: 'IntegrationSyncRecord' })
   @Get('audit-report.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header(
@@ -256,17 +224,11 @@ export class GatewayAdminController {
     return this.promotionWorker.getStatus();
   }
 
+  @Audit({ action: 'RUN_GATEWAY_PROMOTION_WORKER', target: 'IntegrationSyncRecord' })
   @Post('promotion-worker/run-now')
   @HttpCode(HttpStatus.OK)
-  async workerRunNow(@CurrentUser() user: RequestUser, @Req() req: Request) {
+  async workerRunNow() {
     const result = await this.promotionWorker.runOnce();
-    await this.audit.record({
-      user,
-      action: 'GATEWAY_PROMOTION_WORKER_RUN_NOW',
-      targetType: 'IntegrationSyncRecord',
-      ipAddress: req.ip,
-      afterData: result,
-    });
     return { status: 'OK', ...result };
   }
 
@@ -287,3 +249,4 @@ function parseGlobalAllowlist(): { configured: boolean; cidrs: string[] } {
     .filter((s) => s.length > 0);
   return { configured: cidrs.length > 0, cidrs };
 }
+

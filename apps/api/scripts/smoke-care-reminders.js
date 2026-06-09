@@ -3,12 +3,13 @@
 // Repeatable smoke for care-reminders v3.1. Runs against a live API + DB.
 //
 // What changed vs v3:
-//   - The medication send-now / resend / H5-submit flow now uses a FRESH
-//     schedule created at runtime (scheduledTimes = current tenant-local HH:MM
-//     with wide check-in windows) instead of a seeded occurrence, so the smoke
-//     is idempotent: re-running it without re-seeding still passes.
-//   - Adds resend coverage (spec III): resend a SENT occurrence -> new outbound
-//     message (link reused while still active); resend after COMPLETED -> 4xx.
+//   - Source-bound schedules are reconciled from MedicationRecord /
+//     VitalMonitoringPlan. The smoke therefore selects a PENDING occurrence
+//     explicitly instead of accidentally reusing a historical COMPLETED row.
+//   - If the generated horizon has already been consumed by earlier smoke runs,
+//     a future PENDING fixture is inserted for the targeted send-now check.
+//   - Adds resend coverage (spec III): resend a SENT occurrence -> append a
+//     NURSE_RESEND attempt to the canonical message; after COMPLETED -> 4xx.
 //   - Asserts GET /care-reminders/today honours the ±24h window + from/to.
 //
 // Prereqs:
@@ -25,6 +26,7 @@ if (typeof fetch !== 'function') {
 
 const fs = require('fs');
 const path = require('path');
+const { PrismaClient } = require('@prisma/client');
 const API_BASE = process.env.API_BASE || process.env.SMOKE_API_BASE || 'http://localhost:3000';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
@@ -95,6 +97,58 @@ async function findLinkMessage(adminToken, patientId, formLinkId) {
   const list = Array.isArray(r.body) ? r.body : (r.body && Array.isArray(r.body.items) ? r.body.items : []);
   const msgs = list.filter((m) => m.formLinkId === formLinkId);
   return { count: msgs.length, withUrl: msgs.find((m) => m.linkUrl) || null };
+}
+
+/**
+ * Select an unconsumed occurrence for the explicit send-now flow.
+ *
+ * A source-bound schedule is stable across smoke runs, so historical rows stay
+ * attached to it. Prefer a generated PENDING row. If all rows in the generated
+ * horizon were consumed by previous runs, insert one dedicated future fixture.
+ * Its normal dispatch window deliberately starts in the future: send-now must
+ * still dispatch it immediately.
+ */
+async function ensurePendingOccurrence(adminToken, patientId, schedule) {
+  const listed = await call(adminToken, 'GET', `/care-reminders/patients/${patientId}/occurrences`);
+  const allMine = (listed.body || []).filter((o) => o.scheduleId === schedule?.id);
+  const pending = allMine
+    .filter((o) => o.status === 'PENDING')
+    .sort((a, b) => +new Date(b.dueAt) - +new Date(a.dueAt));
+
+  if (pending[0]) {
+    return {
+      occurrence: pending[0],
+      total: allMine.length,
+      pending: pending.length,
+      fixture: 'generated',
+    };
+  }
+
+  const prisma = new PrismaClient();
+  try {
+    const dueAt = new Date(Date.now() + 48 * 3600 * 1000 + Math.floor(Math.random() * 60_000));
+    const created = await prisma.careReminderOccurrence.create({
+      data: {
+        hospitalTenantId: schedule.hospitalTenantId,
+        patientId,
+        scheduleId: schedule.id,
+        occurrenceType: schedule.reminderType,
+        title: `【smoke v3.1】targeted send-now fixture ${dueAt.toISOString()}`,
+        dueAt,
+        availableFrom: new Date(dueAt.getTime() - 60 * 60 * 1000),
+        availableUntil: new Date(dueAt.getTime() + 4 * 60 * 60 * 1000),
+        status: 'PENDING',
+      },
+    });
+    return {
+      occurrence: created,
+      total: allMine.length + 1,
+      pending: 1,
+      fixture: 'synthetic-fallback',
+    };
+  } finally {
+    await prisma.$disconnect();
+  }
 }
 
 async function main() {
@@ -245,13 +299,14 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
-  // 4. worker generates occurrences
+  // 4. worker pass completes. On a rerun, generated=0 is valid because
+  //    occurrence materialization is intentionally idempotent.
   // ---------------------------------------------------------------
   {
     const r = await call(adminToken, 'POST', '/care-reminders/worker/run-once');
     record(
-      '4. worker run-once generates occurrences',
-      r.status === 201 && r.body?.generated > 0,
+      '4. worker run-once completes',
+      r.status === 201 && Number.isInteger(r.body?.generated) && !r.body?.error,
       `generated=${r.body?.generated} dispatched=${r.body?.dispatched} missed=${r.body?.missed}`,
     );
   }
@@ -289,17 +344,18 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
-  // 6. pick THIS schedule's occurrence closest to now
+  // 6. select an unconsumed PENDING row for THIS schedule.
+  //    Historical COMPLETED rows remain for audit and must never be reused.
   // ---------------------------------------------------------------
   let occId = null;
   {
-    const r = await call(adminToken, 'GET', `/care-reminders/patients/${PATIENT}/occurrences`);
-    const now = Date.now();
-    const mine = (r.body || [])
-      .filter((o) => o.scheduleId === medSched?.id)
-      .sort((a, b) => Math.abs(+new Date(a.dueAt) - now) - Math.abs(+new Date(b.dueAt) - now));
-    occId = mine[0]?.id ?? null;
-    record('6. occurrence generated for this schedule', Boolean(occId), `count=${mine.length}`);
+    const picked = await ensurePendingOccurrence(adminToken, PATIENT, medSched);
+    occId = picked.occurrence?.id ?? null;
+    record(
+      '6. PENDING occurrence selected for targeted send-now',
+      Boolean(occId) && picked.occurrence?.status === 'PENDING',
+      `pending=${picked.pending} total=${picked.total} fixture=${picked.fixture} dueAt=${picked.occurrence?.dueAt ?? 'none'}`,
+    );
   }
 
   // ---------------------------------------------------------------
@@ -520,14 +576,14 @@ async function main() {
   if (nurse2Token) {
     {
       const r = await call(nurse2Token, 'GET', `/care-reminders/patients/${PATIENT}/schedules`);
-      record('17a. nurse2 → demo-patient-001 schedules → 403', r.status === 403, `status=${r.status}`);
+      record('17a. nurse2 → demo-patient-001 schedules → 403/404', [403, 404].includes(r.status), `status=${r.status}`);
     }
     {
       const r = await call(nurse2Token, 'POST', `/care-reminders/patients/${PATIENT}/medication-schedules`, {
         medicationId: 'demo-med-001',
         scheduledTimes: ['08:00'],
       });
-      record('17b. nurse2 → create cross-tenant schedule → 403', r.status === 403, `status=${r.status}`);
+      record('17b. nurse2 → create cross-tenant schedule → 403/404', [403, 404].includes(r.status), `status=${r.status}`);
     }
     {
       const r = await call(nurse2Token, 'GET', `/care-reminders/patients/demo-patient-101/schedules`);

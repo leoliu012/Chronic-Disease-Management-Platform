@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "HospitalVisitFeedback_hospitalTenantId_patientId_submittedAt_id" RENAME TO "HospitalVisitFeedback_hospitalTenantId_patientId_submittedA_idx";
