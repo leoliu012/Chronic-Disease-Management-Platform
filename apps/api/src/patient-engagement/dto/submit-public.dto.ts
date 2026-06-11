@@ -1,11 +1,9 @@
 import {
   IsBoolean,
-  IsInt,
   IsNumber,
   IsObject,
   IsOptional,
   IsString,
-  Min,
 } from 'class-validator';
 
 export class IdentityCheckDto {
@@ -31,11 +29,6 @@ export class SubmitPublicQuestionnaireDto {
   answers!: Record<string, unknown>;
 
   @IsOptional()
-  @IsInt()
-  @Min(0)
-  score?: number;
-
-  @IsOptional()
   @IsString()
   note?: string;
 }
@@ -45,8 +38,11 @@ export class SubmitPublicVitalDto {
   @IsString()
   formSessionToken?: string;
 
+  // Optional client echo only. The authoritative metric type comes from the
+  // signed one-time link payload and mismatches are rejected server-side.
+  @IsOptional()
   @IsString()
-  vitalType!: string;
+  vitalType?: string;
 
   @IsOptional()
   @IsNumber()
@@ -60,8 +56,10 @@ export class SubmitPublicVitalDto {
   @IsNumber()
   diastolic?: number;
 
+  // Optional client echo only. The canonical unit comes from the link payload.
+  @IsOptional()
   @IsString()
-  unit!: string;
+  unit?: string;
 
   @IsOptional()
   @IsString()

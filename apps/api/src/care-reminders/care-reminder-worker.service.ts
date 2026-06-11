@@ -767,7 +767,8 @@ export class CareReminderWorkerService
         ...(schedule.payload || {}),
       } as any,
       expiresInHours: 24,
-      requiresIdentityCheck: false,
+      // FormLinkService owns the centralized identity policy. Clinical reminder
+      // workers may not downgrade sensitive forms to anonymous submissions.
       createdBy: null,
     });
 

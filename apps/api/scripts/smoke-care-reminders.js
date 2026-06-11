@@ -89,6 +89,16 @@ function tokenFromLinkUrl(linkUrl) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+async function identitySessionForDemoPatient001(plainToken) {
+  const r = await call('', 'POST', `/public-forms/${plainToken}/identity-check`, {
+    phoneLast4: '0001',
+  });
+  if (![200, 201].includes(r.status) || !r.body?.passed || !r.body?.formSessionToken) {
+    throw new Error(`identity check failed: status=${r.status} body=${JSON.stringify(r.body)}`);
+  }
+  return r.body.formSessionToken;
+}
+
 /** Find an outbound message for a given form link (returns the freshest). */
 async function findLinkMessage(adminToken, patientId, formLinkId) {
   const r = await call(adminToken, 'GET', `/patient-engagement/messages?patientId=${patientId}&pageSize=200`);
@@ -430,9 +440,11 @@ async function main() {
     plainToken = tokenFromLinkUrl(withUrl?.linkUrl);
   }
   if (plainToken) {
+    const formSessionToken = await identitySessionForDemoPatient001(plainToken);
     const submit = await call('', 'POST', `/public-forms/${plainToken}/medication-checkin`, {
       taken: true,
       note: 'smoke v3.1',
+      formSessionToken,
     });
     record('9. medication H5 submit OK', submit.status === 201 && submit.body?.ok === true, `status=${submit.status}`);
 

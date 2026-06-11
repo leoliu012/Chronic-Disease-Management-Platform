@@ -292,9 +292,12 @@ export class CareReminderScheduleService {
       isActive: plan.isActive,
       payload: {
         vitalPlanId: plan.id,
+        monitoringPlanId: plan.id,
         vitalType: plan.vitalType,
+        expectedVitalType: plan.vitalType,
         displayName: plan.displayName,
         unit: plan.unit,
+        canonicalUnit: plan.unit,
       } as Record<string, unknown>,
     };
   }

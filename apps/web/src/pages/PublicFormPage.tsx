@@ -367,6 +367,14 @@ function SuccessPanel({ message }: { message: string }) {
 
 // ----- QuestionnaireForm -----
 
+type QuestionnaireScoringItem = {
+  answerKey: string;
+  label: string;
+  required?: boolean;
+  allowedValues: number[];
+  hints?: string[];
+};
+
 function QuestionnaireForm({
   meta,
   submit,
@@ -378,22 +386,49 @@ function QuestionnaireForm({
 }) {
   const payload = (meta.payload ?? {}) as Record<string, any>;
   const questionnaireType: string = payload.questionnaireType || 'GENERIC';
-  // We accept free-form text answers + slider score so the demo works for any
-  // questionnaire without a backend questionnaire-bank wired up.
-  const [symptomSeverity, setSymptomSeverity] = useState(0); // 0..3
-  const [adherence, setAdherence] = useState(0); // 0..3
-  const [lifestyle, setLifestyle] = useState(0); // 0..3
+  const scoringRule = payload.questionnaireRuleSnapshot?.scoringRule;
+  const items: QuestionnaireScoringItem[] = Array.isArray(scoringRule?.items)
+    ? scoringRule.items.filter(
+        (item: any) =>
+          item &&
+          typeof item.answerKey === 'string' &&
+          typeof item.label === 'string' &&
+          Array.isArray(item.allowedValues) &&
+          item.allowedValues.length > 0,
+      )
+    : [];
+  const [answers, setAnswers] = useState<Record<string, number>>(() =>
+    Object.fromEntries(
+      items.map((item) => [item.answerKey, Number(item.allowedValues[0])]),
+    ),
+  );
   const [note, setNote] = useState('');
 
-  const score = symptomSeverity + adherence + lifestyle;
+  if (!items.length) {
+    return (
+      <section className="pe-public-section">
+        <h2>{questionnaireLabel(questionnaireType)}</h2>
+        <p className="pe-public-error">
+          该问卷链接签发于安全升级前，请联系医院慢病管理团队重新发送。
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="pe-public-section">
       <h2>{questionnaireLabel(questionnaireType)}</h2>
-      <p className="pe-public-hint">请根据近 7 天的实际情况填写。每项选择 0~3 分。</p>
-      <ScoreField label="近一周症状严重程度" value={symptomSeverity} onChange={setSymptomSeverity} hints={['无症状', '偶尔轻微', '反复发作', '持续/明显']} />
-      <ScoreField label="按时服药情况" value={adherence} onChange={setAdherence} hints={['完全按时', '偶尔漏服', '经常漏服', '已停药']} />
-      <ScoreField label="近期生活方式变化" value={lifestyle} onChange={setLifestyle} hints={['正常', '轻微变化', '明显变化', '严重影响日常']} />
+      <p className="pe-public-hint">请根据实际情况填写。问卷评分由医院服务端按照签发时固化的规则计算。</p>
+      {items.map((item) => (
+        <ScoreField
+          key={item.answerKey}
+          label={item.label}
+          value={answers[item.answerKey] ?? Number(item.allowedValues[0])}
+          onChange={(value) => setAnswers((current) => ({ ...current, [item.answerKey]: value }))}
+          values={item.allowedValues}
+          hints={item.hints ?? item.allowedValues.map((value) => String(value))}
+        />
+      ))}
       <label className="pe-public-field">
         <span>其他需要医护知道的情况（选填）</span>
         <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：最近偶有头晕、夜间睡眠差等" />
@@ -404,13 +439,7 @@ function QuestionnaireForm({
         type="button"
         className="pe-public-primary-button"
         disabled={state.kind === 'submitting'}
-        onClick={() =>
-          submit({
-            answers: { symptomSeverity, adherence, lifestyle, note },
-            score,
-            note,
-          })
-        }
+        onClick={() => submit({ answers, note })}
       >
         {state.kind === 'submitting' ? '提交中…' : '提交问卷'}
       </button>
@@ -423,25 +452,27 @@ function ScoreField({
   value,
   onChange,
   hints,
+  values,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   hints: string[];
+  values: number[];
 }) {
   return (
     <div className="pe-public-field pe-public-score-field">
       <span>{label}</span>
       <div className="pe-public-score-options">
-        {hints.map((hint, i) => (
+        {values.map((optionValue, index) => (
           <button
-            key={i}
+            key={optionValue}
             type="button"
-            className={value === i ? 'pe-public-score-option active' : 'pe-public-score-option'}
-            onClick={() => onChange(i)}
+            className={value === optionValue ? 'pe-public-score-option active' : 'pe-public-score-option'}
+            onClick={() => onChange(optionValue)}
           >
-            <strong>{i}</strong>
-            <small>{hint}</small>
+            <strong>{optionValue}</strong>
+            <small>{hints[index] ?? String(optionValue)}</small>
           </button>
         ))}
       </div>
@@ -475,7 +506,8 @@ function VitalRecheckForm({
   state: SubmitState;
 }) {
   const payload = (meta.payload ?? {}) as Record<string, any>;
-  const vitalType: string = payload.vitalType || 'BLOOD_PRESSURE';
+  const vitalType: string = payload.expectedVitalType || payload.vitalType || 'BLOOD_PRESSURE';
+  const canonicalUnit: string = payload.canonicalUnit || payload.unit || defaultUnit(vitalType);
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
   const [value, setValue] = useState('');
@@ -484,17 +516,13 @@ function VitalRecheckForm({
   function handleSubmit() {
     if (vitalType === 'BLOOD_PRESSURE') {
       submit({
-        vitalType: 'BLOOD_PRESSURE',
         systolic: Number(systolic),
         diastolic: Number(diastolic),
-        unit: 'mmHg',
         note,
       });
     } else {
       submit({
-        vitalType,
         value: Number(value),
-        unit: defaultUnit(vitalType),
         note,
       });
     }
@@ -507,7 +535,7 @@ function VitalRecheckForm({
       {vitalType === 'BLOOD_PRESSURE' ? (
         <>
           <label className="pe-public-field">
-            <span>收缩压 (mmHg)</span>
+            <span>收缩压 ({canonicalUnit})</span>
             <input
               type="number"
               inputMode="decimal"
@@ -519,7 +547,7 @@ function VitalRecheckForm({
             />
           </label>
           <label className="pe-public-field">
-            <span>舒张压 (mmHg)</span>
+            <span>舒张压 ({canonicalUnit})</span>
             <input
               type="number"
               inputMode="decimal"
@@ -533,7 +561,7 @@ function VitalRecheckForm({
         </>
       ) : (
         <label className="pe-public-field">
-          <span>{vitalLabel(vitalType)} ({defaultUnit(vitalType)})</span>
+          <span>{vitalLabel(vitalType)} ({canonicalUnit})</span>
           <input
             type="number"
             inputMode="decimal"

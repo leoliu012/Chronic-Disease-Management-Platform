@@ -126,6 +126,14 @@ function formatRuleThreshold(rule: Pick<MatchedRule, 'operator' | 'thresholdValu
   return `${operatorLabelMap[rule.operator] ?? rule.operator} ${rule.thresholdValue} ${rule.unit}`;
 }
 
+function normalizedUnit(value?: string | null) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function unitsEqual(left?: string | null, right?: string | null) {
+  return normalizedUnit(left) !== '' && normalizedUnit(left) === normalizedUnit(right);
+}
+
 function isBloodPressureComponent(type?: string | null) {
   return type === 'SYSTOLIC_BP' || type === 'DIASTOLIC_BP' || type === 'BLOOD_PRESSURE';
 }
@@ -177,6 +185,225 @@ const questionnaireAliases: Record<string, string> = {
 
 function normalizeQuestionnaireType(questionnaireType: string) {
   return questionnaireAliases[questionnaireType] ?? questionnaireType;
+}
+
+type H5QuestionnaireScoringItem = {
+  answerKey: string;
+  label: string;
+  required: boolean;
+  allowedValues: number[];
+  hints: string[];
+  pointsByValue?: Record<string, number>;
+};
+
+type H5QuestionnaireScoringRule = {
+  version: 'H5_SERVER_CALCULATED_V1';
+  calculation: 'SUM_AND_SCALE';
+  items: H5QuestionnaireScoringItem[];
+  rawMinScore: number;
+  rawMaxScore: number;
+  normalizedMinScore: number;
+  normalizedMaxScore: number;
+  allowedExtraFields: string[];
+};
+
+type IssuedQuestionnaireSnapshot = {
+  questionnaireTemplateId: string;
+  questionnaireType: string;
+  ruleVersion: string;
+  scoringRule: H5QuestionnaireScoringRule;
+  riskBands: Prisma.JsonValue | null;
+  followUpPolicies: Array<{
+    riskLevel: RiskLevel;
+    dueWithinHours: number;
+    taskTitle: string;
+  }>;
+  evidenceBasis?: string | null;
+  issuedAt: string;
+};
+
+export type ClinicalQuestionnaireSubmissionEvaluation = ClinicalQuestionnaireRuleEvaluation & {
+  rawScore: number;
+  score: number;
+};
+
+const DEFAULT_H5_SCORE_HINTS = ['无 / 正常', '轻微 / 偶尔', '明显 / 经常', '严重 / 持续'];
+
+function objectOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function prepareH5QuestionnaireScoringRule(value: Prisma.JsonValue | null): H5QuestionnaireScoringRule {
+  const raw = objectOrNull(value);
+  if (!raw) {
+    throw new BadRequestException('问卷 scoringRule 缺失，无法签发患者填写链接');
+  }
+
+  const configuredItems = Array.isArray(raw.items) ? raw.items : [];
+  let items: H5QuestionnaireScoringItem[];
+
+  if (configuredItems.length > 0) {
+    items = configuredItems.map((item, index) => {
+      const row = objectOrNull(item);
+      const answerKey = String(row?.answerKey ?? '').trim();
+      const label = String(row?.label ?? answerKey).trim();
+      const allowedValues = Array.isArray(row?.allowedValues)
+        ? row!.allowedValues.map((candidate) => finiteNumber(candidate)).filter((candidate): candidate is number => candidate !== null)
+        : [];
+      if (!answerKey || !label || allowedValues.length === 0) {
+        throw new BadRequestException(`问卷 scoringRule.items[${index}] 配置不完整`);
+      }
+      if (new Set(allowedValues).size !== allowedValues.length) {
+        throw new BadRequestException(`问卷 scoringRule.items[${index}] allowedValues 存在重复值`);
+      }
+      const rawPoints = objectOrNull(row?.pointsByValue);
+      const pointsByValue = rawPoints
+        ? Object.fromEntries(
+            Object.entries(rawPoints).map(([key, points]) => {
+              const numberPoints = finiteNumber(points);
+              if (numberPoints === null) throw new BadRequestException(`问卷 scoringRule.items[${index}] pointsByValue 非法`);
+              return [key, numberPoints];
+            }),
+          )
+        : undefined;
+      if (
+        pointsByValue &&
+        allowedValues.some((value) => pointsByValue[String(value)] === undefined)
+      ) {
+        throw new BadRequestException(
+          `问卷 scoringRule.items[${index}] pointsByValue 必须覆盖每一个允许答案`,
+        );
+      }
+      return {
+        answerKey,
+        label,
+        required: row?.required !== false,
+        allowedValues,
+        hints: Array.isArray(row?.hints)
+          ? row!.hints.map((hint) => String(hint))
+          : DEFAULT_H5_SCORE_HINTS.slice(0, allowedValues.length),
+        ...(pointsByValue ? { pointsByValue } : {}),
+      };
+    });
+  } else {
+    // v9 initially stored a compact `{ maxScore, fields: string[] }` shape.
+    // Convert that server-side at link issuance into a strict answer contract.
+    // Previously issued links do not get this contract and are rejected by the
+    // submission path, forcing a nurse to resend them.
+    const labels = Array.isArray(raw.fields)
+      ? raw.fields.map((field) => String(field).trim()).filter(Boolean)
+      : [];
+    if (labels.length === 0) {
+      throw new BadRequestException('问卷 scoringRule.fields 缺失，无法生成服务端计分契约');
+    }
+    items = labels.map((label, index) => ({
+      answerKey: `q${index + 1}`,
+      label,
+      required: true,
+      allowedValues: [0, 1, 2, 3],
+      hints: DEFAULT_H5_SCORE_HINTS,
+    }));
+  }
+
+  if (new Set(items.map((item) => item.answerKey)).size !== items.length) {
+    throw new BadRequestException('问卷 scoringRule answerKey 必须唯一');
+  }
+
+  const inferredRawMax = items.reduce((total, item) => {
+    const itemMax = Math.max(...item.allowedValues.map((value) => item.pointsByValue?.[String(value)] ?? value));
+    return total + itemMax;
+  }, 0);
+  const rawMinScore = finiteNumber(raw.rawMinScore) ?? 0;
+  const rawMaxScore = finiteNumber(raw.rawMaxScore) ?? inferredRawMax;
+  const normalizedMinScore = finiteNumber(raw.normalizedMinScore) ?? 0;
+  const normalizedMaxScore = finiteNumber(raw.normalizedMaxScore) ?? finiteNumber(raw.maxScore) ?? rawMaxScore;
+
+  if (rawMaxScore <= rawMinScore || normalizedMaxScore < normalizedMinScore) {
+    throw new BadRequestException('问卷 scoringRule 分值区间非法');
+  }
+
+  return {
+    version: 'H5_SERVER_CALCULATED_V1',
+    calculation: 'SUM_AND_SCALE',
+    items,
+    rawMinScore,
+    rawMaxScore,
+    normalizedMinScore,
+    normalizedMaxScore,
+    allowedExtraFields: Array.isArray(raw.allowedExtraFields)
+      ? raw.allowedExtraFields.map((field) => String(field))
+      : [],
+  };
+}
+
+function parseIssuedQuestionnaireSnapshot(value: unknown): IssuedQuestionnaireSnapshot {
+  const snapshot = objectOrNull(value);
+  const scoringRule = objectOrNull(snapshot?.scoringRule);
+  if (
+    !snapshot ||
+    typeof snapshot.questionnaireTemplateId !== 'string' ||
+    typeof snapshot.ruleVersion !== 'string' ||
+    scoringRule?.version !== 'H5_SERVER_CALCULATED_V1' ||
+    !Array.isArray(scoringRule.items) ||
+    !Array.isArray(snapshot.followUpPolicies)
+  ) {
+    throw new BadRequestException({
+      code: 'QUESTIONNAIRE_LINK_REISSUE_REQUIRED',
+      message: '该问卷链接签发于安全升级前，请联系医院重新发送。',
+    });
+  }
+  return snapshot as unknown as IssuedQuestionnaireSnapshot;
+}
+
+function calculateScoreFromIssuedAnswers(
+  answers: Record<string, unknown>,
+  scoringRule: H5QuestionnaireScoringRule,
+): { rawScore: number; score: number } {
+  const allowedKeys = new Set([
+    ...scoringRule.items.map((item) => item.answerKey),
+    ...scoringRule.allowedExtraFields,
+  ]);
+  const unknownKeys = Object.keys(answers).filter((key) => !allowedKeys.has(key));
+  if (unknownKeys.length) {
+    throw new BadRequestException(`问卷包含未知字段：${unknownKeys.join(', ')}`);
+  }
+
+  let rawScore = 0;
+  for (const item of scoringRule.items) {
+    const value = answers[item.answerKey];
+    if (value === undefined || value === null || value === '') {
+      if (item.required) throw new BadRequestException(`问卷必填项未填写：${item.label}`);
+      continue;
+    }
+    const numericValue = finiteNumber(value);
+    if (numericValue === null || !Number.isInteger(numericValue) || !item.allowedValues.includes(numericValue)) {
+      throw new BadRequestException(`问卷答案超出允许范围：${item.label}`);
+    }
+    const points = item.pointsByValue?.[String(numericValue)] ?? numericValue;
+    if (!Number.isFinite(points)) throw new BadRequestException(`问卷计分映射非法：${item.label}`);
+    rawScore += points;
+  }
+
+  if (rawScore < scoringRule.rawMinScore || rawScore > scoringRule.rawMaxScore) {
+    throw new BadRequestException('问卷原始总分超出规则允许区间');
+  }
+
+  const ratio = (rawScore - scoringRule.rawMinScore) / (scoringRule.rawMaxScore - scoringRule.rawMinScore);
+  const score = Math.round(
+    scoringRule.normalizedMinScore +
+      ratio * (scoringRule.normalizedMaxScore - scoringRule.normalizedMinScore),
+  );
+  if (score < scoringRule.normalizedMinScore || score > scoringRule.normalizedMaxScore) {
+    throw new BadRequestException('问卷标准化总分超出规则允许区间');
+  }
+  return { rawScore, score };
 }
 
 @Injectable()
@@ -427,11 +654,19 @@ export class ClinicalRulesService {
     const normalizedQuestionnaireType = normalizeQuestionnaireType(submittedType);
     const questionnaire = await this.prisma.questionnaireTemplate.findFirst({
       where: { questionnaireType: normalizedQuestionnaireType, isActive: true, template: this.effectiveTemplateWhere() },
-      include: { template: true },
+      include: {
+        template: {
+          include: {
+            followUpPolicies: {
+              where: { isActive: true },
+              orderBy: [{ dueWithinHours: 'asc' }, { createdAt: 'asc' }],
+            },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
     if (!questionnaire) {
-      if (process.env.CLINICAL_RULE_ALLOW_LEGACY_FALLBACK === 'true') return base;
       throw new BadRequestException(`问卷 ${normalizedQuestionnaireType} 尚未配置已生效的版本化规则，已阻止创建未审核问卷链接`);
     }
     return {
@@ -439,11 +674,75 @@ export class ClinicalRulesService {
       questionnaireType: normalizedQuestionnaireType,
       questionnaireRuleSnapshot: {
         questionnaireTemplateId: questionnaire.id,
+        questionnaireType: normalizedQuestionnaireType,
         ruleVersion: questionnaire.template.version,
-        scoringRule: questionnaire.scoringRule,
+        scoringRule: prepareH5QuestionnaireScoringRule(questionnaire.scoringRule),
         riskBands: questionnaire.riskBands,
+        followUpPolicies: questionnaire.template.followUpPolicies.map((policy) => ({
+          riskLevel: policy.riskLevel,
+          dueWithinHours: policy.dueWithinHours,
+          taskTitle: policy.taskTitle,
+        })),
         evidenceBasis: questionnaire.template.evidenceBasis ?? questionnaire.template.riskBasis,
         issuedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  evaluateIssuedQuestionnaireSubmission(args: {
+    questionnaireType: string;
+    answers: Record<string, unknown>;
+    questionnaireRuleSnapshot: unknown;
+  }): ClinicalQuestionnaireSubmissionEvaluation {
+    const snapshot = parseIssuedQuestionnaireSnapshot(args.questionnaireRuleSnapshot);
+    const normalizedQuestionnaireType = normalizeQuestionnaireType(args.questionnaireType);
+    if (snapshot.questionnaireType !== normalizedQuestionnaireType) {
+      throw new BadRequestException('问卷链接中的类型与提交类型不一致');
+    }
+
+    const { rawScore, score } = calculateScoreFromIssuedAnswers(args.answers, snapshot.scoringRule);
+    const bands = parseRiskBands(snapshot.riskBands);
+    const matchedBand = bands
+      .filter((band) => matchesBand(score, band))
+      .sort((a, b) => riskRank[b.riskLevel] - riskRank[a.riskLevel])[0];
+    if (!matchedBand) {
+      throw new BadRequestException(`问卷 ${normalizedQuestionnaireType} 的已签发 riskBands 未覆盖评分 ${score}`);
+    }
+
+    const shouldCreateAlert =
+      matchedBand.shouldCreateAlert ??
+      (matchedBand.riskLevel === RiskLevel.HIGH || matchedBand.riskLevel === RiskLevel.VERY_HIGH);
+    const policy = snapshot.followUpPolicies
+      .filter((item) => item.riskLevel === matchedBand.riskLevel)
+      .sort((a, b) => a.dueWithinHours - b.dueWithinHours)[0];
+    if (shouldCreateAlert && !policy) {
+      throw new BadRequestException(
+        `已签发问卷规则 ${snapshot.ruleVersion} 缺少 ${matchedBand.riskLevel} 随访 SLA，已阻止自动任务创建`,
+      );
+    }
+
+    const evaluatedAt = new Date();
+    return {
+      rawScore,
+      score,
+      riskLevel: matchedBand.riskLevel,
+      riskConclusion: matchedBand.conclusion ?? questionnaireConclusion(matchedBand.riskLevel),
+      shouldCreateAlert,
+      followUpDueWithinHours: policy?.dueWithinHours ?? 0,
+      followUpTaskTitle: policy?.taskTitle ?? `问卷复核：${normalizedQuestionnaireType}`,
+      ruleTrace: {
+        ruleId: snapshot.questionnaireTemplateId,
+        ruleVersion: snapshot.ruleVersion,
+        ruleSnapshot: snapshot,
+        evidenceBasis: snapshot.evidenceBasis,
+        evaluatedAt,
+        inputSnapshot: {
+          questionnaireType: normalizedQuestionnaireType,
+          answers: args.answers,
+          rawScore,
+          score,
+        },
+        matchedConditions: matchedBand,
       },
     };
   }
@@ -458,7 +757,14 @@ export class ClinicalRulesService {
       include: { template: true },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    const matchedRules: MatchedRule[] = rules
+    const compatibleRules = rules.filter((rule) => unitsEqual(rule.unit, dto.unit));
+    if (rules.length > 0 && compatibleRules.length === 0) {
+      throw new BadRequestException({
+        code: 'VITAL_UNIT_MISMATCH',
+        message: `指标 ${dto.type} 的单位不匹配，允许单位：${[...new Set(rules.map((rule) => rule.unit))].join(' / ')}`,
+      });
+    }
+    const matchedRules: MatchedRule[] = compatibleRules
       .map((rule) => ({ id: rule.id, templateId: rule.templateId, templateName: rule.template.templateName, templateVersion: rule.template.version, evidenceBasis: rule.template.evidenceBasis ?? rule.template.riskBasis, diseaseType: rule.template.diseaseType, vitalType: rule.vitalType, displayName: rule.displayName, unit: rule.unit, operator: rule.operator, thresholdValue: rule.thresholdValue, thresholdValueMax: rule.thresholdValueMax, riskLevel: rule.riskLevel, alertTitle: rule.alertTitle, alertDescription: rule.alertDescription, followUpAction: rule.followUpAction }))
       .filter((rule) => matchesOperator(value, rule));
     if (!matchedRules.length) return null;

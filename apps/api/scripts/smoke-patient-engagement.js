@@ -75,6 +75,16 @@ function tokenFromLinkUrl(linkUrl) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+async function identitySessionForDemoPatient001(plainToken) {
+  const r = await call('', 'POST', `/public-forms/${plainToken}/identity-check`, {
+    phoneLast4: '0001',
+  });
+  if (![200, 201].includes(r.status) || !r.body?.passed || !r.body?.formSessionToken) {
+    throw new Error(`identity check failed: status=${r.status} body=${JSON.stringify(r.body)}`);
+  }
+  return r.body.formSessionToken;
+}
+
 async function main() {
   console.log(`\n[smoke patient-engagement v3.2] target = ${API_BASE}\n`);
 
@@ -205,9 +215,10 @@ async function main() {
   // 7. submit questionnaire → detail returns answers/score/riskLevel
   // ---------------------------------------------------------------
   if (plainToken) {
+    const formSessionToken = await identitySessionForDemoPatient001(plainToken);
     const sub = await call('', 'POST', `/public-forms/${plainToken}/questionnaire`, {
       answers: { q1: 1, q2: 2, q3: 1 },
-      score: 4,
+      formSessionToken,
     });
     expect('   submit questionnaire OK', sub.status === 201 && sub.body?.ok === true, `status=${sub.status}`);
 
@@ -236,7 +247,7 @@ async function main() {
   // 7b. duplicate submit blocked (Bug 4 — still holds)
   // ---------------------------------------------------------------
   if (plainToken) {
-    const dup = await call('', 'POST', `/public-forms/${plainToken}/questionnaire`, { answers: { q1: 1 }, score: 4 });
+    const dup = await call('', 'POST', `/public-forms/${plainToken}/questionnaire`, { answers: { q1: 1 } });
     expect(
       '7b. duplicate submit blocked',
       dup.status === 403 && /TOKEN_USED|已提交|已失效/.test(JSON.stringify(dup.body)),

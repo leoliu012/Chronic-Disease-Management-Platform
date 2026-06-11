@@ -44,6 +44,24 @@ type ActionCandidate = {
 
 type CandidateAccumulator = Map<string, ActionCandidate>;
 
+type CarePlanRecalculationContext = {
+  actorType: 'USER' | 'SYSTEM';
+  actorId: string;
+};
+
+const SYSTEM_REFRESH_CONTEXT: CarePlanRecalculationContext = {
+  actorType: 'SYSTEM',
+  actorId: 'SYSTEM_CARE_PLAN_REFRESH',
+};
+
+function earlierOf(existing: Date | null, candidate: Date) {
+  return existing && existing.getTime() <= candidate.getTime() ? existing : candidate;
+}
+
+function jsonChanged(left: unknown, right: unknown) {
+  return JSON.stringify(left) !== JSON.stringify(right);
+}
+
 function daysAgo(days: number, now: Date) {
   return new Date(now.getTime() - days * DAY_MS);
 }
@@ -107,7 +125,7 @@ export class CarePlansService {
       where: { patientId, status: ACTIVE_PLAN },
       orderBy: { createdAt: 'desc' },
     });
-    if (existing) return this.recalculatePlan(existing.id);
+    if (existing) return this.recalculatePlan(existing.id, { actorType: 'USER', actorId: user.id });
 
     const pilotDiseaseTypes = patient.diseaseProfiles
       .map((profile) => profile.diseaseType)
@@ -147,7 +165,7 @@ export class CarePlansService {
       afterData: { patientId, cohort: plan.cohort, policyVersion: POLICY_VERSION },
     });
 
-    return this.recalculatePlan(plan.id);
+    return this.recalculatePlan(plan.id, { actorType: 'USER', actorId: user.id });
   }
 
   async updateStatus(id: string, dto: UpdateCarePlanStatusDto, user: RequestUser) {
@@ -262,7 +280,7 @@ export class CarePlansService {
     let failed = 0;
     for (const plan of plans) {
       try {
-        await this.recalculatePlan(plan.id);
+        await this.recalculatePlan(plan.id, SYSTEM_REFRESH_CONTEXT);
         refreshed += 1;
       } catch {
         failed += 1;
@@ -272,16 +290,16 @@ export class CarePlansService {
   }
 
   async recalculateByPatient(patientId: string, user: RequestUser) {
-    await this.access.assertPatientVisible(user, patientId);
+    await this.access.assertPatientWritable(user, patientId);
     const plan = await this.prisma.carePlan.findFirst({
       where: { patientId, status: ACTIVE_PLAN },
       orderBy: { createdAt: 'desc' },
     });
     if (!plan) throw new NotFoundException('Active CarePlan not found');
-    return this.recalculatePlan(plan.id);
+    return this.recalculatePlan(plan.id, { actorType: 'USER', actorId: user.id });
   }
 
-  async recalculatePlan(planId: string) {
+  async recalculatePlan(planId: string, context: CarePlanRecalculationContext) {
     const now = new Date();
     const plan = await this.prisma.carePlan.findUnique({
       where: { id: planId },
@@ -546,34 +564,55 @@ export class CarePlansService {
 
       for (const candidate of candidates) {
         const activeKey = `${plan.id}:${candidate.actionType}`;
-        await tx.nextBestAction.upsert({
-          where: { activeKey },
-          update: {
-            title: candidate.title,
-            reasonSummary: candidate.reasonSummary,
-            evidence: this.asJson(candidate.evidence),
-            priorityScore: candidate.priorityScore,
-            requiresDoctor: candidate.requiresDoctor,
-            dueAt: hoursFromNow(candidate.dueWithinHours, calculatedAt),
-            expiresAt: hoursFromNow(Math.max(candidate.dueWithinHours * 3, 72), calculatedAt),
-            policyVersion: POLICY_VERSION,
-          },
-          create: {
-            carePlanId: plan.id,
-            patientId,
-            actionType: candidate.actionType,
-            actionKey: candidate.actionType,
-            activeKey,
-            title: candidate.title,
-            reasonSummary: candidate.reasonSummary,
-            evidence: this.asJson(candidate.evidence),
-            priorityScore: candidate.priorityScore,
-            requiresDoctor: candidate.requiresDoctor,
-            dueAt: hoursFromNow(candidate.dueWithinHours, calculatedAt),
-            expiresAt: hoursFromNow(Math.max(candidate.dueWithinHours * 3, 72), calculatedAt),
-            policyVersion: POLICY_VERSION,
-          },
-        });
+        const calculatedDueAt = hoursFromNow(candidate.dueWithinHours, calculatedAt);
+        const calculatedExpiresAt = hoursFromNow(
+          Math.max(candidate.dueWithinHours * 3, 72),
+          calculatedAt,
+        );
+        const evidence = this.asJson(candidate.evidence);
+        const existing = await tx.nextBestAction.findUnique({ where: { activeKey } });
+
+        if (existing) {
+          const evidenceHasChanged = jsonChanged(existing.evidence, candidate.evidence);
+          await tx.nextBestAction.update({
+            where: { id: existing.id },
+            data: {
+              title: candidate.title,
+              reasonSummary: candidate.reasonSummary,
+              evidence,
+              priorityScore: candidate.priorityScore,
+              requiresDoctor: candidate.requiresDoctor,
+              // Periodic refreshes may tighten an SLA, but must never move an
+              // active recommendation's deadline or expiry later.
+              dueAt: earlierOf(existing.dueAt, calculatedDueAt),
+              expiresAt: earlierOf(existing.expiresAt, calculatedExpiresAt),
+              policyVersion: POLICY_VERSION,
+              deadlinePolicyVersion: POLICY_VERSION,
+              ...(evidenceHasChanged ? { lastEvidenceChangedAt: calculatedAt } : {}),
+            },
+          });
+        } else {
+          await tx.nextBestAction.create({
+            data: {
+              carePlanId: plan.id,
+              patientId,
+              actionType: candidate.actionType,
+              actionKey: candidate.actionType,
+              activeKey,
+              title: candidate.title,
+              reasonSummary: candidate.reasonSummary,
+              evidence,
+              priorityScore: candidate.priorityScore,
+              requiresDoctor: candidate.requiresDoctor,
+              dueAt: calculatedDueAt,
+              expiresAt: calculatedExpiresAt,
+              policyVersion: POLICY_VERSION,
+              deadlinePolicyVersion: POLICY_VERSION,
+              firstProposedAt: calculatedAt,
+              lastEvidenceChangedAt: calculatedAt,
+            },
+          });
+        }
       }
 
       await tx.patientRiskStratification.create({
@@ -596,6 +635,25 @@ export class CarePlansService {
           followUpCadence: this.asJson({ policyVersion: POLICY_VERSION, reviewEveryDays: reviewDaysForRisk(riskLevel) }),
           referralStatus: overdueVisitReminders.length ? 'OVERDUE_CONFIRMATION' : visitReminders.length ? 'AWAITING_CONFIRMATION' : 'NONE',
           version: { increment: 1 },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          operatorId: context.actorId,
+          action: context.actorType === 'SYSTEM'
+            ? 'SYSTEM_CARE_PLAN_REFRESH'
+            : 'USER_CARE_PLAN_RECALCULATE',
+          targetType: 'CarePlan',
+          targetId: plan.id,
+          afterData: this.asJson({
+            actorType: context.actorType,
+            patientId,
+            policyVersion: POLICY_VERSION,
+            riskLevel,
+            priorityScore,
+            candidateCount: candidates.length,
+          }),
         },
       });
     });

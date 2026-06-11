@@ -29,6 +29,12 @@ export class FormLinkService {
   private static readonly DEFAULT_EXPIRES_HOURS = 72;
   private static readonly MAX_IDENTITY_FAILURES = 5;
   private static readonly IDENTITY_LOCK_MINUTES = 15;
+  private static readonly IDENTITY_REQUIRED_FORM_TYPES = new Set([
+    'QUESTIONNAIRE',
+    'VITAL_RECHECK',
+    'MEDICATION_CHECKIN',
+    'HOSPITAL_VISIT_CONFIRM',
+  ]);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -51,6 +57,48 @@ export class FormLinkService {
   buildLinkUrl(token: string): string {
     const base = (process.env.PATIENT_ENGAGEMENT_BASE_URL || 'http://localhost:5173').replace(/\/+$/, '');
     return `${base}/wx/form/${token}`;
+  }
+
+  /**
+   * Sensitive H5 forms always require identity verification. Callers may opt
+   * non-clinical notices into verification, but may not downgrade a clinical
+   * write link by explicitly passing false.
+   */
+  requiresIdentityCheckForType(type: string, requested?: boolean): boolean {
+    if (FormLinkService.IDENTITY_REQUIRED_FORM_TYPES.has(type)) return true;
+    return requested ?? false;
+  }
+
+  private prepareVitalRecheckPayload(input: Record<string, unknown> | null | undefined) {
+    const payload = { ...(input ?? {}) };
+    const expectedVitalType = String(
+      payload.expectedVitalType ?? payload.vitalType ?? '',
+    ).trim().toUpperCase();
+    const canonicalUnit = String(
+      payload.canonicalUnit ?? payload.unit ?? '',
+    ).trim();
+    const monitoringPlanId =
+      payload.monitoringPlanId ??
+      payload.vitalPlanId ??
+      (payload.sourceType === 'VITAL' ? payload.sourceId : undefined);
+    const occurrenceId =
+      payload.occurrenceId ??
+      payload.careReminderOccurrenceId;
+
+    if (!expectedVitalType || !canonicalUnit) {
+      throw new BadRequestException({
+        code: 'VITAL_LINK_CONFIGURATION_INVALID',
+        message: '指标复测链接缺少服务端指标类型或标准单位，请重新签发链接。',
+      });
+    }
+
+    return {
+      ...payload,
+      expectedVitalType,
+      canonicalUnit,
+      ...(monitoringPlanId ? { monitoringPlanId } : {}),
+      ...(occurrenceId ? { occurrenceId } : {}),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -76,7 +124,9 @@ export class FormLinkService {
     const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
     const payload = input.type === 'QUESTIONNAIRE'
       ? await this.clinicalRules.prepareQuestionnaireLinkPayload(input.payload)
-      : input.payload;
+      : input.type === 'VITAL_RECHECK'
+        ? this.prepareVitalRecheckPayload(input.payload)
+        : input.payload;
 
     const formLink = await this.prisma.patientFormLink.create({
       data: {
@@ -91,7 +141,7 @@ export class FormLinkService {
         payload: (payload as any) ?? undefined,
         expiresAt,
         maxSubmit: input.maxSubmit ?? 1,
-        requiresIdentityCheck: input.requiresIdentityCheck ?? false,
+        requiresIdentityCheck: this.requiresIdentityCheckForType(input.type, input.requiresIdentityCheck),
         createdBy: input.createdBy ?? undefined,
         status: 'ACTIVE',
       },

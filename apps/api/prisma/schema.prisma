@@ -255,6 +255,9 @@ model VitalRecord {
   value       Float
   unit        String
   measuredAt  DateTime
+  // Server receipt timestamp. Patient-entered measuredAt is clinically useful
+  // but must never be the only ordering/audit timestamp for public H5 writes.
+  receivedAt  DateTime   @default(now())
   dataSource  DataSource @default(MINI_PROGRAM)
   isAbnormal  Boolean    @default(false)
   note        String?
@@ -267,6 +270,7 @@ model VitalRecord {
   monitoringPlan VitalMonitoringPlan? @relation(fields: [monitoringPlanId], references: [id])
 
   @@index([patientId, measuredAt])
+  @@index([patientId, receivedAt])
   @@index([patientId, type, measuredAt])
   @@index([monitoringPlanId, measuredAt])
   @@index([isAbnormal, measuredAt])
@@ -891,6 +895,11 @@ model NextBestAction {
   dismissReason  String?
   expiresAt      DateTime?
   policyVersion  String
+  // SLA anchors are immutable for an active recommendation. Periodic refreshes
+  // may shorten a deadline when risk escalates, but must never push it later.
+  firstProposedAt       DateTime @default(now())
+  lastEvidenceChangedAt DateTime @default(now())
+  deadlinePolicyVersion String   @default("CARDIOMETABOLIC_PILOT_V1")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

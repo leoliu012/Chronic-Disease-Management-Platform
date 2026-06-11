@@ -166,11 +166,10 @@ export class PatientEngagementService {
       throw new BadRequestException('该患者尚未归属任何医院 (hospitalTenantId 为空), 无法创建随访链接.');
     }
 
-    const requiresIdentityCheck =
-      input.requiresIdentityCheck ??
-      (input.type === 'VITAL_RECHECK' ||
-        input.type === 'MEDICATION_CHECKIN' ||
-        input.type === 'HOSPITAL_VISIT_CONFIRM');
+    const requiresIdentityCheck = this.formLink.requiresIdentityCheckForType(
+      input.type,
+      input.requiresIdentityCheck,
+    );
 
     const { formLink, token, linkUrl } = await this.formLink.create({
       hospitalTenantId: patient.hospitalTenantId,
