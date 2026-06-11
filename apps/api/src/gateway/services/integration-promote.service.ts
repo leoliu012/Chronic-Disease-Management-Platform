@@ -334,7 +334,7 @@ export class IntegrationPromoteService {
     const normalized = this.unwrapNormalized(record);
     const ident = normalized.patient ?? {};
     const payload = normalized.payload ?? {};
-    const localPatient = await this.resolveLocalPatient(ident);
+    const localPatient = await this.resolveLocalPatient(record.source.hospitalTenantId, ident);
 
     // promotionMessage 形如 "[REASON] 人类可读说明"，把两段拆开。
     let reason: ConflictReason = 'UNKNOWN';
@@ -559,6 +559,7 @@ export class IntegrationPromoteService {
   ): Promise<DispatchSuccess> {
     const normalized = this.unwrapNormalized(record);
     const patientIdent = normalized.patient ?? {};
+    const hospitalTenantId = await this.requireSourceTenant(record.sourceId);
     let payload = normalized.payload ?? {};
 
     // gateway-production-hardening:
@@ -591,21 +592,21 @@ export class IntegrationPromoteService {
 
     switch (record.externalRecordType as GatewayResourceType) {
       case GATEWAY_RESOURCE.PATIENT:
-        return this.promotePatient(patientIdent, payload, options);
+        return this.promotePatient(hospitalTenantId, patientIdent, payload, options);
       case GATEWAY_RESOURCE.DIAGNOSIS:
-        return this.promoteDiagnosis(patientIdent, payload, options);
+        return this.promoteDiagnosis(hospitalTenantId, patientIdent, payload, options);
       case GATEWAY_RESOURCE.OBSERVATION:
-        return this.promoteObservation(patientIdent, payload, record, options);
+        return this.promoteObservation(hospitalTenantId, patientIdent, payload, record, options);
       case GATEWAY_RESOURCE.MEDICATION:
-        return this.promoteMedication(patientIdent, payload, record, options);
+        return this.promoteMedication(hospitalTenantId, patientIdent, payload, record, options);
       case GATEWAY_RESOURCE.ENCOUNTER:
-        return this.promoteEncounter(patientIdent, payload, record, options, false);
+        return this.promoteEncounter(hospitalTenantId, patientIdent, payload, record, options, false);
       case GATEWAY_RESOURCE.DISCHARGE:
-        return this.promoteEncounter(patientIdent, payload, record, options, true);
+        return this.promoteEncounter(hospitalTenantId, patientIdent, payload, record, options, true);
       case GATEWAY_RESOURCE.DOCUMENT:
-        return this.promoteDocument(patientIdent, payload, record, options);
+        return this.promoteDocument(hospitalTenantId, patientIdent, payload, record, options);
       case GATEWAY_RESOURCE.EXAM_REPORT:
-        return this.promoteExamReport(patientIdent, payload, record, options);
+        return this.promoteExamReport(hospitalTenantId, patientIdent, payload, record, options);
       default:
         throw new PromotionUnsupportedError(record.externalRecordType);
     }
@@ -670,38 +671,72 @@ export class IntegrationPromoteService {
   /*  Patient 解析（所有非 PATIENT 资源 promote 前都要先找到对应的本地 Patient）  */
   /* ------------------------------------------------------------------------ */
 
-  private async resolveLocalPatient(ident: PatientIdentifier) {
+  private async requireSourceTenant(sourceId: string) {
+    const source = await this.prisma.integrationSource.findUnique({
+      where: { id: sourceId },
+      select: { hospitalTenantId: true },
+    });
+    if (!source?.hospitalTenantId) {
+      throw new PromotionConflictError(
+        'MISSING_REQUIRED_FIELDS',
+        `IntegrationSource ${sourceId} 缺少医院归属，禁止 promote。`,
+      );
+    }
+    return source.hospitalTenantId;
+  }
+
+  private async resolveLocalPatient(
+    hospitalTenantId: string,
+    ident: PatientIdentifier,
+  ) {
     if (ident?.hospitalPatientId) {
       const byHpid = await this.prisma.patient.findUnique({
-        where: { hospitalPatientId: ident.hospitalPatientId },
+        where: {
+          hospitalTenantId_hospitalPatientId: {
+            hospitalTenantId,
+            hospitalPatientId: ident.hospitalPatientId,
+          },
+        },
       });
       if (byHpid) return byHpid;
     }
     if (ident?.idCardNo) {
-      const byId = await this.prisma.patient.findFirst({ where: { idCardNo: ident.idCardNo } });
+      const byId = await this.prisma.patient.findFirst({
+        where: { hospitalTenantId, idCardNo: ident.idCardNo },
+      });
       if (byId) return byId;
     }
     if (ident?.phone) {
-      const byPhone = await this.prisma.patient.findFirst({ where: { phone: ident.phone } });
+      const byPhone = await this.prisma.patient.findFirst({
+        where: { hospitalTenantId, phone: ident.phone },
+      });
       if (byPhone) return byPhone;
     }
     if (ident?.externalPatientId) {
-      // FHIR / HIS 给的外部主键，最后兜底当作 hospitalPatientId 试一次
+      // FHIR / HIS 给的外部主键，最后兜底当作 hospitalPatientId 试一次。
       const byExt = await this.prisma.patient.findUnique({
-        where: { hospitalPatientId: ident.externalPatientId },
+        where: {
+          hospitalTenantId_hospitalPatientId: {
+            hospitalTenantId,
+            hospitalPatientId: ident.externalPatientId,
+          },
+        },
       });
       if (byExt) return byExt;
     }
     return null;
   }
 
-  private requirePatient(ident: PatientIdentifier) {
-    return this.resolveLocalPatient(ident).then((p) => {
-      if (p) return p;
+  private requirePatient(
+    hospitalTenantId: string,
+    ident: PatientIdentifier,
+  ) {
+    return this.resolveLocalPatient(hospitalTenantId, ident).then((patient) => {
+      if (patient) return patient;
       throw new PromotionConflictError(
         'PATIENT_NOT_FOUND',
-        `本地未找到对应患者（hospitalPatientId=${ident?.hospitalPatientId ?? '空'} / idCard=${this.maskIdCard(ident?.idCardNo)} / phone=${this.maskPhone(ident?.phone)}）。请先 promote 该患者的 PATIENT 事件，或在【患者档案】里手工建档后再重试。`,
-        { ident },
+        `本院未找到对应患者（hospitalPatientId=${ident?.hospitalPatientId ?? '空'} / idCard=${this.maskIdCard(ident?.idCardNo)} / phone=${this.maskPhone(ident?.phone)}）。请先 promote 该患者的 PATIENT 事件，或在【患者档案】里手工建档后再重试。`,
+        { hospitalTenantId, ident },
       );
     });
   }
@@ -722,6 +757,7 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promotePatient(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     options: PromoteOptions,
@@ -741,7 +777,12 @@ export class IntegrationPromoteService {
     const address = (payload['address'] as string | undefined) ?? undefined;
 
     const existing = await this.prisma.patient.findUnique({
-      where: { hospitalPatientId },
+      where: {
+        hospitalTenantId_hospitalPatientId: {
+          hospitalTenantId,
+          hospitalPatientId,
+        },
+      },
     });
 
     if (existing) {
@@ -786,6 +827,7 @@ export class IntegrationPromoteService {
 
     const created = await this.prisma.patient.create({
       data: {
+        hospitalTenantId,
         hospitalPatientId,
         name,
         gender: gender ?? Gender.UNKNOWN,
@@ -807,11 +849,12 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promoteDiagnosis(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     _options: PromoteOptions,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const icdCode =
       (payload['icdCode'] as string | undefined) ??
       (payload['diagnosisIcd'] as string | undefined) ??
@@ -873,12 +916,13 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promoteObservation(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
     _options: PromoteOptions,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const dataSource = this.coerceObservationDataSource(payload);
 
     // OBSERVATION 既可能是 LIS 检验值，也可能是病房体征 / FHIR Observation。
@@ -944,12 +988,13 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promoteMedication(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
     _options: PromoteOptions,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const medicationName =
       (payload['drugName'] as string | undefined) ??
       (payload['medicationName'] as string | undefined) ??
@@ -1006,13 +1051,14 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promoteEncounter(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
     options: PromoteOptions,
     isDischarge: boolean,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const visitTime =
       this.coerceDate(payload['dischargeTime']) ??
       this.coerceDate(payload['startedAt']) ??
@@ -1116,12 +1162,13 @@ export class IntegrationPromoteService {
   /* ------------------------------------------------------------------------ */
 
   private async promoteDocument(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
     _options: PromoteOptions,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const created = await this.prisma.medicalRecordSummary.create({
       data: {
         patientId: patient.id,
@@ -1161,12 +1208,13 @@ export class IntegrationPromoteService {
    * IntegrationSyncRecord.externalRecordId（即上游 eventId）。
    */
   private async promoteExamReport(
+    hospitalTenantId: string,
     ident: PatientIdentifier,
     payload: Record<string, unknown>,
     record: IntegrationSyncRecord,
     _options: PromoteOptions,
   ): Promise<DispatchSuccess> {
-    const patient = await this.requirePatient(ident);
+    const patient = await this.requirePatient(hospitalTenantId, ident);
     const examType = (payload['examType'] as string | undefined) ?? '';
     const examName = (payload['examName'] as string | undefined) ?? '';
     if (!examType || !examName) {

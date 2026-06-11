@@ -19,8 +19,9 @@ function getIpAddress(request: RequestWithUser) {
     : forwardedFor || request.socket.remoteAddress)?.toString();
 }
 
-// IntegrationSource currently has no hospitalTenantId mapping. Keep global
-// integration metadata ADMIN-only until sources are explicitly tenant-bound.
+// Integration sources are explicitly tenant-bound. The current integration
+// center remains ADMIN-only; future platform-admin views can add cross-tenant
+// aggregation as a separate, audited endpoint.
 @Controller('integrations')
 export class IntegrationsController {
   constructor(

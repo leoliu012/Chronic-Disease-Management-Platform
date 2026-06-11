@@ -1,8 +1,11 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import {
   AlertStatus,
   DiseaseType,
@@ -62,6 +65,24 @@ function jsonChanged(left: unknown, right: unknown) {
   return JSON.stringify(left) !== JSON.stringify(right);
 }
 
+function stableJson(value: unknown): string {
+  if (value instanceof Date) return JSON.stringify(value.toISOString());
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function sha256(value: unknown): string {
+  return createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
 function daysAgo(days: number, now: Date) {
   return new Date(now.getTime() - days * DAY_MS);
 }
@@ -103,6 +124,8 @@ function mergeCandidate(
 
 @Injectable()
 export class CarePlansService {
+  private readonly logger = new Logger(CarePlansService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: ClinicalAccessScopeService,
@@ -272,21 +295,39 @@ export class CarePlansService {
     const { enrolled } = await this.ensurePilotPlans(limit);
     const plans = await this.prisma.carePlan.findMany({
       where: { status: ACTIVE_PLAN },
-      select: { id: true },
+      select: { id: true, patientId: true, version: true },
       orderBy: { updatedAt: 'asc' },
       take: Math.min(Math.max(limit, 1), 2000),
     });
     let refreshed = 0;
+    let unchanged = 0;
     let failed = 0;
+    const failedPatientIds: string[] = [];
+    const errorSummaries: Array<{ patientId: string; planId: string; error: string }> = [];
+
     for (const plan of plans) {
       try {
-        await this.recalculatePlan(plan.id, SYSTEM_REFRESH_CONTEXT);
-        refreshed += 1;
-      } catch {
+        const result = await this.recalculatePlan(plan.id, SYSTEM_REFRESH_CONTEXT);
+        if (result?.version === plan.version) unchanged += 1;
+        else refreshed += 1;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         failed += 1;
+        failedPatientIds.push(plan.patientId);
+        errorSummaries.push({ patientId: plan.patientId, planId: plan.id, error: message.slice(0, 500) });
+        this.logger.error(`care-plan refresh failed patient=${plan.patientId} plan=${plan.id}: ${message}`);
       }
     }
-    return { enrolled, refreshed, failed, policyVersion: POLICY_VERSION };
+
+    return {
+      enrolled,
+      refreshed,
+      unchanged,
+      failed,
+      failedPatientIds,
+      errorSummaries,
+      policyVersion: POLICY_VERSION,
+    };
   }
 
   async recalculateByPatient(patientId: string, user: RequestUser) {
@@ -548,8 +589,57 @@ export class CarePlansService {
     const nextReviewAt = new Date(calculatedAt.getTime() + reviewDaysForRisk(riskLevel) * DAY_MS);
     const candidates = [...actions.values()];
     const candidateKeys = candidates.map((candidate) => `${plan.id}:${candidate.actionType}`);
+    const snapshotHash = sha256({
+      policyVersion: POLICY_VERSION,
+      riskLevel,
+      priorityScore,
+      stratificationReasons,
+      candidates: candidates
+        .map((candidate) => ({
+          actionType: candidate.actionType,
+          title: candidate.title,
+          reasonSummary: candidate.reasonSummary,
+          evidence: candidate.evidence,
+          priorityScore: candidate.priorityScore,
+          requiresDoctor: candidate.requiresDoctor,
+          dueWithinHours: candidate.dueWithinHours,
+        }))
+        .sort((left, right) => left.actionType.localeCompare(right.actionType)),
+    });
+
+    if (plan.currentSnapshotHash === snapshotHash) {
+      return this.prisma.carePlan.findUnique({
+        where: { id: plan.id },
+        include: {
+          patient: true,
+          riskStratifications: { orderBy: { calculatedAt: 'desc' }, take: 5 },
+          nextBestActions: { where: { status: PROPOSED }, orderBy: [{ priorityScore: 'desc' }, { dueAt: 'asc' }] },
+        },
+      });
+    }
 
     await this.prisma.$transaction(async (tx) => {
+      // Atomic snapshot claim: concurrent manual recalculations with identical
+      // evidence must not both append history or increment CarePlan.version.
+      const claimedPlan = await tx.carePlan.updateMany({
+        where: {
+          id: plan.id,
+          OR: [
+            { currentSnapshotHash: null },
+            { currentSnapshotHash: { not: snapshotHash } },
+          ],
+        },
+        data: {
+          stratificationLevel: riskLevel,
+          nextReviewAt,
+          followUpCadence: this.asJson({ policyVersion: POLICY_VERSION, reviewEveryDays: reviewDaysForRisk(riskLevel) }),
+          referralStatus: overdueVisitReminders.length ? 'OVERDUE_CONFIRMATION' : visitReminders.length ? 'AWAITING_CONFIRMATION' : 'NONE',
+          currentSnapshotHash: snapshotHash,
+          version: { increment: 1 },
+        },
+      });
+      if (claimedPlan.count !== 1) return;
+
       await tx.nextBestAction.updateMany({
         where: {
           carePlanId: plan.id,
@@ -615,26 +705,23 @@ export class CarePlansService {
         }
       }
 
-      await tx.patientRiskStratification.create({
-        data: {
+      await tx.patientRiskStratification.upsert({
+        where: {
+          carePlanId_snapshotHash: {
+            carePlanId: plan.id,
+            snapshotHash,
+          },
+        },
+        update: {},
+        create: {
           carePlanId: plan.id,
           patientId,
           riskLevel,
           priorityScore,
           reasons: this.asJson(stratificationReasons),
           policyVersion: POLICY_VERSION,
+          snapshotHash,
           calculatedAt,
-        },
-      });
-
-      await tx.carePlan.update({
-        where: { id: plan.id },
-        data: {
-          stratificationLevel: riskLevel,
-          nextReviewAt,
-          followUpCadence: this.asJson({ policyVersion: POLICY_VERSION, reviewEveryDays: reviewDaysForRisk(riskLevel) }),
-          referralStatus: overdueVisitReminders.length ? 'OVERDUE_CONFIRMATION' : visitReminders.length ? 'AWAITING_CONFIRMATION' : 'NONE',
-          version: { increment: 1 },
         },
       });
 
@@ -652,6 +739,7 @@ export class CarePlansService {
             policyVersion: POLICY_VERSION,
             riskLevel,
             priorityScore,
+            snapshotHash,
             candidateCount: candidates.length,
           }),
         },
@@ -672,59 +760,103 @@ export class CarePlansService {
     const action = await this.prisma.nextBestAction.findUnique({ where: { id } });
     if (!action) throw new NotFoundException('NextBestAction not found');
     await this.access.assertPatientWritable(user, action.patientId);
-    if (!['PROPOSED', 'ACCEPTED'].includes(action.status)) {
-      throw new BadRequestException('Only active recommendations can create a task');
-    }
-    if (action.linkedTaskId) {
-      return this.prisma.task.findUnique({ where: { id: action.linkedTaskId } });
-    }
 
     const assigneeId = await this.access.resolveTaskAssignee(user, action.patientId);
-    const task = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existingBySource = await tx.task.findUnique({
+        where: { sourceNextBestActionId: id },
+      });
+      if (existingBySource) {
+        await tx.nextBestAction.updateMany({
+          where: { id, linkedTaskId: null },
+          data: {
+            status: 'ACCEPTED',
+            activeKey: null,
+            linkedTaskId: existingBySource.id,
+            acceptedBy: user.id,
+            acceptedAt: new Date(),
+          },
+        });
+        return { task: existingBySource, created: false };
+      }
+
+      const current = await tx.nextBestAction.findUnique({ where: { id } });
+      if (!current) throw new NotFoundException('NextBestAction not found');
+      if (current.linkedTaskId) {
+        const linked = await tx.task.findUnique({ where: { id: current.linkedTaskId } });
+        if (linked) return { task: linked, created: false };
+      }
+      if (!['PROPOSED', 'ACCEPTED'].includes(current.status)) {
+        throw new BadRequestException('Only active recommendations can create a task');
+      }
+
+      // Atomic claim. Only one concurrent request may progress to task creation.
+      const claimed = await tx.nextBestAction.updateMany({
+        where: {
+          id,
+          linkedTaskId: null,
+          status: { in: ['PROPOSED', 'ACCEPTED'] },
+        },
+        data: {
+          status: 'ACCEPTING',
+          activeKey: null,
+          acceptedBy: user.id,
+          acceptedAt: new Date(),
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('NextBestAction is already being accepted');
+      }
+
       const created = await tx.task.create({
         data: {
-          patientId: action.patientId,
-          title: action.title,
-          type: `CARE_PLAN_${action.actionType}`,
+          sourceNextBestActionId: id,
+          patientId: current.patientId,
+          title: current.title,
+          type: `CARE_PLAN_${current.actionType}`,
           status: TaskStatus.PENDING,
-          dueAt: action.dueAt ?? undefined,
+          dueAt: current.dueAt ?? undefined,
           assigneeId,
-          priority: action.priorityScore >= 50 ? 0 : action.priorityScore >= 30 ? 1 : 2,
+          priority: current.priorityScore >= 50 ? 0 : current.priorityScore >= 30 ? 1 : 2,
         },
       });
       await tx.nextBestAction.update({
-        where: { id: action.id },
+        where: { id },
         data: {
           status: 'ACCEPTED',
           activeKey: null,
           linkedTaskId: created.id,
-          acceptedBy: user.id,
-          acceptedAt: new Date(),
         },
       });
       await tx.taskProcessingEvent.create({
         data: {
           taskId: created.id,
-          patientId: action.patientId,
+          patientId: current.patientId,
           eventType: 'CREATED_FROM_NEXT_BEST_ACTION',
           title: '由患者级分层建议生成处置任务',
-          description: action.reasonSummary,
+          description: current.reasonSummary,
           sourceType: 'NextBestAction',
-          sourceId: action.id,
+          sourceId: id,
           operatorId: user.id,
         },
       });
-      return created;
+      return { task: created, created: true };
     });
 
-    await this.audit.record({
-      user,
-      action: 'CREATE_TASK_FROM_NEXT_BEST_ACTION',
-      targetType: 'NextBestAction',
-      targetId: action.id,
-      afterData: { patientId: action.patientId, taskId: task.id, actionType: action.actionType },
-    });
-    return task;
+    if (result.created) {
+      await this.audit.record({
+        user,
+        action: 'CREATE_TASK_FROM_NEXT_BEST_ACTION',
+        targetType: 'NextBestAction',
+        targetId: id,
+        afterData: {
+          patientId: action.patientId,
+          taskId: result.task.id,
+          actionType: action.actionType,
+        },
+      });
+    }
+    return result.task;
   }
 
   async dismissAction(id: string, reason: string, user: RequestUser) {

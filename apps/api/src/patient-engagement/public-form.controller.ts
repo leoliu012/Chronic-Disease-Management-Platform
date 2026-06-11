@@ -911,7 +911,7 @@ export class PublicFormController {
       // v3.2: structured patient 到院反馈 (distinct from the nurse-side followUp).
       const feedback = await tx.hospitalVisitFeedback.create({
         data: {
-          hospitalTenantId: formLink.hospitalTenantId ?? '',
+          hospitalTenantId: formLink.hospitalTenantId,
           patientId: formLink.patientId,
           formLinkId: formLink.id,
           hospitalVisitReminderId: reminderId ?? undefined,

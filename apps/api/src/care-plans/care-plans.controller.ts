@@ -56,6 +56,12 @@ export class CarePlansController {
     return this.carePlans.recalculateByPatient(patientId, user);
   }
 
+  @Get('refresh-worker/status')
+  @Roles(UserRole.ADMIN)
+  refreshWorkerStatus() {
+    return this.worker.getStatus();
+  }
+
   @Audit({ action: 'REFRESH_ACTIVE_CARE_PLANS', target: 'CarePlan' })
   @Post('refresh-active')
   @Roles(UserRole.ADMIN)

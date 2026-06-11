@@ -297,13 +297,16 @@ export class ChronicLeadsService {
       (dto.overrideHospitalPatientId ?? before.hospitalPatientId ?? '').trim() || undefined;
 
     // 防止重复建档：如果 hospitalPatientId 已存在于 Patient 表，直接复用而不是抛错。
-    let patient = hospitalPatientId
-      ? await this.prisma.patient.findUnique({ where: { hospitalPatientId } })
+    const patient = hospitalPatientId
+      ? await this.prisma.patient.findUnique({
+          where: {
+            hospitalTenantId_hospitalPatientId: {
+              hospitalTenantId,
+              hospitalPatientId,
+            },
+          },
+        })
       : null;
-
-    if (patient?.hospitalTenantId && patient.hospitalTenantId !== hospitalTenantId) {
-      throw new ForbiddenException('该院内患者号已归属其他医院，禁止跨院复用患者档案');
-    }
 
     const now = new Date();
 
@@ -321,11 +324,6 @@ export class ChronicLeadsService {
             phone,
             idCardNo: before.idCardNo ?? undefined,
           },
-        });
-      } else if (!createdPatient.hospitalTenantId) {
-        createdPatient = await tx.patient.update({
-          where: { id: createdPatient.id },
-          data: { hospitalTenantId },
         });
       }
 

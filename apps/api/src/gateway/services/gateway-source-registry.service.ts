@@ -61,15 +61,23 @@ export class GatewaySourceRegistryService implements OnModuleInit {
   }
 
   async seedAll(): Promise<void> {
+    const hospitalTenantId = await this.resolveLocalHospitalTenantId();
     for (const def of SOURCE_DEFINITIONS) {
       const source = await this.prisma.integrationSource.upsert({
-        where: { code: def.code },
+        where: {
+          hospitalTenantId_code: {
+            hospitalTenantId,
+            code: def.code,
+          },
+        },
         update: {
+          hospitalTenantId,
           name: def.name,
           systemType: def.systemType,
           description: def.description,
         },
         create: {
+          hospitalTenantId,
           code: def.code,
           name: def.name,
           systemType: def.systemType,
@@ -90,7 +98,15 @@ export class GatewaySourceRegistryService implements OnModuleInit {
     const cached = this.cache.get(code);
     if (cached) return cached;
 
-    const fromDb = await this.prisma.integrationSource.findUnique({ where: { code } });
+    const hospitalTenantId = await this.resolveLocalHospitalTenantId();
+    const fromDb = await this.prisma.integrationSource.findUnique({
+      where: {
+        hospitalTenantId_code: {
+          hospitalTenantId,
+          code,
+        },
+      },
+    });
     if (fromDb) {
       this.cache.set(code, fromDb);
       return fromDb;
@@ -102,6 +118,35 @@ export class GatewaySourceRegistryService implements OnModuleInit {
       throw new Error(`Gateway source not found for channel ${channel}`);
     }
     return refreshed;
+  }
+
+
+  private async resolveLocalHospitalTenantId(): Promise<string> {
+    const configured = (process.env.LOCAL_HOSPITAL_TENANT_ID ?? '').trim();
+    if (configured) {
+      const tenant = await this.prisma.hospitalTenant.findUnique({
+        where: { id: configured },
+        select: { id: true, isActive: true },
+      });
+      if (!tenant?.isActive) {
+        throw new Error(
+          `LOCAL_HOSPITAL_TENANT_ID=${configured} does not reference an active HospitalTenant`,
+        );
+      }
+      return tenant.id;
+    }
+
+    const tenants = await this.prisma.hospitalTenant.findMany({
+      where: { isActive: true },
+      select: { id: true },
+      take: 2,
+    });
+    if (tenants.length !== 1) {
+      throw new Error(
+        'Gateway source registry requires LOCAL_HOSPITAL_TENANT_ID when active tenant count is not exactly one',
+      );
+    }
+    return tenants[0].id;
   }
 
   private channelToCode(channel: GatewayChannel): string {

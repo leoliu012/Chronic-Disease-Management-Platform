@@ -354,22 +354,57 @@ const integrationMappings = [
   ['PHARMACY_DEMO', 'MedicationRecord', 'FREQUENCY', 'frequency', '频次', true],
 ];
 
+async function ensurePrimaryDemoTenant() {
+  return prisma.hospitalTenant.upsert({
+    where: { code: 'demo-hospital' },
+    update: {
+      name: '某某市人民医院慢病中心',
+      displayName: '某某市人民医院 · 慢病管理中心',
+      isActive: true,
+    },
+    create: {
+      id: 'demo-tenant-001',
+      code: 'demo-hospital',
+      name: '某某市人民医院慢病中心',
+      displayName: '某某市人民医院 · 慢病管理中心',
+      isActive: true,
+    },
+  });
+}
+
 async function seedIntegrations() {
+  const tenant = await ensurePrimaryDemoTenant();
   for (const source of integrationSources) {
     await prisma.integrationSource.upsert({
-      where: { code: source.code },
+      where: {
+        hospitalTenantId_code: {
+          hospitalTenantId: tenant.id,
+          code: source.code,
+        },
+      },
       update: {
+        hospitalTenantId: tenant.id,
         name: source.name,
         systemType: source.systemType,
         description: source.description,
         isEnabled: true,
       },
-      create: source,
+      create: {
+        ...source,
+        hospitalTenantId: tenant.id,
+      },
     });
   }
 
   for (const [sourceCode, targetModel, externalField, localField, displayName, isRequired] of integrationMappings) {
-    const source = await prisma.integrationSource.findUnique({ where: { code: sourceCode } });
+    const source = await prisma.integrationSource.findUnique({
+      where: {
+        hospitalTenantId_code: {
+          hospitalTenantId: tenant.id,
+          code: sourceCode,
+        },
+      },
+    });
     if (!source) continue;
 
     await prisma.integrationFieldMapping.upsert({
@@ -1720,10 +1755,17 @@ const HOSPITAL_RECORD_DEMO_EXTERNAL_IDS = [
  * 但 seed-all.js 是脱离 NestJS 的脚本, 那段 init 不会跑, 所以这里手动复刻。
  */
 async function getOrSeedGatewayHisEventSource() {
+  const tenant = await ensurePrimaryDemoTenant();
   return prisma.integrationSource.upsert({
-    where: { code: GATEWAY_SOURCE_CODE_HIS_EVENT_REST },
-    update: {},
+    where: {
+      hospitalTenantId_code: {
+        hospitalTenantId: tenant.id,
+        code: GATEWAY_SOURCE_CODE_HIS_EVENT_REST,
+      },
+    },
+    update: { hospitalTenantId: tenant.id },
     create: {
+      hospitalTenantId: tenant.id,
       code: GATEWAY_SOURCE_CODE_HIS_EVENT_REST,
       name: '数据接入网关 - 简化 HIS 事件 REST',
       systemType: IntegrationSystemType.HIS,
@@ -2078,7 +2120,7 @@ async function seedClinicalDemo() {
   ]);
 
   for (const patient of demoPatients) {
-    await prisma.patient.create({ data: patient });
+    await prisma.patient.create({ data: { ...patient, hospitalTenantId: 'demo-tenant-001' } });
   }
 
   for (const [index, seed] of profileSeeds.entries()) {
@@ -2247,28 +2289,11 @@ async function seedPatientEngagement() {
     return cryptoLib.createHash('sha256').update(token, 'utf8').digest('hex');
   }
 
-  const tenant = await prisma.hospitalTenant.upsert({
-    where: { code: 'demo-hospital' },
-    update: {
-      name: '某某市人民医院慢病中心',
-      displayName: '某某市人民医院 · 慢病管理中心',
-      isActive: true,
-    },
-    create: {
-      id: 'demo-tenant-001',
-      code: 'demo-hospital',
-      name: '某某市人民医院慢病中心',
-      displayName: '某某市人民医院 · 慢病管理中心',
-      isActive: true,
-    },
-  });
+  const tenant = await ensurePrimaryDemoTenant();
 
-  // Backfill users / patients that don't yet have a tenant.
+  // Users remain nullable for platform administrators; clinical patients are
+  // tenant-required as of v9.2 and are created with an explicit tenant.
   await prisma.user.updateMany({
-    where: { hospitalTenantId: null },
-    data: { hospitalTenantId: tenant.id },
-  });
-  await prisma.patient.updateMany({
     where: { hospitalTenantId: null },
     data: { hospitalTenantId: tenant.id },
   });
@@ -2831,6 +2856,7 @@ async function seedCareReminders() {
 async function main() {
   console.log('🚀 Starting unified clinical demo seed...');
   await seedAuth();
+  await ensurePrimaryDemoTenant();
   await seedClinicalRules();
   await seedIntegrations();
   await seedClinicalDemo();

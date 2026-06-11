@@ -4,7 +4,6 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
-import { TaskStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { hostname } from 'os';
 import { PrismaService } from '../prisma/prisma.service';
@@ -880,27 +879,16 @@ export class CareReminderWorkerService
       const escalateAt = (occ.missedAt ?? occ.availableUntil).getTime() + after * 60_000;
       if (escalateAt > now.getTime()) continue;
 
-      const task = await this.prisma.task.create({
-        data: {
-          patientId: occ.patientId,
-          title: `未完成 · ${occ.title}`,
-          type: this.occurrenceTypeToTaskType(occ.occurrenceType),
-          status: TaskStatus.PENDING,
-          dueAt: new Date(now.getTime() + occ.schedule.escalationTaskDueWithinMinutes * 60_000),
-          assigneeId: occ.patient.responsibleNurseId ?? undefined,
-          priority: 1,
-        },
+      const result = await this.occurrences.escalateMissedOccurrence({
+        occurrenceId: occ.id,
+        patientId: occ.patientId,
+        title: `未完成 · ${occ.title}`,
+        type: this.occurrenceTypeToTaskType(occ.occurrenceType),
+        dueAt: new Date(now.getTime() + occ.schedule.escalationTaskDueWithinMinutes * 60_000),
+        assigneeId: occ.patient.responsibleNurseId,
+        priority: 1,
       });
-      const won = await this.occurrences.markEscalated(occ.id, task.id);
-      if (won) {
-        escalated += 1;
-      } else {
-        try {
-          await this.prisma.task.delete({ where: { id: task.id } });
-        } catch {
-          // best-effort orphan cleanup only
-        }
-      }
+      if (result.escalated) escalated += 1;
     }
     return { missed, escalated };
   }

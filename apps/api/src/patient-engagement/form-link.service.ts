@@ -101,6 +101,35 @@ export class FormLinkService {
     };
   }
 
+  private async resolvePatientTenant(
+    patientId: string,
+    requestedHospitalTenantId?: string | null,
+  ): Promise<string> {
+    const patient = await this.prisma.patient.findUnique({
+      where: { id: patientId },
+      select: { hospitalTenantId: true },
+    });
+    if (!patient) {
+      throw new NotFoundException({ code: 'PATIENT_NOT_FOUND', message: '患者档案不存在' });
+    }
+    if (!patient.hospitalTenantId) {
+      throw new BadRequestException({
+        code: 'PATIENT_TENANT_REQUIRED',
+        message: '患者档案缺少医院归属，请先修复档案后再签发链接。',
+      });
+    }
+    if (
+      requestedHospitalTenantId &&
+      requestedHospitalTenantId !== patient.hospitalTenantId
+    ) {
+      throw new ForbiddenException({
+        code: 'CROSS_TENANT_FORM_LINK_REJECTED',
+        message: '禁止为其他医院患者签发链接。',
+      });
+    }
+    return patient.hospitalTenantId;
+  }
+
   // ---------------------------------------------------------------------------
   // create
   // ---------------------------------------------------------------------------
@@ -119,6 +148,10 @@ export class FormLinkService {
     requiresIdentityCheck?: boolean;
     createdBy?: string | null;
   }) {
+    const hospitalTenantId = await this.resolvePatientTenant(
+      input.patientId,
+      input.hospitalTenantId,
+    );
     const { token, tokenHash } = this.generateToken();
     const expiresInHours = input.expiresInHours ?? FormLinkService.DEFAULT_EXPIRES_HOURS;
     const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
@@ -130,7 +163,7 @@ export class FormLinkService {
 
     const formLink = await this.prisma.patientFormLink.create({
       data: {
-        hospitalTenantId: input.hospitalTenantId ?? undefined,
+        hospitalTenantId,
         patientId: input.patientId,
         taskId: input.taskId ?? undefined,
         riskAlertId: input.riskAlertId ?? undefined,
@@ -161,6 +194,12 @@ export class FormLinkService {
     const formLink = await this.prisma.patientFormLink.findUnique({ where: { tokenHash } });
     if (!formLink) {
       throw new NotFoundException({ code: 'TOKEN_NOT_FOUND', message: '链接无效或已被撤销' });
+    }
+    if (!formLink.hospitalTenantId) {
+      throw new BadRequestException({
+        code: 'FORM_LINK_TENANT_REQUIRED',
+        message: '链接缺少医院归属，请联系医院重新发送。',
+      });
     }
     if (
       formLink.status === 'ACTIVE' &&

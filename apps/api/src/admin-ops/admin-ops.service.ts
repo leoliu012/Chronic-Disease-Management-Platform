@@ -255,7 +255,11 @@ export class AdminOpsService {
       duplicateSchedules,
       duplicateExternalRecords,
     ] = await Promise.all([
-      this.prisma.patient.count({ where: { hospitalTenantId: null } }),
+      this.prisma.$queryRaw<Array<{ count: number }>>`
+        SELECT COUNT(*)::int AS "count"
+        FROM "Patient"
+        WHERE "hospitalTenantId" IS NULL
+      `.then(([row]) => row?.count ?? 0),
       this.prisma.patient.count({ where: { responsibleNurseId: null } }),
       this.prisma.task.count({
         where: {

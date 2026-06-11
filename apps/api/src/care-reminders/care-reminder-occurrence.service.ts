@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { TaskStatus } from '@prisma/client';
 import type { CareReminderSchedule, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { dayOfWeekFromIso, localDateInTzToUtc, parseHm, tenantDatesAhead } from './tz-util';
@@ -17,6 +18,7 @@ export type OccurrenceStatus =
   | 'CLICKED'
   | 'COMPLETED'
   | 'MISSED'
+  | 'ESCALATING'
   | 'ESCALATED'
   | 'CANCELED';
 
@@ -280,13 +282,66 @@ export class CareReminderOccurrenceService {
     return r.count === 1;
   }
 
-  /** MISSED -> ESCALATED, attach task id. Idempotent: only fires once. */
-  async markEscalated(id: string, escalatedTaskId: string): Promise<boolean> {
-    const r = await this.prisma.careReminderOccurrence.updateMany({
-      where: { id, status: 'MISSED', escalatedTaskId: null },
-      data: { status: 'ESCALATED', escalatedAt: new Date(), escalatedTaskId },
+  /**
+   * Crash-safe MISSED -> ESCALATED transition.
+   *
+   * The occurrence claim, task upsert, and occurrence back-reference are one
+   * database transaction. A process crash cannot leave a visible orphan task,
+   * and retries reuse Task.sourceCareReminderOccurrenceId.
+   */
+  async escalateMissedOccurrence(args: {
+    occurrenceId: string;
+    patientId: string;
+    title: string;
+    type: string;
+    dueAt: Date;
+    assigneeId?: string | null;
+    priority?: number;
+  }): Promise<{ escalated: boolean; taskId: string | null }> {
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.careReminderOccurrence.updateMany({
+        where: {
+          id: args.occurrenceId,
+          status: 'MISSED',
+          escalatedTaskId: null,
+        },
+        data: { status: 'ESCALATING' },
+      });
+
+      if (claimed.count !== 1) {
+        const current = await tx.careReminderOccurrence.findUnique({
+          where: { id: args.occurrenceId },
+          select: { escalatedTaskId: true },
+        });
+        return { escalated: false, taskId: current?.escalatedTaskId ?? null };
+      }
+
+      const task = await tx.task.upsert({
+        where: { sourceCareReminderOccurrenceId: args.occurrenceId },
+        update: {},
+        create: {
+          sourceCareReminderOccurrenceId: args.occurrenceId,
+          patientId: args.patientId,
+          title: args.title,
+          type: args.type,
+          status: TaskStatus.PENDING,
+          dueAt: args.dueAt,
+          assigneeId: args.assigneeId ?? undefined,
+          priority: args.priority ?? 1,
+        },
+      });
+
+      await tx.careReminderOccurrence.update({
+        where: { id: args.occurrenceId },
+        data: {
+          status: 'ESCALATED',
+          escalatedAt: new Date(),
+          escalatedTaskId: task.id,
+        },
+      });
+
+      return { escalated: true, taskId: task.id };
     });
-    return r.count === 1;
   }
 
   async markCompletedByFormLinkInTx(

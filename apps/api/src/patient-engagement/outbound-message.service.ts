@@ -132,7 +132,7 @@ export class OutboundMessageService {
 
   async recordAttempt(input: {
     messageId: string;
-    hospitalTenantId?: string | null;
+    hospitalTenantId: string;
     patientId: string;
     formLinkId?: string | null;
     channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS';
@@ -149,7 +149,7 @@ export class OutboundMessageService {
     return this.prisma.patientOutboundAttempt.create({
       data: {
         messageId: input.messageId,
-        hospitalTenantId: input.hospitalTenantId ?? undefined,
+        hospitalTenantId: input.hospitalTenantId,
         patientId: input.patientId,
         formLinkId: input.formLinkId ?? undefined,
         channel: input.channel,

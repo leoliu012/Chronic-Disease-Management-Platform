@@ -132,22 +132,67 @@ export class IntegrationsService {
     private readonly vitalRecordsService: VitalRecordsService,
   ) {}
 
+  private async resolveLocalHospitalTenantId(): Promise<string> {
+    const configured = (process.env.LOCAL_HOSPITAL_TENANT_ID ?? '').trim();
+    if (configured) {
+      const tenant = await this.prisma.hospitalTenant.findUnique({
+        where: { id: configured },
+        select: { id: true, isActive: true },
+      });
+      if (!tenant?.isActive) {
+        throw new Error(
+          `LOCAL_HOSPITAL_TENANT_ID=${configured} does not reference an active HospitalTenant`,
+        );
+      }
+      return tenant.id;
+    }
+
+    const tenants = await this.prisma.hospitalTenant.findMany({
+      where: { isActive: true },
+      select: { id: true },
+      take: 2,
+    });
+    if (tenants.length !== 1) {
+      throw new Error(
+        'Integration demo sync requires LOCAL_HOSPITAL_TENANT_ID when active tenant count is not exactly one',
+      );
+    }
+    return tenants[0].id;
+  }
+
   async seedDefaults() {
+    const hospitalTenantId = await this.resolveLocalHospitalTenantId();
     for (const source of integrationSources) {
       await this.prisma.integrationSource.upsert({
-        where: { code: source.code },
+        where: {
+          hospitalTenantId_code: {
+            hospitalTenantId,
+            code: source.code,
+          },
+        },
         update: {
+          hospitalTenantId,
           name: source.name,
           systemType: source.systemType,
           description: source.description,
           isEnabled: true,
         },
-        create: source,
+        create: {
+          ...source,
+          hospitalTenantId,
+        },
       });
     }
 
     for (const [sourceCode, targetModel, externalField, localField, displayName, isRequired] of fieldMappings) {
-      const source = await this.prisma.integrationSource.findUnique({ where: { code: sourceCode } });
+      const source = await this.prisma.integrationSource.findUnique({
+        where: {
+          hospitalTenantId_code: {
+            hospitalTenantId,
+            code: sourceCode,
+          },
+        },
+      });
       if (!source) continue;
 
       await this.prisma.integrationFieldMapping.upsert({
@@ -261,10 +306,17 @@ export class IntegrationsService {
   }
 
   private async getSourceByCode(code: string) {
-    const source = await this.prisma.integrationSource.findUnique({ where: { code } });
+    const hospitalTenantId = await this.resolveLocalHospitalTenantId();
+    const where = {
+      hospitalTenantId_code: {
+        hospitalTenantId,
+        code,
+      },
+    };
+    const source = await this.prisma.integrationSource.findUnique({ where });
     if (source) return source;
     await this.seedDefaults();
-    const seeded = await this.prisma.integrationSource.findUnique({ where: { code } });
+    const seeded = await this.prisma.integrationSource.findUnique({ where });
     if (!seeded) throw new NotFoundException(`Integration source ${code} not found`);
     return seeded;
   }
@@ -477,7 +529,12 @@ export class IntegrationsService {
     for (const item of payload) {
       try {
         const patient = await this.prisma.patient.upsert({
-          where: { hospitalPatientId: item.hospitalPatientId },
+          where: {
+            hospitalTenantId_hospitalPatientId: {
+              hospitalTenantId: source.hospitalTenantId,
+              hospitalPatientId: item.hospitalPatientId,
+            },
+          },
           update: {
             name: item.name,
             gender: item.gender,
@@ -489,6 +546,7 @@ export class IntegrationsService {
             responsibleNurseId: undefined,
           },
           create: {
+            hospitalTenantId: source.hospitalTenantId,
             hospitalPatientId: item.hospitalPatientId,
             name: item.name,
             gender: item.gender,
@@ -576,7 +634,12 @@ export class IntegrationsService {
     for (const item of payload) {
       try {
         const patient = await this.prisma.patient.findUnique({
-          where: { hospitalPatientId: item.hospitalPatientId },
+          where: {
+            hospitalTenantId_hospitalPatientId: {
+              hospitalTenantId: source.hospitalTenantId,
+              hospitalPatientId: item.hospitalPatientId,
+            },
+          },
         });
         if (!patient) throw new Error(`未找到院内号 ${item.hospitalPatientId} 对应患者，请先同步 HIS 患者。`);
 
@@ -684,7 +747,12 @@ export class IntegrationsService {
     for (const item of payload) {
       try {
         const patient = await this.prisma.patient.findUnique({
-          where: { hospitalPatientId: item.hospitalPatientId },
+          where: {
+            hospitalTenantId_hospitalPatientId: {
+              hospitalTenantId: source.hospitalTenantId,
+              hospitalPatientId: item.hospitalPatientId,
+            },
+          },
         });
         if (!patient) throw new Error(`未找到院内号 ${item.hospitalPatientId} 对应患者，请先同步 HIS 患者。`);
 
@@ -774,7 +842,12 @@ export class IntegrationsService {
     for (const item of payload) {
       try {
         const patient = await this.prisma.patient.findUnique({
-          where: { hospitalPatientId: item.hospitalPatientId },
+          where: {
+            hospitalTenantId_hospitalPatientId: {
+              hospitalTenantId: source.hospitalTenantId,
+              hospitalPatientId: item.hospitalPatientId,
+            },
+          },
         });
         if (!patient) throw new Error(`未找到院内号 ${item.hospitalPatientId} 对应患者，请先同步 HIS 患者。`);
 
