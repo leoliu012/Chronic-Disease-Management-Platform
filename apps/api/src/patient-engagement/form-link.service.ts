@@ -142,6 +142,8 @@ export class FormLinkService {
     description?: string | null;
     payload?: Record<string, unknown> | null;
     expiresInHours?: number;
+    /** Exact business-window expiry; preferred for reminder occurrences. */
+    expiresAt?: Date;
     taskId?: string | null;
     riskAlertId?: string | null;
     maxSubmit?: number;
@@ -154,7 +156,10 @@ export class FormLinkService {
     );
     const { token, tokenHash } = this.generateToken();
     const expiresInHours = input.expiresInHours ?? FormLinkService.DEFAULT_EXPIRES_HOURS;
-    const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
+    const expiresAt = input.expiresAt ?? new Date(Date.now() + expiresInHours * 3600 * 1000);
+    if (expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException({ code: 'FORM_LINK_WINDOW_ENDED', message: '本次任务填写窗口已结束，请联系医院重新安排。' });
+    }
     const payload = input.type === 'QUESTIONNAIRE'
       ? await this.clinicalRules.prepareQuestionnaireLinkPayload(input.payload)
       : input.type === 'VITAL_RECHECK'

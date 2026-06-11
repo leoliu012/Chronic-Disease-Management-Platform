@@ -8,7 +8,7 @@
 //     explicitly instead of accidentally reusing a historical COMPLETED row.
 //   - If the generated horizon has already been consumed by earlier smoke runs,
 //     a future PENDING fixture is inserted for the targeted send-now check.
-//   - Adds resend coverage (spec III): resend a SENT occurrence -> append a
+//   - Adds resend coverage (spec III): resend a dispatch-accepted occurrence -> append a
 //     NURSE_RESEND attempt to the canonical message; after COMPLETED -> 4xx.
 //   - Asserts GET /care-reminders/today honours the ±24h window + from/to.
 //
@@ -369,7 +369,7 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
-  // 7. send-now → SENT + formLinkId
+  // 7. send-now → DISPATCH_ACCEPTED + formLinkId
   // ---------------------------------------------------------------
   let formLinkId = null;
   if (occId) {
@@ -377,18 +377,18 @@ async function main() {
     const occ = r.body?.occurrence;
     formLinkId = occ?.formLinkId ?? null;
     record(
-      '7. send-now → SENT + formLinkId',
+      '7. send-now → DISPATCH_ACCEPTED + formLinkId',
       (r.status === 201 || r.status === 200) &&
-        (occ?.status === 'SENT' || occ?.status === 'CLICKED') &&
+        ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'CLICKED'].includes(occ?.status) &&
         Boolean(formLinkId),
       `status=${occ?.status} formLinkId=${formLinkId ? 'set' : 'null'} reused=${r.body?.reused}`,
     );
   } else {
-    record('7. send-now → SENT + formLinkId', false, '(no occurrence)');
+    record('7. send-now → DISPATCH_ACCEPTED + formLinkId', false, '(no occurrence)');
   }
 
   // ---------------------------------------------------------------
-  // 8. resend a SENT occurrence → reuses the canonical PatientOutboundMessage
+  // 8. resend a dispatch-accepted occurrence → reuses the canonical PatientOutboundMessage
   //    (v3.2 model: NO new message row; a NURSE_RESEND attempt is appended).
   // ---------------------------------------------------------------
   if (occId && formLinkId) {
@@ -405,7 +405,7 @@ async function main() {
     const after = await findLinkMessage(adminToken, PATIENT, formLinkId);
     // v3.2: message count must NOT grow; resend reuses the canonical message.
     record(
-      '8. resend (SENT) → 2xx, reuses canonical message (no new row)',
+      '8. resend (dispatch accepted) → 2xx, reuses canonical message (no new row)',
       ok2xx && Boolean(newMsgId) && after.count === before.count,
       `status=${r.status} reusedLink=${r.body?.reusedLink} msgs ${before.count}→${after.count}`,
     );
@@ -420,15 +420,15 @@ async function main() {
         afterAttempts.some((a) => a.triggerReason === 'NURSE_RESEND'),
       `attempts ${beforeAttempts}→${afterAttempts.length}`,
     );
-    // occurrence stays SENT and bumps resendCount
+    // occurrence stays dispatch-accepted and bumps resendCount
     const occ = r.body?.occurrence;
     record(
-      '   occurrence stays SENT and resendCount bumped',
-      occ?.status === 'SENT' && (occ?.resendCount ?? 0) >= 1,
+      '   occurrence stays dispatch-accepted and resendCount bumped',
+      ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'CLICKED'].includes(occ?.status) && (occ?.resendCount ?? 0) >= 1,
       `status=${occ?.status} resendCount=${occ?.resendCount}`,
     );
   } else {
-    record('8. resend (SENT) → 2xx, reuses canonical message (no new row)', false, '(no SENT occurrence/link)');
+    record('8. resend (dispatch accepted) → 2xx, reuses canonical message (no new row)', false, '(no dispatch-accepted occurrence/link)');
   }
 
   // ---------------------------------------------------------------

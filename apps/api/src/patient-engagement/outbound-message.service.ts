@@ -6,6 +6,11 @@ import { WechatOfficialAccountService } from './wechat-official-account.service'
 
 export type Channel = 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS' | 'MANUAL_COPY';
 
+export const DISPATCH_ACCEPTED_MESSAGE_STATUSES = new Set(['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED']);
+export function isDispatchAcceptedStatus(status?: string | null): boolean {
+  return Boolean(status && DISPATCH_ACCEPTED_MESSAGE_STATUSES.has(status));
+}
+
 export type CreateOutboundMessageInput = {
   hospitalTenantId: string;
   patientId: string;
@@ -18,8 +23,8 @@ export type CreateOutboundMessageInput = {
   recipient?: string | null;
   templateId?: string | null;
   createdBy?: string | null;
-  /** For MANUAL_COPY we usually keep status=PENDING (护士还没真发出去). */
-  initialStatus?: 'PENDING' | 'SENT';
+  /** MANUAL_COPY is never treated as delivered until a nurse confirms it. */
+  initialStatus?: 'PENDING' | 'MANUAL_ACTION_REQUIRED' | 'DISPATCH_ACCEPTED' | 'DELIVERED' | 'SENT';
 };
 
 /**
@@ -78,7 +83,9 @@ export class OutboundMessageService {
             ? this.maskOpenId(input.recipient)
             : this.maskPhone(input.recipient),
         recipientRawHash: this.hashRecipient(input.recipient),
-        status: input.initialStatus ?? 'PENDING',
+        status: input.channel === 'MANUAL_COPY'
+          ? 'MANUAL_ACTION_REQUIRED'
+          : input.initialStatus ?? 'PENDING',
         createdBy: input.createdBy ?? undefined,
       },
     });
@@ -88,7 +95,7 @@ export class OutboundMessageService {
     return this.prisma.patientOutboundMessage.update({
       where: { id: messageId },
       data: {
-        status: 'SENT',
+        status: 'DISPATCH_ACCEPTED',
         sentAt: new Date(),
         providerMessageId: providerMessageId ?? undefined,
         templateId: templateId ?? undefined,
@@ -108,14 +115,14 @@ export class OutboundMessageService {
 
   async markClicked(formLinkId: string) {
     return this.prisma.patientOutboundMessage.updateMany({
-      where: { formLinkId, status: { in: ['SENT', 'PENDING'] } },
+      where: { formLinkId, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING'] } },
       data: { status: 'CLICKED', clickedAt: new Date() },
     });
   }
 
   async markSubmitted(formLinkId: string) {
     return this.prisma.patientOutboundMessage.updateMany({
-      where: { formLinkId, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
+      where: { formLinkId, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } },
       data: { status: 'SUBMITTED', submittedAt: new Date() },
     });
   }
@@ -136,7 +143,7 @@ export class OutboundMessageService {
     patientId: string;
     formLinkId?: string | null;
     channel: 'WECHAT_OFFICIAL_ACCOUNT' | 'SMS';
-    status: 'SENT' | 'FAILED';
+    status: 'SENT' | 'DISPATCH_ACCEPTED' | 'DELIVERED' | 'FAILED';
     recipientMasked?: string | null;
     providerMessageId?: string | null;
     errorMessage?: string | null;
@@ -160,7 +167,7 @@ export class OutboundMessageService {
         attemptNo: prior + 1,
         triggerReason: input.triggerReason ?? undefined,
         triggeredBy: input.triggeredBy ?? undefined,
-        sentAt: input.status === 'SENT' ? new Date() : undefined,
+        sentAt: isDispatchAcceptedStatus(input.status) ? new Date() : undefined,
       },
     });
   }
@@ -185,7 +192,7 @@ export class OutboundMessageService {
     const perChannel: Record<string, string> = {};
     for (const a of attempts) perChannel[a.channel] = a.status;
     const channels = Object.keys(perChannel);
-    const anySent = Object.values(perChannel).includes('SENT');
+    const anySent = Object.values(perChannel).some((status) => isDispatchAcceptedStatus(status));
 
     const lastAttempt = attempts[attempts.length - 1] || null;
     const deliverySummary: any = {
@@ -200,10 +207,10 @@ export class OutboundMessageService {
     let nextStatus = message.status;
     if (!protectedStatuses.includes(message.status)) {
       if (attempts.length === 0) nextStatus = message.status;
-      else nextStatus = anySent ? 'SENT' : 'FAILED';
+      else nextStatus = anySent ? 'DISPATCH_ACCEPTED' : 'FAILED';
     }
 
-    const lastSent = [...attempts].reverse().find((a) => a.status === 'SENT');
+    const lastSent = [...attempts].reverse().find((a) => isDispatchAcceptedStatus(a.status));
 
     return this.prisma.patientOutboundMessage.update({
       where: { id: messageId },
@@ -264,10 +271,10 @@ export class OutboundMessageService {
       patientId: message.patientId,
       formLinkId: message.formLinkId,
       channel: args.channel,
-      status: dispatched?.status === 'SENT' ? 'SENT' : 'FAILED',
+      status: isDispatchAcceptedStatus(dispatched?.status) ? 'DISPATCH_ACCEPTED' : 'FAILED',
       recipientMasked,
       providerMessageId: dispatched?.providerMessageId ?? null,
-      errorMessage: dispatched?.status === 'SENT' ? null : dispatched?.errorMessage ?? '发送失败',
+      errorMessage: isDispatchAcceptedStatus(dispatched?.status) ? null : dispatched?.errorMessage ?? '发送失败',
       triggerReason: args.triggerReason ?? 'INITIAL',
       triggeredBy: args.triggeredBy ?? null,
     });
@@ -292,12 +299,14 @@ export class OutboundMessageService {
     if (!message) return null;
 
     if (message.channel === 'MANUAL_COPY') {
-      // Don't auto-mark SENT — Bug 3: 我们想让 history 看到这条 PENDING 链接,
-      // 护士手动复制 / 标记后再 update.
-      this.logger.log(
-        `[manual-copy] tenant=${message.hospitalTenantId ?? '-'} message=${message.id} kept at status=${message.status}`,
-      );
-      return message;
+      const manual = message.status === 'MANUAL_ACTION_REQUIRED'
+        ? message
+        : await this.prisma.patientOutboundMessage.update({
+            where: { id: message.id },
+            data: { status: 'MANUAL_ACTION_REQUIRED', errorMessage: null },
+          });
+      this.logger.log(`[manual-copy] tenant=${message.hospitalTenantId} message=${message.id} requires nurse action`);
+      return manual;
     }
 
     if (message.channel === 'WECHAT_OFFICIAL_ACCOUNT') {

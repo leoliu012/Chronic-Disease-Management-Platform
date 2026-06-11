@@ -22,7 +22,7 @@ export class HisIntegrationController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'IMPORT_HIS_PATIENT_DRAFT', target: 'Patient', targetIdFrom: 'response.id', patientIdFrom: 'response.id' })
+  @Audit({ mode: 'REQUIRED', action: 'IMPORT_HIS_PATIENT_DRAFT', target: 'Patient', targetIdFrom: 'response.id', patientIdFrom: 'response.id' })
   @Post('patients/import')
   importPatientDraft(
     @Body() dto: ImportHisPatientDto,
@@ -32,7 +32,7 @@ export class HisIntegrationController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
-  @Audit({ action: 'EXPORT_PATIENT_DATA', target: 'Patient', detailsFrom: { hospitalTenantId: 'query.hospitalTenantId' } })
+  @Audit({ mode: 'REQUIRED', action: 'EXPORT_PATIENT_DATA', target: 'Patient', detailsFrom: { hospitalTenantId: 'query.hospitalTenantId' } })
   @Get('patients/export')
   exportPatientsForHis(
     @CurrentUser() user: RequestUser,

@@ -23,14 +23,14 @@ export class CarePlansController {
     return this.carePlans.listByPatient(patientId, user);
   }
 
-  @Audit({ action: 'ENROLL_CARE_PLAN', target: 'CarePlan', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'ENROLL_CARE_PLAN', target: 'CarePlan', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/enroll')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   enroll(@Param('patientId') patientId: string, @Body() dto: EnrollCarePlanDto, @CurrentUser() user: RequestUser) {
     return this.carePlans.enrollPatient(patientId, dto, user);
   }
 
-  @Audit({ action: 'UPDATE_CARE_PLAN_STATUS', target: 'CarePlan', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'UPDATE_CARE_PLAN_STATUS', target: 'CarePlan', targetIdFrom: 'params.id' })
   @Patch(':id/status')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   updateStatus(@Param('id') id: string, @Body() dto: UpdateCarePlanStatusDto, @CurrentUser() user: RequestUser) {
@@ -49,7 +49,7 @@ export class CarePlansController {
     return this.carePlans.listActions(patientId, user);
   }
 
-  @Audit({ action: 'RECALCULATE_PATIENT_CARE_PLAN', target: 'CarePlan', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'RECALCULATE_PATIENT_CARE_PLAN', target: 'CarePlan', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/recalculate')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   recalculate(@Param('patientId') patientId: string, @CurrentUser() user: RequestUser) {
@@ -62,21 +62,21 @@ export class CarePlansController {
     return this.worker.getStatus();
   }
 
-  @Audit({ action: 'REFRESH_ACTIVE_CARE_PLANS', target: 'CarePlan' })
+  @Audit({ mode: 'REQUIRED', action: 'REFRESH_ACTIVE_CARE_PLANS', target: 'CarePlan' })
   @Post('refresh-active')
   @Roles(UserRole.ADMIN)
   refreshActive() {
     return this.worker.runOnce();
   }
 
-  @Audit({ action: 'CREATE_TASK_FROM_NEXT_BEST_ACTION', target: 'NextBestAction', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CREATE_TASK_FROM_NEXT_BEST_ACTION', target: 'NextBestAction', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('next-best-actions/:id/create-task')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   createTask(@Param('id') id: string, @CurrentUser() user: RequestUser) {
     return this.carePlans.createTaskFromAction(id, user);
   }
 
-  @Audit({ action: 'DISMISS_NEXT_BEST_ACTION', target: 'NextBestAction', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'DISMISS_NEXT_BEST_ACTION', target: 'NextBestAction', targetIdFrom: 'params.id' })
   @Post('next-best-actions/:id/dismiss')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   dismiss(@Param('id') id: string, @Body() dto: DismissNextBestActionDto, @CurrentUser() user: RequestUser) {

@@ -68,7 +68,7 @@ export class AdminPatientEngagementController {
   // ---------------------------------------------------------------------------
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_PATIENT_QUESTIONNAIRE', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_PATIENT_QUESTIONNAIRE', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/questionnaire-links')
   async createQuestionnaireLink(
     @Param('patientId') patientId: string,
@@ -105,7 +105,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_PATIENT_VITAL_RECHECK', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_PATIENT_VITAL_RECHECK', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/vital-recheck-links')
   async createVitalRecheckLink(
     @Param('patientId') patientId: string,
@@ -142,7 +142,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_PATIENT_MEDICATION_CHECKIN', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_PATIENT_MEDICATION_CHECKIN', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/medication-checkin-links')
   async createMedicationCheckInLink(
     @Param('patientId') patientId: string,
@@ -190,7 +190,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_PATIENT_HOSPITAL_VISIT', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_PATIENT_HOSPITAL_VISIT', target: 'PatientFormLink', targetIdFrom: 'response.formLink.id', patientIdFrom: 'params.patientId', detailsFrom: { type: 'response.formLink.type' } })
   @Post('patients/:patientId/hospital-visit-links')
   async createHospitalVisitLink(
     @Param('patientId') patientId: string,
@@ -235,7 +235,7 @@ export class AdminPatientEngagementController {
   // ---------------------------------------------------------------------------
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'REVOKE_PATIENT_H5_LINK', target: 'PatientFormLink', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'REVOKE_PATIENT_H5_LINK', target: 'PatientFormLink', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('form-links/:id/revoke')
   async revokeLink(
     @Param('id') id: string,
@@ -455,7 +455,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'RESEND_PATIENT_MESSAGE', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.message.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'RESEND_PATIENT_MESSAGE', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.message.patientId' })
   @Post('messages/:id/resend')
   async resendMessage(
     @Param('id') id: string,
@@ -542,7 +542,7 @@ export class AdminPatientEngagementController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'MARK_PATIENT_MESSAGE_MANUAL_SENT', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'MARK_PATIENT_MESSAGE_MANUAL_SENT', target: 'PatientOutboundMessage', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('messages/:id/mark-manual-sent')
   async markManualSent(
     @Param('id') id: string,
@@ -558,11 +558,15 @@ export class AdminPatientEngagementController {
       where: { id },
       data: {
         channel: 'MANUAL_COPY',
-        status: 'SENT',
+        status: 'DISPATCH_ACCEPTED',
         sentAt: new Date(),
         providerMessageId: 'manual-copy',
         errorMessage: null,
       },
+    });
+    await this.prisma.careReminderOccurrence.updateMany({
+      where: { outboundMessageId: id, status: 'MANUAL_ACTION_REQUIRED' },
+      data: { status: 'DISPATCH_ACCEPTED', sentAt: new Date() },
     });
     await this.audit.record({
       user,

@@ -571,6 +571,23 @@ model User {
   sentDirectMessages PatientDirectMessage[] @relation("UserSentDirectMessages")
 }
 
+// pilot-security-integrity-v9.3 — persistent login throttling
+model AuthLoginThrottle {
+  keyType         String
+  keyHash         String
+  failedCount     Int      @default(0)
+  windowStartedAt DateTime @default(now())
+  lockedUntil     DateTime?
+  lastFailedAt    DateTime?
+  lastSucceededAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@id([keyType, keyHash])
+  @@index([lockedUntil])
+  @@index([lastFailedAt])
+}
+
 model PatientBindingRequest {
   id                String               @id @default(uuid())
   demoOpenId        String
@@ -983,6 +1000,11 @@ model IntegrationSyncRecord {
   batchId            String
   externalRecordType String
   externalRecordId   String
+  // gateway-ingest-v9.3: successful canonical events hold a unique idempotency key.
+  // SKIPPED / FAILED audit attempts intentionally keep it null so duplicate delivery
+  // attempts remain observable without violating the canonical uniqueness guard.
+  externalVersion    String                  @default("v1")
+  idempotencyKey     String?                 @unique
   localTargetType    String?
   localTargetId      String?
   status             IntegrationRecordStatus
@@ -1012,7 +1034,7 @@ model IntegrationSyncRecord {
   source              IntegrationSource       @relation(fields: [sourceId], references: [id])
   batch               IntegrationSyncBatch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  @@index([sourceId, externalRecordType, externalRecordId])
+  @@index([sourceId, externalRecordType, externalRecordId, externalVersion])
   @@index([batchId, status])
   @@index([localTargetType, localTargetId])
   @@index([promotionStatus, createdAt])
@@ -1811,6 +1833,7 @@ model CareReminderWorkerRun {
   finishedAt      DateTime?
   generated       Int      @default(0)
   dispatched      Int      @default(0)
+  manualActionRequired Int  @default(0)
   dispatchFailed  Int      @default(0)
   retried         Int      @default(0)
   retryScheduled  Int      @default(0)

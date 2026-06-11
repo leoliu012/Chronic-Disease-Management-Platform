@@ -363,6 +363,50 @@ export class PublicFormController {
     );
   }
 
+
+  private publicPayloadForLink(type: string, rawPayload: unknown): Record<string, unknown> {
+    const payload = rawPayload && typeof rawPayload === 'object' && !Array.isArray(rawPayload)
+      ? (rawPayload as Record<string, any>)
+      : {};
+    if (type === 'QUESTIONNAIRE') {
+      const scoring = payload.questionnaireRuleSnapshot?.scoringRule;
+      const items = Array.isArray(scoring?.items)
+        ? scoring.items.map((item: any) => ({
+            answerKey: item.answerKey,
+            label: item.label,
+            required: item.required === true,
+            allowedValues: Array.isArray(item.allowedValues) ? item.allowedValues : [],
+            hints: Array.isArray(item.hints) ? item.hints : undefined,
+          }))
+        : [];
+      return { questionnaireType: payload.questionnaireType ?? 'GENERIC', questionnaireRuleSnapshot: { scoringRule: { items } } };
+    }
+    if (type === 'VITAL_RECHECK') {
+      return {
+        expectedVitalType: payload.expectedVitalType ?? payload.vitalType,
+        canonicalUnit: payload.canonicalUnit ?? payload.unit,
+        displayName: payload.displayName,
+      };
+    }
+    if (type === 'MEDICATION_CHECKIN') {
+      return {
+        medicationName: payload.medicationName,
+        dosage: payload.dosage,
+        frequency: payload.frequency,
+        scheduledAt: payload.scheduledAt,
+      };
+    }
+    if (type === 'HOSPITAL_VISIT_CONFIRM') return { reason: payload.reason };
+    return {};
+  }
+
+  private requireFormLinkTenantId(formLink: { hospitalTenantId?: string | null }): string {
+    if (!formLink.hospitalTenantId) {
+      throw new BadRequestException({ code: 'FORM_LINK_TENANT_REQUIRED', message: '链接缺少医院归属，请联系医院重新发送。' });
+    }
+    return formLink.hospitalTenantId;
+  }
+
   // ---------------------------------------------------------------------------
   // GET /public-forms/:token
   // ---------------------------------------------------------------------------
@@ -408,7 +452,7 @@ export class PublicFormController {
       description: formLink.description,
       expiresAt: formLink.expiresAt,
       requiresIdentityCheck: formLink.requiresIdentityCheck,
-      payload: formLink.payload,
+      payload: this.publicPayloadForLink(formLink.type, formLink.payload),
       patientMaskedName: this.maskName(patient?.name || ''),
       patientGender: patient?.gender || null,
       // v2: explicit hospital block — frontend uses these to brand the H5 page.
@@ -547,7 +591,7 @@ export class PublicFormController {
       // Update PatientOutboundMessage → SUBMITTED inside the same tx so a
       // failed downstream write rolls back the SUBMITTED status too.
       await tx.patientOutboundMessage.updateMany({
-        where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
+        where: { formLinkId: formLink.id, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } },
         data: { status: 'SUBMITTED', submittedAt: new Date() },
       });
 
@@ -778,7 +822,7 @@ export class PublicFormController {
       const alertId: string | null = null;
 
       await tx.patientOutboundMessage.updateMany({
-        where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
+        where: { formLinkId: formLink.id, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } },
         data: { status: 'SUBMITTED', submittedAt: new Date() },
       });
 
@@ -824,6 +868,7 @@ export class PublicFormController {
       throw new BadRequestException('action 必须是 WILL_VISIT / ARRIVED / CANNOT_VISIT / REFUSED');
     }
 
+    const hospitalTenantId = this.requireFormLinkTenantId(formLink);
     const payload: any = formLink.payload || {};
     const reminderId: string | undefined = payload.hospitalVisitReminderId || undefined;
 
@@ -911,7 +956,7 @@ export class PublicFormController {
       // v3.2: structured patient 到院反馈 (distinct from the nurse-side followUp).
       const feedback = await tx.hospitalVisitFeedback.create({
         data: {
-          hospitalTenantId: formLink.hospitalTenantId,
+          hospitalTenantId,
           patientId: formLink.patientId,
           formLinkId: formLink.id,
           hospitalVisitReminderId: reminderId ?? undefined,
@@ -924,7 +969,7 @@ export class PublicFormController {
       });
 
       await tx.patientOutboundMessage.updateMany({
-        where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
+        where: { formLinkId: formLink.id, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } },
         data: { status: 'SUBMITTED', submittedAt: new Date() },
       });
 
@@ -987,7 +1032,7 @@ export class PublicFormController {
       }
 
       await tx.patientOutboundMessage.updateMany({
-        where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
+        where: { formLinkId: formLink.id, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } },
         data: { status: 'SUBMITTED', submittedAt: new Date() },
       });
 
@@ -1040,7 +1085,7 @@ export class PublicFormController {
   }
 
   private async completeVitalSubmissionInTx(tx: any, formLinkId: string, vitalRecordId?: string): Promise<void> {
-    await tx.patientOutboundMessage.updateMany({ where: { formLinkId, status: { in: ['SENT', 'PENDING', 'CLICKED'] } }, data: { status: 'SUBMITTED', submittedAt: new Date() } });
+    await tx.patientOutboundMessage.updateMany({ where: { formLinkId, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'PENDING', 'CLICKED'] } }, data: { status: 'SUBMITTED', submittedAt: new Date() } });
     if (!vitalRecordId) return;
     await this._linkSubmissionInTx(tx, formLinkId, 'VitalRecord', vitalRecordId);
     await this._tryCompleteOccurrenceInTx(tx, formLinkId, 'VitalRecord', vitalRecordId);

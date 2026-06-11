@@ -104,7 +104,7 @@ export class GatewayAdminController {
     return { total: items.length, items };
   }
 
-  @Audit({ action: 'RUN_GATEWAY_INTERMEDIATE_POLL', target: 'IntegrationSyncBatch' })
+  @Audit({ mode: 'REQUIRED', action: 'RUN_GATEWAY_INTERMEDIATE_POLL', target: 'IntegrationSyncBatch' })
   @Post('intermediate/poll-now')
   @HttpCode(HttpStatus.OK)
   async pollNow() {
@@ -116,7 +116,7 @@ export class GatewayAdminController {
   /*  API Key 管理 (gateway-production-hardening)                       */
   /* ----------------------------------------------------------------- */
 
-  @Audit({ action: 'ISSUE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'response.id', detailsFrom: { sourceId: 'response.sourceId', prefix: 'response.prefix' } })
+  @Audit({ mode: 'REQUIRED', action: 'ISSUE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'response.id', detailsFrom: { sourceId: 'response.sourceId', prefix: 'response.prefix' } })
   @Post('api-keys')
   async issueApiKey(
     @Body() body: IssueApiKeyDto,
@@ -169,7 +169,7 @@ export class GatewayAdminController {
     };
   }
 
-  @Audit({ action: 'REVOKE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'params.id', detailsFrom: { prefix: 'response.prefix' } })
+  @Audit({ mode: 'REQUIRED', action: 'REVOKE_GATEWAY_API_KEY', target: 'GatewayApiKey', targetIdFrom: 'params.id', detailsFrom: { prefix: 'response.prefix' } })
   @Delete('api-keys/:id')
   async revokeApiKey(
     @Param('id') id: string,
@@ -203,7 +203,7 @@ export class GatewayAdminController {
     return { overview, topFailures, keyUsage };
   }
 
-  @Audit({ action: 'EXPORT_GATEWAY_AUDIT_REPORT', target: 'IntegrationSyncRecord' })
+  @Audit({ mode: 'REQUIRED', action: 'EXPORT_GATEWAY_AUDIT_REPORT', target: 'IntegrationSyncRecord' })
   @Get('audit-report.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header(
@@ -224,7 +224,7 @@ export class GatewayAdminController {
     return this.promotionWorker.getStatus();
   }
 
-  @Audit({ action: 'RUN_GATEWAY_PROMOTION_WORKER', target: 'IntegrationSyncRecord' })
+  @Audit({ mode: 'REQUIRED', action: 'RUN_GATEWAY_PROMOTION_WORKER', target: 'IntegrationSyncRecord' })
   @Post('promotion-worker/run-now')
   @HttpCode(HttpStatus.OK)
   async workerRunNow() {

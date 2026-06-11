@@ -1,9 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   ClinicalRuleLifecycleStatus,
   DiseaseType,
   Prisma,
   RiskLevel,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVitalRecordDto } from '../vital-records/dto/create-vital-record.dto';
@@ -585,7 +586,101 @@ export class ClinicalRulesService {
     return { template, required: highRiskVital || highRiskQuestionnaire ? 2 : 1, approvals: template.approvals.length };
   }
 
+  private async validateTemplateForPublication(id: string) {
+    const template = await this.snapshotTemplate(id);
+    const errors: string[] = [];
+    const allowedOperators = new Set(['GTE', 'GT', 'LTE', 'LT', 'BETWEEN', 'OUTSIDE_RANGE']);
+    const activePolicies = template.followUpPolicies.filter((policy) => policy.isActive);
+    const policyLevels = new Set(activePolicies.map((policy) => policy.riskLevel));
+    const unitsByVital = new Map<string, Set<string>>();
+
+    for (const policy of activePolicies) {
+      if (!Number.isInteger(policy.dueWithinHours) || policy.dueWithinHours <= 0) {
+        errors.push(`随访策略 ${policy.id} 的 SLA 必须为正整数小时`);
+      }
+      if (!policy.taskTitle.trim()) errors.push(`随访策略 ${policy.id} 缺少任务标题`);
+    }
+
+    for (const rule of template.vitalThresholdRules.filter((item) => item.isActive)) {
+      if (!allowedOperators.has(rule.operator)) errors.push(`指标规则 ${rule.id} operator 非法：${rule.operator}`);
+      if (!rule.unit.trim()) errors.push(`指标规则 ${rule.id} 缺少单位`);
+      const units = unitsByVital.get(rule.vitalType) ?? new Set<string>();
+      units.add(normalizedUnit(rule.unit));
+      unitsByVital.set(rule.vitalType, units);
+      if (rule.operator === 'BETWEEN' || rule.operator === 'OUTSIDE_RANGE') {
+        if (rule.thresholdValueMax === null || rule.thresholdValueMax === undefined) {
+          errors.push(`指标规则 ${rule.id} 使用 ${rule.operator} 时必须配置上界`);
+        } else if (rule.thresholdValueMax < rule.thresholdValue) {
+          errors.push(`指标规则 ${rule.id} 上界不得小于下界`);
+        }
+      }
+      if (
+        (rule.riskLevel === RiskLevel.HIGH || rule.riskLevel === RiskLevel.VERY_HIGH) &&
+        !policyLevels.has(rule.riskLevel)
+      ) {
+        errors.push(`指标规则 ${rule.id} 的 ${rule.riskLevel} 风险缺少已启用随访 SLA`);
+      }
+    }
+    for (const [vitalType, units] of unitsByVital) {
+      if (units.size > 1) errors.push(`指标 ${vitalType} 在同一规则版本中存在多个单位：${[...units].join(' / ')}`);
+    }
+
+    for (const questionnaire of template.questionnaireTemplates.filter((item) => item.isActive)) {
+      try {
+        const scoringRule = prepareH5QuestionnaireScoringRule(questionnaire.scoringRule);
+        const rawBands = questionnaire.riskBands;
+        const bands = parseRiskBands(rawBands);
+        if (!Array.isArray(rawBands) || rawBands.length === 0 || bands.length !== rawBands.length) {
+          errors.push(`问卷 ${questionnaire.questionnaireType} riskBands 为空或包含非法项`);
+          continue;
+        }
+        const sorted = [...bands].sort((a, b) => (a.min ?? -Infinity) - (b.min ?? -Infinity));
+        let cursor = scoringRule.normalizedMinScore;
+        for (const [index, band] of sorted.entries()) {
+          const min = band.min ?? scoringRule.normalizedMinScore;
+          const max = band.max ?? scoringRule.normalizedMaxScore;
+          if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) {
+            errors.push(`问卷 ${questionnaire.questionnaireType} riskBands[${index}] 区间非法`);
+            continue;
+          }
+          if (min > cursor) errors.push(`问卷 ${questionnaire.questionnaireType} 风险区间在 ${cursor} 附近存在缺口`);
+          if (min < cursor) errors.push(`问卷 ${questionnaire.questionnaireType} 风险区间在 ${min} 附近重叠`);
+          cursor = max + 1;
+          if (
+            (band.riskLevel === RiskLevel.HIGH || band.riskLevel === RiskLevel.VERY_HIGH) &&
+            !policyLevels.has(band.riskLevel)
+          ) {
+            errors.push(`问卷 ${questionnaire.questionnaireType} 的 ${band.riskLevel} 风险缺少已启用随访 SLA`);
+          }
+        }
+        if (cursor <= scoringRule.normalizedMaxScore) {
+          errors.push(`问卷 ${questionnaire.questionnaireType} 风险区间未覆盖最大分 ${scoringRule.normalizedMaxScore}`);
+        }
+      } catch (error) {
+        errors.push(`问卷 ${questionnaire.questionnaireType} 配置非法：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    const effectiveCount = await this.prisma.diseaseRuleTemplate.count({
+      where: { diseaseType: template.diseaseType, lifecycleStatus: ClinicalRuleLifecycleStatus.EFFECTIVE },
+    });
+    if (effectiveCount > 1) errors.push(`${template.diseaseType} 同时存在 ${effectiveCount} 个 EFFECTIVE 规则版本`);
+    if (errors.length) {
+      throw new BadRequestException({
+        code: 'CLINICAL_RULE_PUBLICATION_VALIDATION_FAILED',
+        message: '规则结构校验失败，已阻止发布或启用。',
+        errors,
+      });
+    }
+    return { valid: true, templateId: id, version: template.version };
+  }
+
+  async validatePublication(id: string) {
+    return this.validateTemplateForPublication(id);
+  }
+
   async publishVersion(id: string, user: RequestUser) {
+    await this.validateTemplateForPublication(id);
     const { template, required, approvals } = await this.approvalRequirement(id);
     if (template.lifecycleStatus !== ClinicalRuleLifecycleStatus.PHYSICIAN_REVIEW) throw new BadRequestException('Only reviewed versions can be published');
     if (approvals < required) throw new BadRequestException(`规则需要 ${required} 名不同审核人批准，当前仅 ${approvals} 名`);
@@ -593,6 +688,7 @@ export class ClinicalRulesService {
   }
 
   async activateVersion(id: string, user: RequestUser) {
+    await this.validateTemplateForPublication(id);
     const template = await this.prisma.diseaseRuleTemplate.findUnique({ where: { id } });
     if (!template) throw new NotFoundException('Disease rule template not found');
     if (template.lifecycleStatus !== ClinicalRuleLifecycleStatus.PUBLISHED) throw new BadRequestException('Only PUBLISHED versions can become EFFECTIVE');
@@ -634,18 +730,54 @@ export class ClinicalRulesService {
 
   async simulateTemplate(id: string, dto: SimulateRuleDto) {
     const template = await this.snapshotTemplate(id);
-    const matched = template.vitalThresholdRules.filter((rule) => rule.isActive && rule.vitalType === dto.vitalType && matchesOperator(dto.value, rule));
+    const typedRules = template.vitalThresholdRules.filter((rule) => rule.isActive && rule.vitalType === dto.vitalType);
+    if (typedRules.length && !dto.unit) throw new BadRequestException('规则模拟必须显式提供指标单位');
+    const unitCompatibleRules = typedRules.filter((rule) => unitsEqual(rule.unit, dto.unit));
+    if (typedRules.length && unitCompatibleRules.length === 0) {
+      throw new BadRequestException(`指标 ${dto.vitalType} 单位不匹配，允许单位：${[...new Set(typedRules.map((rule) => rule.unit))].join(' / ')}`);
+    }
+    const matched = unitCompatibleRules.filter((rule) => matchesOperator(dto.value, rule));
     matched.sort((a, b) => riskRank[b.riskLevel] - riskRank[a.riskLevel]);
     return { templateId: id, version: template.version, input: dto, matchedRules: matched, highestRiskLevel: matched[0]?.riskLevel ?? RiskLevel.LOW };
   }
 
-  async estimateImpact(id: string, days = 90) {
+  async estimateImpact(id: string, days = 90, user: RequestUser, requestedHospitalTenantId?: string, allTenants = false) {
     const template = await this.snapshotTemplate(id);
-    const cutoff = new Date(Date.now() - Math.min(Math.max(days, 1), 365) * 24 * 60 * 60 * 1000);
-    const types = [...new Set(template.vitalThresholdRules.filter((rule) => rule.isActive).map((rule) => rule.vitalType))];
-    const records = await this.prisma.vitalRecord.findMany({ where: { type: { in: types }, measuredAt: { gte: cutoff } }, select: { id: true, patientId: true, type: true, value: true, unit: true, measuredAt: true } });
-    const affectedRecords = records.filter((record) => template.vitalThresholdRules.some((rule) => rule.isActive && rule.vitalType === record.type && matchesOperator(record.value, rule)));
-    return { templateId: id, version: template.version, replayDays: days, evaluatedRecordCount: records.length, matchedRecordCount: affectedRecords.length, affectedPatientCount: new Set(affectedRecords.map((record) => record.patientId)).size };
+    let hospitalTenantId: string | undefined;
+    if (user.role === UserRole.ADMIN) {
+      hospitalTenantId = allTenants ? undefined : (requestedHospitalTenantId || user.hospitalTenantId || undefined);
+    } else {
+      if (!user.hospitalTenantId) throw new ForbiddenException('当前账号缺少医院归属，无法执行规则影响评估');
+      if (allTenants || (requestedHospitalTenantId && requestedHospitalTenantId !== user.hospitalTenantId)) {
+        throw new ForbiddenException('医生只能评估本人所属医院的数据');
+      }
+      hospitalTenantId = user.hospitalTenantId;
+    }
+    if (!hospitalTenantId && !allTenants) throw new BadRequestException('请提供 hospitalTenantId，或由管理员显式选择 allTenants=true');
+    const replayDays = Math.min(Math.max(Number.isFinite(days) ? days : 90, 1), 365);
+    const cutoff = new Date(Date.now() - replayDays * 24 * 60 * 60 * 1000);
+    const rules = template.vitalThresholdRules.filter((rule) => rule.isActive);
+    const types = [...new Set(rules.map((rule) => rule.vitalType))];
+    const records = await this.prisma.vitalRecord.findMany({
+      where: {
+        type: { in: types },
+        measuredAt: { gte: cutoff },
+        ...(hospitalTenantId ? { patient: { hospitalTenantId } } : {}),
+      },
+      select: { id: true, patientId: true, type: true, value: true, unit: true, measuredAt: true },
+    });
+    const unitMismatchRecords = records.filter((record) => rules.some((rule) => rule.vitalType === record.type) && !rules.some((rule) => rule.vitalType === record.type && unitsEqual(rule.unit, record.unit)));
+    const affectedRecords = records.filter((record) => rules.some((rule) => rule.vitalType === record.type && unitsEqual(rule.unit, record.unit) && matchesOperator(record.value, rule)));
+    return {
+      templateId: id,
+      version: template.version,
+      replayDays,
+      tenantScope: hospitalTenantId ?? 'ALL_TENANTS',
+      evaluatedRecordCount: records.length,
+      unitMismatchRecordCount: unitMismatchRecords.length,
+      matchedRecordCount: affectedRecords.length,
+      affectedPatientCount: new Set(affectedRecords.map((record) => record.patientId)).size,
+    };
   }
 
   async prepareQuestionnaireLinkPayload(payload: Record<string, unknown> | null | undefined) {

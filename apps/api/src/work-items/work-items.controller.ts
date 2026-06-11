@@ -24,7 +24,7 @@ export class WorkItemsController {
     return this.workItemsService.summary(query, user);
   }
 
-  @Audit({ action: 'REVIEW_PATIENT_SUBMISSION', target: 'PatientFormLink', targetIdFrom: 'params.formLinkId', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'REVIEW_PATIENT_SUBMISSION', target: 'PatientFormLink', targetIdFrom: 'params.formLinkId', patientIdFrom: 'response.patientId' })
   @Post('work-items/submissions/:formLinkId/review')
   @Roles(UserRole.ADMIN, UserRole.NURSE, UserRole.DOCTOR)
   reviewSubmission(

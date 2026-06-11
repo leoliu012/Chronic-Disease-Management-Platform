@@ -45,14 +45,16 @@ type WorkItem = {
     | 'GATEWAY_CONFLICT'
     | 'CARE_REMINDER_ESCALATION'
     | 'CARE_PLAN_RECOMMENDATION'
-    | 'PATIENT_SUBMISSION_REVIEW';
+    | 'PATIENT_SUBMISSION_REVIEW'
+    | 'MANUAL_OUTBOUND_ACTION';
   sourceType:
     | 'TASK'
     | 'RISK_ALERT'
     | 'GATEWAY_CONFLICT'
     | 'CARE_REMINDER_OCCURRENCE'
     | 'NEXT_BEST_ACTION'
-    | 'PATIENT_FORM_LINK';
+    | 'PATIENT_FORM_LINK'
+    | 'PATIENT_OUTBOUND_MESSAGE';
   taskId?: string;
   alertId?: string;
   episodeId?: string;
@@ -95,6 +97,10 @@ type PatientSubmissionReview = Prisma.PatientFormLinkGetPayload<{
   include: { patient: { include: { responsibleNurse: true } } };
 }>;
 
+type ManualOutboundMessage = Prisma.PatientOutboundMessageGetPayload<{
+  include: { patient: { include: { responsibleNurse: true } } };
+}>;
+
 type Summary = {
   totalOpen: number;
   criticalRiskPendingActionCount: number;
@@ -104,6 +110,7 @@ type Summary = {
   referralAwaitingConfirmationCount: number;
   patientSubmissionsAwaitingReviewCount: number;
   gatewayConflictCount: number;
+  manualOutboundActionRequiredCount: number;
   carePlanRecommendationCount: number;
   careReminderEscalationCount: number;
 };
@@ -199,6 +206,7 @@ function actionBuckets(item: Omit<WorkItem, 'bucketKeys'>, now: Date): WorkItemB
     || (item.sourceType === 'TASK' && QUESTIONNAIRE_REVIEW_TASK_TYPES.has(item.recommendedAction))
   ) buckets.push('SUBMISSION_REVIEW');
   if (item.itemType === 'GATEWAY_CONFLICT') buckets.push('GATEWAY_CONFLICT');
+  if (item.itemType === 'MANUAL_OUTBOUND_ACTION') buckets.push('MANUAL_OUTBOUND_ACTION');
   return buckets;
 }
 
@@ -217,6 +225,7 @@ function summarize(items: WorkItem[]): Summary {
     referralAwaitingConfirmationCount: count('REFERRAL_CONFIRMATION'),
     patientSubmissionsAwaitingReviewCount: count('SUBMISSION_REVIEW'),
     gatewayConflictCount: count('GATEWAY_CONFLICT'),
+    manualOutboundActionRequiredCount: count('MANUAL_OUTBOUND_ACTION'),
     carePlanRecommendationCount: items.filter((item) => item.itemType === 'CARE_PLAN_RECOMMENDATION').length,
     careReminderEscalationCount: items.filter((item) => item.itemType === 'CARE_REMINDER_ESCALATION').length,
   };
@@ -246,7 +255,7 @@ export class WorkItemsService {
       AND: [taskScope, patientFilter, ...(includeClosed ? [] : [{ status: { in: OPEN_TASK_STATUSES } }])],
     };
 
-    const [tasks, openTasks, openAlerts, missedOccurrences, gatewayConflicts, recommendations, submissionReviews] = await Promise.all([
+    const [tasks, openTasks, openAlerts, missedOccurrences, gatewayConflicts, recommendations, submissionReviews, manualOutboundMessages] = await Promise.all([
       this.prisma.task.findMany({
         where: taskWhere,
         include: { patient: { include: { responsibleNurse: true } }, riskEpisode: true },
@@ -306,6 +315,19 @@ export class WorkItemsService {
             },
             include: { patient: { include: { responsibleNurse: true } } },
             orderBy: [{ manualReviewDueAt: 'asc' }, { submittedAt: 'asc' }],
+            take: 300,
+          }),
+      includeClosed
+        ? Promise.resolve([] as ManualOutboundMessage[])
+        : this.prisma.patientOutboundMessage.findMany({
+            where: {
+              patient: patientScope,
+              ...(query.patientId ? { patientId: query.patientId } : {}),
+              channel: 'MANUAL_COPY',
+              status: 'MANUAL_ACTION_REQUIRED',
+            },
+            include: { patient: { include: { responsibleNurse: true } } },
+            orderBy: { createdAt: 'asc' },
             take: 300,
           }),
     ]);
@@ -501,12 +523,41 @@ export class WorkItemsService {
       }, now);
     });
 
+    const manualOutboundItems: WorkItem[] = manualOutboundMessages.map((message) => {
+      const patient = patientSummary(message.patient);
+      return withBuckets({
+        id: `manual-outbound:${message.id}`,
+        itemType: 'MANUAL_OUTBOUND_ACTION',
+        sourceType: 'PATIENT_OUTBOUND_MESSAGE',
+        sourceId: message.id,
+        title: `需要人工触达：${message.title}`,
+        description: message.content,
+        status: message.status,
+        priority: 2,
+        createdAt: message.createdAt,
+        patient,
+        riskReason: '患者没有可用的微信或短信电子渠道，需要护士人工复制链接并联系患者',
+        mostRecentEvidence: conciseEvidence({
+          channel: message.channel,
+          createdAt: message.createdAt,
+          formLinkId: message.formLinkId,
+        }),
+        waitingSeconds: secondsSince(message.createdAt, now),
+        slaRemainingSeconds: null,
+        assignedStaff: staffLabel(patient),
+        recommendedAction: 'MANUAL_COPY_AND_CONTACT',
+        actionUrl: patient ? `/patients/${patient.id}?workspace=patient-engagement` : '/nurse-dashboard',
+        actionText: '复制链接并人工联系',
+      }, now);
+    });
+
     const allItems = [
       ...taskItems,
       ...alertOnlyItems,
       ...reminderEscalationItems,
       ...recommendationItems,
       ...patientSubmissionReviewItems,
+      ...manualOutboundItems,
       ...gatewayConflictItems,
     ].sort((a, b) => a.priority - b.priority || (a.dueAt?.getTime() ?? Infinity) - (b.dueAt?.getTime() ?? Infinity) || a.createdAt.getTime() - b.createdAt.getTime());
 

@@ -18,7 +18,8 @@ type WorkItemBucket =
   | 'FAILED_CONTACT_RETRY'
   | 'REFERRAL_CONFIRMATION'
   | 'SUBMISSION_REVIEW'
-  | 'GATEWAY_CONFLICT';
+  | 'GATEWAY_CONFLICT'
+  | 'MANUAL_OUTBOUND_ACTION';
 
 type WorkItem = {
   id: string;
@@ -30,8 +31,9 @@ type WorkItem = {
     | 'GATEWAY_CONFLICT'
     | 'CARE_REMINDER_ESCALATION'
     | 'CARE_PLAN_RECOMMENDATION'
-    | 'PATIENT_SUBMISSION_REVIEW';
-  sourceType: 'TASK' | 'RISK_ALERT' | 'GATEWAY_CONFLICT' | 'CARE_REMINDER_OCCURRENCE' | 'NEXT_BEST_ACTION' | 'PATIENT_FORM_LINK';
+    | 'PATIENT_SUBMISSION_REVIEW'
+    | 'MANUAL_OUTBOUND_ACTION';
+  sourceType: 'TASK' | 'RISK_ALERT' | 'GATEWAY_CONFLICT' | 'CARE_REMINDER_OCCURRENCE' | 'NEXT_BEST_ACTION' | 'PATIENT_FORM_LINK' | 'PATIENT_OUTBOUND_MESSAGE';
   sourceId?: string;
   taskId?: string;
   alertId?: string;
@@ -66,6 +68,7 @@ type WorkItemsSummary = {
   referralAwaitingConfirmationCount: number;
   patientSubmissionsAwaitingReviewCount: number;
   gatewayConflictCount: number;
+  manualOutboundActionRequiredCount: number;
   carePlanRecommendationCount: number;
   careReminderEscalationCount: number;
 };
@@ -93,6 +96,7 @@ const bucketLabels: Record<WorkItemBucket, string> = {
   REFERRAL_CONFIRMATION: '转诊待确认',
   SUBMISSION_REVIEW: '患者提交待复核',
   GATEWAY_CONFLICT: '接口冲突待处理',
+  MANUAL_OUTBOUND_ACTION: '人工触达待处理',
 };
 
 const itemTypeLabels: Record<string, string> = {
@@ -101,6 +105,7 @@ const itemTypeLabels: Record<string, string> = {
   HOSPITAL_VISIT_TASK: '到院确认任务',
   RISK_ALERT_ONLY: '未转任务风险预警',
   GATEWAY_CONFLICT: '接口冲突',
+  MANUAL_OUTBOUND_ACTION: '人工触达',
   CARE_REMINDER_ESCALATION: '遗漏提醒升级',
   CARE_PLAN_RECOMMENDATION: '患者级建议',
   PATIENT_SUBMISSION_REVIEW: '患者提交待复核',
@@ -115,6 +120,9 @@ const statusLabels: Record<string, string> = {
   PROPOSED: '待护士确认',
   PENDING_REVIEW: '待人工复核',
   REVIEWED: '已复核',
+  MANUAL_ACTION_REQUIRED: '需要人工触达',
+  DISPATCH_ACCEPTED: '已接受投递',
+  DELIVERED: '已送达',
 };
 
 function formatTime(value?: string | null) {
@@ -270,6 +278,7 @@ export function NurseDashboardPage() {
     { bucket: 'REFERRAL_CONFIRMATION', label: '转诊待确认', description: '追踪闭环状态', value: summary.referralAwaitingConfirmationCount, tone: 'warning' },
     { bucket: 'SUBMISSION_REVIEW', label: '患者提交待复核', description: '需要人工审核', value: summary.patientSubmissionsAwaitingReviewCount, tone: 'primary' },
     { bucket: 'GATEWAY_CONFLICT', label: '接口冲突待处理', description: '管理员核验', value: summary.gatewayConflictCount, tone: 'neutral' },
+    { bucket: 'MANUAL_OUTBOUND_ACTION', label: '人工触达待处理', description: '复制链接并联系患者', value: summary.manualOutboundActionRequiredCount, tone: 'warning' },
   ] : [];
 
   if (loading && !summary) return <div className="loading-state">正在加载护士今日行动队列...</div>;

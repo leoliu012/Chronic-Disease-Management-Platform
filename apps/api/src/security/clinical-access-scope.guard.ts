@@ -11,6 +11,7 @@ import {
   resolveAuditString,
 } from './audit.decorator';
 import { AuditService } from './audit.service';
+import { resolveClientIp } from './client-ip.util';
 import type { RequestUser } from './request-user.type';
 import { ClinicalAccessScopeService } from './clinical-access-scope.service';
 
@@ -163,12 +164,7 @@ export class ClinicalAccessScopeGuard implements CanActivate {
   }
 
   private ipAddress(req: ScopedRequest) {
-    const forwardedFor = req.headers?.['x-forwarded-for'];
-    return (
-      Array.isArray(forwardedFor)
-        ? forwardedFor[0]
-        : forwardedFor || req.socket?.remoteAddress
-    )?.toString();
+    return resolveClientIp(req).clientIp ?? undefined;
   }
 
   private match(path: string, pattern: RegExp): string | undefined {

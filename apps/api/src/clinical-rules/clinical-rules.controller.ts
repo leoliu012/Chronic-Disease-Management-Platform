@@ -20,57 +20,57 @@ export class ClinicalRulesController {
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
   getSummary() { return this.clinicalRulesService.getSummary(); }
 
-  @Audit({ action: 'SEED_CLINICAL_RULES', target: 'DiseaseRuleTemplate' })
+  @Audit({ mode: 'REQUIRED', action: 'SEED_CLINICAL_RULES', target: 'DiseaseRuleTemplate' })
   @Post('seed-defaults')
   @Roles(UserRole.ADMIN)
   seedDefaultRules() { return this.clinicalRulesService.seedDefaultRules(); }
 
-  @Audit({ action: 'UPDATE_VITAL_THRESHOLD_RULE', target: 'VitalThresholdRule', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'UPDATE_VITAL_THRESHOLD_RULE', target: 'VitalThresholdRule', targetIdFrom: 'params.id' })
   @Patch('vital-threshold-rules/:id')
   @Roles(UserRole.ADMIN)
   updateVitalThresholdRule(@Param('id') id: string, @Body() dto: UpdateVitalThresholdRuleDto) { return this.clinicalRulesService.updateVitalThresholdRule(id, dto); }
 
-  @Audit({ action: 'UPDATE_FOLLOW_UP_POLICY', target: 'FollowUpPolicy', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'UPDATE_FOLLOW_UP_POLICY', target: 'FollowUpPolicy', targetIdFrom: 'params.id' })
   @Patch('follow-up-policies/:id')
   @Roles(UserRole.ADMIN)
   updateFollowUpPolicy(@Param('id') id: string, @Body() dto: UpdateFollowUpPolicyDto) { return this.clinicalRulesService.updateFollowUpPolicy(id, dto); }
 
-  @Audit({ action: 'UPDATE_QUESTIONNAIRE_TEMPLATE', target: 'QuestionnaireTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'UPDATE_QUESTIONNAIRE_TEMPLATE', target: 'QuestionnaireTemplate', targetIdFrom: 'params.id' })
   @Patch('questionnaire-templates/:id')
   @Roles(UserRole.ADMIN)
   updateQuestionnaireTemplate(@Param('id') id: string, @Body() dto: UpdateQuestionnaireTemplateDto) { return this.clinicalRulesService.updateQuestionnaireTemplate(id, dto); }
 
-  @Audit({ action: 'CREATE_RULE_DRAFT_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'response.id' })
+  @Audit({ mode: 'REQUIRED', action: 'CREATE_RULE_DRAFT_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'response.id' })
   @Post('templates/:id/clone-draft')
   @Roles(UserRole.ADMIN)
   cloneDraft(@Param('id') id: string, @Body() dto: CreateRuleVersionDto, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.createDraftVersion(id, dto, user); }
 
-  @Audit({ action: 'SUBMIT_RULE_FOR_PHYSICIAN_REVIEW', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'SUBMIT_RULE_FOR_PHYSICIAN_REVIEW', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/submit-review')
   @Roles(UserRole.ADMIN)
   submitReview(@Param('id') id: string, @Body() dto: ReviewRuleVersionDto) { return this.clinicalRulesService.submitForReview(id, dto); }
 
-  @Audit({ action: 'APPROVE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'APPROVE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/approve')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR)
   approve(@Param('id') id: string, @Body() dto: ReviewRuleVersionDto, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.approveVersion(id, dto, user); }
 
-  @Audit({ action: 'PUBLISH_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'PUBLISH_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/publish')
   @Roles(UserRole.ADMIN)
   publish(@Param('id') id: string, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.publishVersion(id, user); }
 
-  @Audit({ action: 'ACTIVATE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'ACTIVATE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/activate')
   @Roles(UserRole.ADMIN)
   activate(@Param('id') id: string, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.activateVersion(id, user); }
 
-  @Audit({ action: 'DEACTIVATE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'DEACTIVATE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/deactivate')
   @Roles(UserRole.ADMIN)
   deactivate(@Param('id') id: string, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.deactivateVersion(id, user); }
 
-  @Audit({ action: 'ROLLBACK_RULE_AS_NEW_DRAFT', target: 'DiseaseRuleTemplate', targetIdFrom: 'response.id' })
+  @Audit({ mode: 'REQUIRED', action: 'ROLLBACK_RULE_AS_NEW_DRAFT', target: 'DiseaseRuleTemplate', targetIdFrom: 'response.id' })
   @Post('templates/:id/rollback-as-draft')
   @Roles(UserRole.ADMIN)
   rollback(@Param('id') id: string, @Body() dto: CreateRuleVersionDto, @CurrentUser() user: RequestUser) { return this.clinicalRulesService.rollbackAsDraft(id, dto, user); }
@@ -79,12 +79,26 @@ export class ClinicalRulesController {
   @Roles(UserRole.ADMIN, UserRole.DOCTOR)
   compare(@Param('leftId') leftId: string, @Param('rightId') rightId: string) { return this.clinicalRulesService.compareVersions(leftId, rightId); }
 
+  @Audit({ mode: 'REQUIRED', action: 'VALIDATE_RULE_VERSION_FOR_PUBLICATION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
+  @Post('templates/:id/validate-publication')
+  @Roles(UserRole.ADMIN, UserRole.DOCTOR)
+  validatePublication(@Param('id') id: string) { return this.clinicalRulesService.validatePublication(id); }
+
+  @Audit({ mode: 'REQUIRED', action: 'SIMULATE_RULE_VERSION', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id' })
   @Post('templates/:id/simulate')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR)
   simulate(@Param('id') id: string, @Body() dto: SimulateRuleDto) { return this.clinicalRulesService.simulateTemplate(id, dto); }
 
+  @Audit({ mode: 'REQUIRED', action: 'ESTIMATE_RULE_IMPACT', target: 'DiseaseRuleTemplate', targetIdFrom: 'params.id', detailsFrom: { hospitalTenantId: 'query.hospitalTenantId', allTenants: 'query.allTenants', days: 'query.days' } })
   @Get('templates/:id/estimate-impact')
   @Roles(UserRole.ADMIN, UserRole.DOCTOR)
-  estimateImpact(@Param('id') id: string, @Query('days') days?: string) { return this.clinicalRulesService.estimateImpact(id, days ? Number(days) : 90); }
+  estimateImpact(
+    @Param('id') id: string,
+    @CurrentUser() user: RequestUser,
+    @Query('days') days?: string,
+    @Query('hospitalTenantId') hospitalTenantId?: string,
+    @Query('allTenants') allTenants?: string,
+  ) {
+    return this.clinicalRulesService.estimateImpact(id, days ? Number(days) : 90, user, hospitalTenantId, allTenants === 'true');
+  }
 }
-

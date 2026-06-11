@@ -9,6 +9,7 @@ export const WORK_ITEM_BUCKETS = [
   'REFERRAL_CONFIRMATION',
   'SUBMISSION_REVIEW',
   'GATEWAY_CONFLICT',
+  'MANUAL_OUTBOUND_ACTION',
 ] as const;
 
 export type WorkItemBucket = (typeof WORK_ITEM_BUCKETS)[number];

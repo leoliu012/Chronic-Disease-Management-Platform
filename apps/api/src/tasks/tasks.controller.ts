@@ -26,7 +26,7 @@ export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'CREATE_TASK', target: 'Task', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CREATE_TASK', target: 'Task', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/tasks')
   create(@Param('patientId') patientId: string, @Body() dto: CreateTaskDto, @CurrentUser() user: RequestUser) {
     return this.tasksService.create(patientId, dto, user);
@@ -78,14 +78,14 @@ export class TasksController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'START_TASK_PROCESSING', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'START_TASK_PROCESSING', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('tasks/:id/start-processing')
   startProcessing(@Param('id') id: string, @Body() dto: StartTaskProcessingDto, @CurrentUser() user: RequestUser) {
     return this.tasksService.startProcessing(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'APPEND_TASK_PROCESSING_EVENT', target: 'Task', targetIdFrom: 'params.id' })
+  @Audit({ mode: 'REQUIRED', action: 'APPEND_TASK_PROCESSING_EVENT', target: 'Task', targetIdFrom: 'params.id' })
   @Post('tasks/:id/processing-events')
   recordProcessingEvent(
     @Param('id') id: string,
@@ -95,21 +95,21 @@ export class TasksController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'COMPLETE_TASK_PROCESSING', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'COMPLETE_TASK_PROCESSING', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('tasks/:id/complete-processing')
   completeProcessing(@Param('id') id: string, @Body() dto: CompleteTaskProcessingDto, @CurrentUser() user: RequestUser) {
     return this.tasksService.completeProcessing(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'UPDATE_TASK_STATUS', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'UPDATE_TASK_STATUS', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('tasks/:id/status')
   updateStatus(@Param('id') id: string, @Body() dto: UpdateTaskStatusDto, @CurrentUser() user: RequestUser) {
     return this.tasksService.updateStatus(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'CANCEL_TASK', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CANCEL_TASK', target: 'Task', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Delete('tasks/:id')
   remove(@Param('id') id: string) {
     return this.tasksService.remove(id);

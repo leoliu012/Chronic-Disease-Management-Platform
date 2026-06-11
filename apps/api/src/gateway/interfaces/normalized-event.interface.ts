@@ -48,6 +48,9 @@ export interface NormalizedEvent {
    */
   eventId: string;
 
+  /** 可选外部版本；同一 eventId 有修订语义时必须提供。默认 v1。 */
+  externalVersion?: string;
+
   /** 接入通道 */
   channel: GatewayChannel;
 

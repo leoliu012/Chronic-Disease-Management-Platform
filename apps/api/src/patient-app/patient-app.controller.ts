@@ -15,6 +15,7 @@ import { CurrentPatientSession } from './current-patient-session.decorator';
 import { PatientAppService } from './patient-app.service';
 import { PatientSessionGuard } from './patient-session.guard';
 import type { PatientSessionRequest, PatientSessionRequestContext } from './patient-session.type';
+import { resolveClientIp } from '../security/client-ip.util';
 
 type IpRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -22,8 +23,7 @@ type IpRequest = {
 };
 
 function getIpAddress(req: IpRequest) {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  return (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || req.socket?.remoteAddress)?.toString();
+  return resolveClientIp(req).clientIp ?? undefined;
 }
 
 @Public()

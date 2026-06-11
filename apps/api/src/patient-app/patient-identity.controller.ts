@@ -1,3 +1,4 @@
+import { resolveClientIp } from '../security/client-ip.util';
 /**
  * patient-identity.controller.ts —— 患者端统一身份核验与知情同意 HTTP 端口
  *
@@ -26,12 +27,7 @@ type IdentityRequest = {
 };
 
 function getIpAddress(req: IdentityRequest) {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  return (
-    Array.isArray(forwardedFor)
-      ? forwardedFor[0]
-      : forwardedFor || req.socket?.remoteAddress
-  )?.toString();
+  return resolveClientIp(req).clientIp ?? undefined;
 }
 
 function getUserAgent(req: IdentityRequest) {

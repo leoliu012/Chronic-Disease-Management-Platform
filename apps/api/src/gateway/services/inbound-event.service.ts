@@ -181,46 +181,60 @@ export class InboundEventService {
 
   /* ------------------------------------------------------------------------ */
 
+  private externalVersion(event: NormalizedEvent): string {
+    const version = String(event.externalVersion ?? 'v1').trim();
+    return version || 'v1';
+  }
+
+  private idempotencyKey(sourceId: string, event: NormalizedEvent): string {
+    return [sourceId, event.resourceType, event.eventId, this.externalVersion(event)].join('\u001f');
+  }
+
+  private async recordSkippedDuplicate(
+    sourceId: string,
+    batchId: string,
+    event: NormalizedEvent,
+    existingId: string,
+  ): Promise<IngestResult> {
+    const skipped = await this.prisma.integrationSyncRecord.create({
+      data: {
+        sourceId,
+        batchId,
+        externalRecordType: event.resourceType,
+        externalRecordId: event.eventId,
+        externalVersion: this.externalVersion(event),
+        status: IntegrationRecordStatus.SKIPPED,
+        errorMessage: `Duplicate of record ${existingId}`,
+        rawData: this.toJson(event.rawPayload),
+        normalizedData: this.toJson(event.normalizedPayload),
+        promotionStatus: IntegrationPromotionStatus.NOT_REQUIRED,
+        promotionMessage: '审计层已存在等价事件，不再 promote。',
+      },
+    });
+    return {
+      status: 'DUPLICATED',
+      batchId,
+      recordId: skipped.id,
+      message: '相同 eventId 与 externalVersion 已存在，已跳过',
+    };
+  }
+
   private async writeRecord(
     sourceId: string,
     batchId: string,
     event: NormalizedEvent,
   ): Promise<IngestResult> {
-    // 幂等检查
-    const existing = await this.prisma.integrationSyncRecord.findFirst({
-      where: {
-        sourceId,
-        externalRecordType: event.resourceType,
-        externalRecordId: event.eventId,
-      },
-      orderBy: { createdAt: 'desc' },
+    const idempotencyKey = this.idempotencyKey(sourceId, event);
+    const externalVersion = this.externalVersion(event);
+    const existing = await this.prisma.integrationSyncRecord.findUnique({
+      where: { idempotencyKey },
+      select: { id: true },
     });
-
     if (existing) {
       this.logger.debug(
-        `Duplicate event ignored: channel=${event.channel} resource=${event.resourceType} id=${event.eventId}`,
+        `Duplicate event ignored: channel=${event.channel} resource=${event.resourceType} id=${event.eventId} version=${externalVersion}`,
       );
-      // 仍然在当前批次记录一条 SKIPPED，便于审计；promotion 标 NOT_REQUIRED
-      const skipped = await this.prisma.integrationSyncRecord.create({
-        data: {
-          sourceId,
-          batchId,
-          externalRecordType: event.resourceType,
-          externalRecordId: event.eventId,
-          status: IntegrationRecordStatus.SKIPPED,
-          errorMessage: `Duplicate of record ${existing.id}`,
-          rawData: this.toJson(event.rawPayload),
-          normalizedData: this.toJson(event.normalizedPayload),
-          promotionStatus: IntegrationPromotionStatus.NOT_REQUIRED,
-          promotionMessage: '审计层已存在等价事件，不再 promote。',
-        },
-      });
-      return {
-        status: 'DUPLICATED',
-        batchId,
-        recordId: skipped.id,
-        message: '相同 eventId 已存在，已跳过',
-      };
+      return this.recordSkippedDuplicate(sourceId, batchId, event, existing.id);
     }
 
     try {
@@ -230,34 +244,40 @@ export class InboundEventService {
           batchId,
           externalRecordType: event.resourceType,
           externalRecordId: event.eventId,
+          externalVersion,
+          idempotencyKey,
           status: IntegrationRecordStatus.SUCCESS,
           rawData: this.toJson(event.rawPayload),
           normalizedData: this.toJson({
             channel: event.channel,
             triggerEvent: event.triggerEvent,
+            externalVersion,
             patient: event.patient,
             payload: event.normalizedPayload,
             receivedAt: event.receivedAt.toISOString(),
           }),
-          // gateway-promote-pipeline: 网关接收成功 → 默认待入库
           promotionStatus: IntegrationPromotionStatus.PENDING,
           promotionMessage: '已接收，等待 promote 到主数据。',
         },
       });
 
       this.logger.log(
-        `Ingested ${event.channel} ${event.resourceType} ${event.eventId} → record ${created.id}`,
+        `Ingested ${event.channel} ${event.resourceType} ${event.eventId}@${externalVersion} → record ${created.id}`,
       );
-
-      return {
-        status: 'ACCEPTED',
-        batchId,
-        recordId: created.id,
-      };
+      return { status: 'ACCEPTED', batchId, recordId: created.id };
     } catch (err) {
+      // A competing request may have won after our optimistic read. The unique
+      // canonical key converts the race into a deterministic SKIPPED audit row.
+      if ((err as { code?: string })?.code === 'P2002') {
+        const winner = await this.prisma.integrationSyncRecord.findUnique({
+          where: { idempotencyKey },
+          select: { id: true },
+        });
+        if (winner) return this.recordSkippedDuplicate(sourceId, batchId, event, winner.id);
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       this.logger.error(
-        `Failed to persist event ${event.channel}/${event.eventId}: ${errorMessage}`,
+        `Failed to persist event ${event.channel}/${event.eventId}@${externalVersion}: ${errorMessage}`,
       );
       const failed = await this.prisma.integrationSyncRecord.create({
         data: {
@@ -265,18 +285,14 @@ export class InboundEventService {
           batchId,
           externalRecordType: event.resourceType,
           externalRecordId: event.eventId,
+          externalVersion,
           status: IntegrationRecordStatus.FAILED,
           errorMessage,
           rawData: this.toJson(event.rawPayload),
           promotionStatus: IntegrationPromotionStatus.NOT_REQUIRED,
         },
       });
-      return {
-        status: 'FAILED',
-        batchId,
-        recordId: failed.id,
-        message: errorMessage,
-      };
+      return { status: 'FAILED', batchId, recordId: failed.id, message: errorMessage };
     }
   }
 

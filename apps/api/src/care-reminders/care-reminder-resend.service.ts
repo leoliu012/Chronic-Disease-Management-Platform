@@ -18,7 +18,7 @@ import { HospitalWechatOfficialAccountService } from '../patient-engagement/hosp
  *
  *   - Only ADMIN/DOCTOR/NURSE (MANAGER is read-only) — enforced by the caller
  *     via PatientEngagementTenantService.assertWriteAllowed + tenant checks.
- *   - Only occurrence.status in ['SENT', 'CLICKED'] AND completedAt == null.
+ *   - Only occurrence.status in open dispatch / clicked / manual-action states AND completedAt == null.
  *   - If the original PatientFormLink is still usable (ACTIVE, not expired, not
  *     revoked, not used) → reuse its linkUrl (recovered from the most recent
  *     PatientOutboundMessage on that link).
@@ -26,7 +26,7 @@ import { HospitalWechatOfficialAccountService } from '../patient-engagement/hosp
  *     and re-point the occurrence's formLinkId at it so later H5 completion still
  *     maps back to the occurrence.
  *   - EVERY resend creates a new PatientOutboundMessage (audit trail / history).
- *   - The occurrence stays SENT; we bump resendCount + lastResentAt.
+ *   - The occurrence remains in its authoritative delivery state; we bump resendCount + lastResentAt.
  *
  * Channel resolution mirrors the worker's dispatchOne(): WeChat official account
  * first (if patient has a verified openId for this tenant's appId and the tenant
@@ -70,16 +70,19 @@ export class CareReminderResendService {
         message: '该提醒已完成，无需再次发送。',
       });
     }
-    if (occ.status !== 'SENT' && occ.status !== 'CLICKED') {
+    if (!['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'CLICKED', 'MANUAL_ACTION_REQUIRED'].includes(occ.status)) {
       throw new BadRequestException({
         code: 'OCCURRENCE_NOT_RESENDABLE',
-        message: `当前状态为 ${occ.status}，只有已发送(SENT)或已点击(CLICKED)且未完成的提醒才能再次发送。`,
+        message: `当前状态为 ${occ.status}，只有开放且未完成的提醒才能再次发送。`,
       });
     }
 
     const tenantId: string = occ.hospitalTenantId;
     const patient = occ.patient;
     const schedule = occ.schedule;
+    if (occ.availableUntil.getTime() <= Date.now()) {
+      throw new BadRequestException({ code: 'OCCURRENCE_WINDOW_ENDED', message: '本次提醒填写窗口已结束，请创建新的随访任务。' });
+    }
 
     // ---- decide: reuse original link, or mint a new one ----------------------
     let reusedLink = false;
@@ -120,8 +123,7 @@ export class CareReminderResendService {
           sourceId: schedule?.sourceId,
           ...((schedule?.payload as any) || {}),
         } as any,
-        expiresInHours: 24,
-        requiresIdentityCheck: false,
+        expiresAt: occ.availableUntil,
         createdBy: null,
       });
       formLink = created.formLink;
@@ -193,6 +195,12 @@ export class CareReminderResendService {
     }
 
     let dispatchedMessage = canonical;
+    if (channel === 'MANUAL_COPY' && canonical.status !== 'MANUAL_ACTION_REQUIRED') {
+      dispatchedMessage = await this.prisma.patientOutboundMessage.update({
+        where: { id: canonical.id },
+        data: { status: 'MANUAL_ACTION_REQUIRED', errorMessage: null },
+      });
+    }
     if (channel !== 'MANUAL_COPY') {
       const primary = await this.outbound.attemptDispatch({
         messageId: canonical.id,
@@ -220,13 +228,16 @@ export class CareReminderResendService {
       }
     }
 
-    // ---- bump resend bookkeeping; keep occurrence SENT -----------------------
+    // ---- bump resend bookkeeping; preserve authoritative delivery state --------
     const updatedOccurrence = await this.prisma.careReminderOccurrence.update({
       where: { id: occ.id },
       data: {
-        // If it had advanced to CLICKED, a resend conceptually re-arms it as SENT.
-        status: 'SENT',
-        sentAt: new Date(),
+        status: channel === 'MANUAL_COPY'
+          ? 'MANUAL_ACTION_REQUIRED'
+          : ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'].includes(dispatchedMessage?.status ?? '')
+            ? 'DISPATCH_ACCEPTED'
+            : 'FAILED',
+        sentAt: channel === 'MANUAL_COPY' ? undefined : new Date(),
         outboundMessageId: dispatchedMessage?.id ?? canonical.id,
         resendCount: { increment: 1 },
         lastResentAt: new Date(),

@@ -5,6 +5,7 @@ import type { RequestUser } from '../security/request-user.type';
 import { Roles } from '../security/roles.decorator';
 import { UpdateFieldMappingDto } from './dto/update-field-mapping.dto';
 import { IntegrationsService } from './integrations.service';
+import { resolveClientIp } from '../security/client-ip.util';
 
 type RequestWithUser = {
   user?: RequestUser;
@@ -13,10 +14,7 @@ type RequestWithUser = {
 };
 
 function getIpAddress(request: RequestWithUser) {
-  const forwardedFor = request.headers['x-forwarded-for'];
-  return (Array.isArray(forwardedFor)
-    ? forwardedFor[0]
-    : forwardedFor || request.socket.remoteAddress)?.toString();
+  return resolveClientIp(request).clientIp ?? undefined;
 }
 
 // Integration sources are explicitly tenant-bound. The current integration

@@ -632,7 +632,6 @@ function MedicationCheckInForm({
   function handleSubmit() {
     if (taken === null) return;
     submit({
-      medicationId: payload.medicationId,
       taken,
       checkedAt: new Date().toISOString(),
       scheduledAt: payload.scheduledAt || undefined,

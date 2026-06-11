@@ -29,6 +29,7 @@ export type CareReminderWorkerSummary = {
   status: 'SUCCEEDED' | 'FAILED' | 'SKIPPED_LOCKED' | 'SKIPPED_IN_FLIGHT';
   generated: number;
   dispatched: number;
+  manualActionRequired: number;
   dispatchFailed: number;
   retried: number;
   retryScheduled: number;
@@ -42,6 +43,7 @@ export type CareReminderWorkerSummary = {
 
 type DispatchResult = {
   dispatched: number;
+  manualActionRequired: number;
   failed: number;
   retried: number;
   retryScheduled: number;
@@ -344,6 +346,7 @@ export class CareReminderWorkerService
       status,
       generated: 0,
       dispatched: 0,
+      manualActionRequired: 0,
       dispatchFailed: 0,
       retried: 0,
       retryScheduled: 0,
@@ -462,6 +465,7 @@ export class CareReminderWorkerService
       );
       const dispatch = await this.passDispatch();
       summary.dispatched = dispatch.dispatched;
+      summary.manualActionRequired = dispatch.manualActionRequired;
       summary.dispatchFailed = dispatch.failed;
       summary.retried = dispatch.retried;
       summary.retryScheduled += dispatch.retryScheduled;
@@ -486,6 +490,7 @@ export class CareReminderWorkerService
           heartbeatAt: finishedAt,
           generated: summary.generated,
           dispatched: summary.dispatched,
+          manualActionRequired: summary.manualActionRequired,
           dispatchFailed: summary.dispatchFailed,
           retried: summary.retried,
           retryScheduled: summary.retryScheduled,
@@ -511,7 +516,7 @@ export class CareReminderWorkerService
       });
       this.logger.log(
         `round=${run.id} status=${summary.status} generated=${summary.generated} ` +
-          `sent=${summary.dispatched} failed=${summary.dispatchFailed} retried=${summary.retried} ` +
+          `dispatchAccepted=${summary.dispatched} manualRequired=${summary.manualActionRequired} failed=${summary.dispatchFailed} retried=${summary.retried} ` +
           `retryScheduled=${summary.retryScheduled} recovered=${summary.recoveredStuck} ` +
           `expiredLinks=${summary.expiredLinks} escalated=${summary.escalated}`,
       );
@@ -562,7 +567,7 @@ export class CareReminderWorkerService
       const message = occ.outboundMessageId
         ? await this.prisma.patientOutboundMessage.findUnique({ where: { id: occ.outboundMessageId } })
         : null;
-      if (message && ['SENT', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
+      if (message && ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
         const marked = await this.occurrences.markSent(
           occ.id,
           occ.formLinkId ?? message.formLinkId,
@@ -601,7 +606,9 @@ export class CareReminderWorkerService
 
     try {
       const { formLink, message } = await this.dispatchOne(occ);
-      if (message?.status === 'SENT' || message?.status === 'PENDING') {
+      if (message?.status === 'MANUAL_ACTION_REQUIRED') {
+        await this.occurrences.markManualActionRequired(occ.id, formLink?.id, message?.id);
+      } else if (message && ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'].includes(message.status)) {
         await this.occurrences.markSent(occ.id, formLink?.id, message?.id);
       } else {
         await this.occurrences.markSendFailed(
@@ -676,6 +683,7 @@ export class CareReminderWorkerService
     });
 
     let dispatched = 0;
+    let manualActionRequired = 0;
     let failed = 0;
     let retried = 0;
     let retryScheduled = 0;
@@ -687,7 +695,10 @@ export class CareReminderWorkerService
 
       try {
         const { formLink, message } = await this.dispatchOne(occ);
-        if (message?.status === 'SENT' || message?.status === 'PENDING') {
+        if (message?.status === 'MANUAL_ACTION_REQUIRED') {
+          await this.occurrences.markManualActionRequired(occ.id, formLink?.id, message?.id);
+          manualActionRequired += 1;
+        } else if (message && ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'].includes(message.status)) {
           await this.occurrences.markSent(occ.id, formLink?.id, message?.id);
           dispatched += 1;
         } else {
@@ -709,7 +720,7 @@ export class CareReminderWorkerService
         failed += 1;
       }
     }
-    return { dispatched, failed, retried, retryScheduled };
+    return { dispatched, manualActionRequired, failed, retried, retryScheduled };
   }
 
   private async loadOccurrenceForDispatch(id: string) {
@@ -742,7 +753,7 @@ export class CareReminderWorkerService
         (!formLink.expiresAt || formLink.expiresAt.getTime() > Date.now()) &&
         !formLink.revokedAt;
       if (formLink && message && formLinkUsable) {
-        if (['SENT', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
+        if (['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'CLICKED', 'SUBMITTED'].includes(message.status)) {
           return { formLink, token: null, linkUrl: message.linkUrl ?? '', message };
         }
         return this.dispatchExistingMessage(occ, formLink, message);
@@ -765,7 +776,7 @@ export class CareReminderWorkerService
         sourceId: schedule.sourceId,
         ...(schedule.payload || {}),
       } as any,
-      expiresInHours: 24,
+      expiresAt: occ.availableUntil,
       // FormLinkService owns the centralized identity policy. Clinical reminder
       // workers may not downgrade sensitive forms to anonymous submissions.
       createdBy: null,
@@ -821,7 +832,13 @@ export class CareReminderWorkerService
     const resolved = route ?? (await this.resolveRoute(occ.hospitalTenantId, occ.patient));
     const channel = message.channel === 'MANUAL_COPY' ? resolved.channel : message.channel;
     if (channel === 'MANUAL_COPY') {
-      return { formLink, token: null, linkUrl: message.linkUrl ?? '', message };
+      const manual = message.status === 'MANUAL_ACTION_REQUIRED'
+        ? message
+        : await this.prisma.patientOutboundMessage.update({
+            where: { id: message.id },
+            data: { status: 'MANUAL_ACTION_REQUIRED', errorMessage: null },
+          });
+      return { formLink, token: null, linkUrl: message.linkUrl ?? '', message: manual };
     }
 
     const primary = await this.outbound.attemptDispatch({
@@ -857,7 +874,7 @@ export class CareReminderWorkerService
     const now = new Date();
     const stale = await this.prisma.careReminderOccurrence.findMany({
       where: {
-        status: { in: ['PENDING', 'FAILED', 'SENT', 'CLICKED'] },
+        status: { in: ['PENDING', 'FAILED', 'SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'CLICKED'] },
         availableUntil: { lt: now },
       },
       take: 500,

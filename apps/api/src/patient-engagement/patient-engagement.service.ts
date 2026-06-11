@@ -30,7 +30,7 @@ const DEFAULT_TITLE: Record<string, string> = {
  *
  * v2 关键变化:
  *   1. AUTO 频道选择按 *本院* 服务号配置走 — 没配置则直接 fallback SMS.
- *   2. send=false 也必须创建一条 MANUAL_COPY 消息 (status=PENDING),
+ *   2. send=false 也必须创建一条 MANUAL_COPY 消息 (status=MANUAL_ACTION_REQUIRED),
  *      保留 token / linkUrl 在历史消息表中, 否则护士关闭弹窗后这条链接就找不回来.
  *   3. send=true 但失败: message 写 FAILED, 不删除链接.
  *   4. 所有文案改为"本院服务号" / "本院慢病管理团队".
@@ -257,7 +257,7 @@ export class PatientEngagementService {
       };
     } else {
       // Bug 3 fix: create a MANUAL_COPY message so the link doesn't vanish
-      // after the create modal closes. Status stays PENDING; nurse copies the
+      // after the create modal closes. Status stays MANUAL_ACTION_REQUIRED; nurse copies the
       // url, then optionally /mark-manual-sent later.
       message = await this.outbound.create({
         hospitalTenantId: patient.hospitalTenantId,
@@ -277,7 +277,7 @@ export class PatientEngagementService {
         createdBy: input.createdBy ?? undefined,
         initialStatus: 'PENDING',
       });
-      sendResult = { channel: 'MANUAL_COPY', status: 'PENDING', errorMessage: null };
+      sendResult = { channel: 'MANUAL_COPY', status: 'MANUAL_ACTION_REQUIRED', errorMessage: null };
     }
 
     return { formLink, token, linkUrl, message, sendResult };
@@ -342,9 +342,14 @@ export class PatientEngagementService {
       });
     }
 
-    // MANUAL_COPY: nothing is dispatched; the link just lives in history.
+    // MANUAL_COPY is a nurse handoff, not a delivered electronic message.
     if (args.channel === 'MANUAL_COPY') {
-      const refreshed = await this.prisma.patientOutboundMessage.findUnique({ where: { id: message.id } });
+      const refreshed = message.status === 'MANUAL_ACTION_REQUIRED'
+        ? message
+        : await this.prisma.patientOutboundMessage.update({
+            where: { id: message.id },
+            data: { channel: 'MANUAL_COPY', status: 'MANUAL_ACTION_REQUIRED', errorMessage: null },
+          });
       return { message: refreshed };
     }
 
@@ -361,7 +366,7 @@ export class PatientEngagementService {
       data: {
         patientId: args.patient.id,
         formLinkId: args.formLink.id,
-        eventType: primary.dispatched?.status === 'SENT' ? 'MESSAGE_SENT' : 'MESSAGE_FAILED',
+        eventType: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'].includes(primary.dispatched?.status ?? '') ? 'MESSAGE_SENT' : 'MESSAGE_FAILED',
         metadata: {
           channel: args.channel,
           messageType,

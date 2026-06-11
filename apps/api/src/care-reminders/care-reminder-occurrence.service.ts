@@ -14,6 +14,9 @@ export type OccurrenceStatus =
   | 'PENDING'
   | 'SENDING'
   | 'SENT'
+  | 'DISPATCH_ACCEPTED'
+  | 'DELIVERED'
+  | 'MANUAL_ACTION_REQUIRED'
   | 'FAILED'
   | 'CLICKED'
   | 'COMPLETED'
@@ -170,8 +173,28 @@ export class CareReminderOccurrenceService {
     const r = await this.prisma.careReminderOccurrence.updateMany({
       where: { id, status: 'SENDING' },
       data: {
-        status: 'SENT',
+        status: 'DISPATCH_ACCEPTED',
         sentAt: new Date(),
+        sendingStartedAt: null,
+        nextRetryAt: null,
+        ...(formLinkId ? { formLinkId } : {}),
+        ...(outboundMessageId ? { outboundMessageId } : {}),
+        lastError: null,
+      },
+    });
+    return r.count === 1;
+  }
+
+  /** SENDING -> MANUAL_ACTION_REQUIRED when no electronic route exists. */
+  async markManualActionRequired(
+    id: string,
+    formLinkId?: string | null,
+    outboundMessageId?: string | null,
+  ): Promise<boolean> {
+    const r = await this.prisma.careReminderOccurrence.updateMany({
+      where: { id, status: 'SENDING' },
+      data: {
+        status: 'MANUAL_ACTION_REQUIRED',
         sendingStartedAt: null,
         nextRetryAt: null,
         ...(formLinkId ? { formLinkId } : {}),
@@ -269,12 +292,12 @@ export class CareReminderOccurrenceService {
     return this.getByIdOrThrow(id);
   }
 
-  /** PENDING/SENT/CLICKED/FAILED -> MISSED after the completion window. */
+  /** Open delivery states -> MISSED after the completion window. */
   async markMissed(id: string): Promise<boolean> {
     const r = await this.prisma.careReminderOccurrence.updateMany({
       where: {
         id,
-        status: { in: ['PENDING', 'SENT', 'CLICKED', 'FAILED'] },
+        status: { in: ['PENDING', 'SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'CLICKED', 'FAILED'] },
         availableUntil: { lt: new Date() },
       },
       data: { status: 'MISSED', missedAt: new Date(), nextRetryAt: null },
@@ -408,11 +431,11 @@ export class CareReminderOccurrenceService {
 
   async cancel(id: string): Promise<void> {
     const r = await this.prisma.careReminderOccurrence.updateMany({
-      where: { id, status: { in: ['PENDING', 'FAILED', 'SENT', 'CLICKED'] } },
+      where: { id, status: { in: ['PENDING', 'FAILED', 'SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'CLICKED'] } },
       data: { status: 'CANCELED', nextRetryAt: null, sendingStartedAt: null },
     });
     if (r.count !== 1) {
-      throw new ForbiddenException('only PENDING / FAILED / SENT / CLICKED occurrences can be canceled');
+      throw new ForbiddenException('only open reminder occurrences can be canceled');
     }
   }
 }

@@ -6,6 +6,7 @@ import type { RequestUser } from '../security/request-user.type';
 import { CreateHospitalVisitReminderDto } from './dto/create-hospital-visit-reminder.dto';
 import { UpdateHospitalVisitReminderDto } from './dto/update-hospital-visit-reminder.dto';
 import { HospitalVisitRemindersService } from './hospital-visit-reminders.service';
+import { resolveClientIp } from '../security/client-ip.util';
 
 type IpRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -13,8 +14,7 @@ type IpRequest = {
 };
 
 function getIpAddress(req: IpRequest) {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  return (Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || req.socket?.remoteAddress)?.toString();
+  return resolveClientIp(req).clientIp ?? undefined;
 }
 
 @Controller()

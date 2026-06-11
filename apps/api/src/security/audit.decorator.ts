@@ -4,9 +4,13 @@ export const AUDIT_METADATA_KEY = 'clinicalAuditPolicy';
 
 export type AuditValueSource = string | string[];
 
+export type AuditMode = 'BEST_EFFORT' | 'REQUIRED';
+
 export type AuditPolicy = {
   action: string;
   target: string;
+  /** REQUIRED performs a durable ATTEMPT write before invoking the handler. */
+  mode?: AuditMode;
   targetIdFrom?: AuditValueSource;
   patientIdFrom?: AuditValueSource;
   detailsFrom?: Record<string, AuditValueSource>;

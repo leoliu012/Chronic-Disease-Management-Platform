@@ -332,7 +332,7 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_CARE_REMINDER_NOW', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_CARE_REMINDER_NOW', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
   @Post('occurrences/:id/send-now')
   async sendNow(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
     this.tenant.assertWriteAllowed(user);
@@ -341,7 +341,7 @@ export class CareRemindersController {
 
     if (occ.status !== 'PENDING') {
       // Spec point 9: reuse existing link if already SENT.
-      if (occ.status === 'SENT' || occ.status === 'CLICKED') {
+      if (['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED', 'MANUAL_ACTION_REQUIRED', 'CLICKED'].includes(occ.status)) {
         return { reused: true, occurrence: occ };
       }
       throw new BadRequestException(`occurrence is in status ${occ.status}; cannot send-now`);
@@ -366,7 +366,7 @@ export class CareRemindersController {
   // append a NURSE_RESEND delivery attempt (no new message row). The
   // service throws BadRequest (400) for completed / non-resendable states.
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'RESEND_CARE_REMINDER', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'RESEND_CARE_REMINDER', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.occurrence.patientId' })
   @Post('occurrences/:id/resend')
   async resendOccurrence(@Param('id') id: string, @CurrentUser() user: RequestUser, @Req() req: any) {
     this.tenant.assertWriteAllowed(user);
@@ -395,7 +395,7 @@ export class CareRemindersController {
    * to an already-sent patient-facing case.
    */
   @Roles(UserRole.ADMIN)
-  @Audit({ action: 'REPLAY_CARE_REMINDER_OCCURRENCE', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'REPLAY_CARE_REMINDER_OCCURRENCE', target: 'CareReminderOccurrence', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Post('occurrences/:id/replay')
   async replayOccurrence(
     @Param('id') id: string,
@@ -448,7 +448,7 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'SEND_PATIENT_DIRECT_MESSAGE', target: 'PatientDirectMessage', targetIdFrom: 'response.directMessage.id', patientIdFrom: 'params.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'SEND_PATIENT_DIRECT_MESSAGE', target: 'PatientDirectMessage', targetIdFrom: 'response.directMessage.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/messages')
   async createDirectMessage(
     @Param('patientId') patientId: string,
@@ -499,7 +499,7 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN)
-  @Audit({ action: 'RECOVER_STUCK_CARE_REMINDERS', target: 'CareReminderWorker', targetIdFrom: 'response.instanceId' })
+  @Audit({ mode: 'REQUIRED', action: 'RECOVER_STUCK_CARE_REMINDERS', target: 'CareReminderWorker', targetIdFrom: 'response.instanceId' })
   @Post('worker/recover-stuck')
   async recoverStuckWorkerRows(@CurrentUser() user: RequestUser, @Req() req: any) {
     const summary = await this.worker.recoverStuckSending();
@@ -515,7 +515,7 @@ export class CareRemindersController {
   }
 
   @Roles(UserRole.ADMIN)
-  @Audit({ action: 'RUN_CARE_REMINDER_WORKER_ONCE', target: 'CareReminderWorker' })
+  @Audit({ mode: 'REQUIRED', action: 'RUN_CARE_REMINDER_WORKER_ONCE', target: 'CareReminderWorker' })
   @Post('worker/run-once')
   async workerRunOnce(@CurrentUser() user: RequestUser, @Req() req: any) {
     const summary = await this.worker.runOnce();

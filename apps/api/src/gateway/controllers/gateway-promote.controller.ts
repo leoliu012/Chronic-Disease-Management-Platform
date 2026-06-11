@@ -1,3 +1,4 @@
+import { resolveClientIp } from '../../security/client-ip.util';
 /**
  * gateway-promote.controller.ts
  *
@@ -50,8 +51,7 @@ type RequestWithUser = {
 };
 
 function getIp(r: RequestWithUser) {
-  const fwd = r.headers['x-forwarded-for'];
-  return (Array.isArray(fwd) ? fwd[0] : fwd || r.socket.remoteAddress)?.toString();
+  return resolveClientIp(r).clientIp ?? undefined;
 }
 
 const PROMOTION_STATUS_VALUES = Object.values(IntegrationPromotionStatus) as string[];

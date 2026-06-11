@@ -1,1 +1,6 @@
 /github_pwd.txt
+
+# Local source dumps and historical patch overlays should not enter release branches.
+**/.DS_Store
+src_dump*.txt
+**/.patch-backups/

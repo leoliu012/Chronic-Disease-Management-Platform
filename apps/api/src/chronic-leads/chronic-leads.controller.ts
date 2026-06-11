@@ -1,3 +1,4 @@
+import { resolveClientIp } from '../security/client-ip.util';
 /**
  * chronic-leads.controller.ts —— 高危慢病线索池 HTTP 端口
  *
@@ -35,10 +36,7 @@ type IpRequest = {
 };
 
 function getIpAddress(req: IpRequest) {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  return (
-    Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor || req.socket?.remoteAddress
-  )?.toString();
+  return resolveClientIp(req).clientIp ?? undefined;
 }
 
 @Controller('chronic-leads')

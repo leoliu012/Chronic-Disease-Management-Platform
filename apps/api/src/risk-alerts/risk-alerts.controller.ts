@@ -22,7 +22,7 @@ export class RiskAlertsController {
   constructor(private readonly riskAlertsService: RiskAlertsService) {}
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'CREATE_RISK_ALERT', target: 'RiskAlert', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CREATE_RISK_ALERT', target: 'RiskAlert', targetIdFrom: 'response.id', patientIdFrom: 'params.patientId' })
   @Post('patients/:patientId/risk-alerts')
   create(
     @Param('patientId') patientId: string,
@@ -54,7 +54,7 @@ export class RiskAlertsController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'START_RISK_ALERT_PROCESSING', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'START_RISK_ALERT_PROCESSING', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/in-progress')
   markInProgress(
     @Param('id') id: string,
@@ -65,14 +65,14 @@ export class RiskAlertsController {
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'CLOSE_RISK_EPISODE_RESOLVED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CLOSE_RISK_EPISODE_RESOLVED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/resolve')
   resolve(@Param('id') id: string, @Body() dto: HandleRiskAlertDto, @CurrentUser() user: RequestUser) {
     return this.riskAlertsService.resolve(id, dto, user);
   }
 
   @Roles(UserRole.ADMIN, UserRole.DOCTOR, UserRole.NURSE)
-  @Audit({ action: 'CLOSE_RISK_EPISODE_DISMISSED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
+  @Audit({ mode: 'REQUIRED', action: 'CLOSE_RISK_EPISODE_DISMISSED', target: 'RiskAlert', targetIdFrom: 'params.id', patientIdFrom: 'response.patientId' })
   @Patch('risk-alerts/:id/dismiss')
   dismiss(@Param('id') id: string, @Body() dto: HandleRiskAlertDto, @CurrentUser() user: RequestUser) {
     return this.riskAlertsService.dismiss(id, dto, user);

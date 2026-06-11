@@ -169,7 +169,8 @@ export class PatientDirectMessageService {
       data: {
         outboundMessageId: outboundMessage.id,
         status:
-          refreshed?.status === 'SENT' ? 'SENT' :
+          refreshed?.status === 'MANUAL_ACTION_REQUIRED' ? 'MANUAL_ACTION_REQUIRED' :
+          ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'].includes(refreshed?.status ?? '') ? 'DISPATCH_ACCEPTED' :
           refreshed?.status === 'FAILED' ? 'FAILED' :
           'PENDING',
       },
@@ -217,7 +218,7 @@ export class PatientDirectMessageService {
   /** Soft mark CLICKED when the H5 is opened (no submit action needed). */
   async markClickedByFormLinkId(formLinkId: string): Promise<void> {
     await this.prisma.patientDirectMessage.updateMany({
-      where: { formLinkId, status: 'SENT' },
+      where: { formLinkId, status: { in: ['SENT', 'DISPATCH_ACCEPTED', 'DELIVERED'] } },
       data: { status: 'CLICKED' },
     });
   }

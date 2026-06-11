@@ -34,6 +34,7 @@ import {
   GatewayApiKeyService,
 } from '../services/gateway-api-key.service';
 import { ipInCidrList, normalizeIp } from '../utils/cidr-match.util';
+import { resolveClientIp } from '../../security/client-ip.util';
 
 const HEADER_NAME = 'x-gateway-api-key';
 
@@ -150,11 +151,7 @@ export class GatewayApiKeyGuard implements CanActivate {
   /* ----------------------------------------------------------------- */
 
   private extractIp(req: Request): string | null {
-    const forwarded = req.headers['x-forwarded-for'];
-    const candidate = Array.isArray(forwarded)
-      ? forwarded[0]
-      : forwarded || req.ip || req.socket?.remoteAddress;
-    return normalizeIp(candidate ?? null);
+    return resolveClientIp(req as any).clientIp;
   }
 
   private parseGlobalAllowlist(): string[] {
