@@ -51,6 +51,13 @@ export class UpdateVitalMonitoringPlanDto {
   @Min(0)
   missedWindowAfterMinutes?: number;
 
+  /** Persisted operational SLA after a missed-measurement event. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10080)
+  missedFollowUpDueWithinMinutes?: number;
+
   @IsOptional()
   @IsString()
   evidenceBasis?: string;

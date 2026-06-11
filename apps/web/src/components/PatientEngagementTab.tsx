@@ -211,7 +211,7 @@ export function PatientEngagementTab(props: PatientEngagementTabProps) {
       expiresInHours: 72,
       preferredChannel: 'AUTO',
       requiresIdentityCheck: linkType !== 'QUESTIONNAIRE',
-      questionnaireType: linkType === 'QUESTIONNAIRE' ? (prefill?.questionnaireType || 'HYPERTENSION_FOLLOWUP') : undefined,
+      questionnaireType: linkType === 'QUESTIONNAIRE' ? (prefill?.questionnaireType || 'HYPERTENSION_MONTHLY') : undefined,
       vitalType: linkType === 'VITAL_RECHECK' ? (prefill?.vitalType || 'BLOOD_PRESSURE') : undefined,
       medicationId: linkType === 'MEDICATION_CHECKIN' ? (prefill?.medicationId || props.medications?.[0]?.id) : undefined,
       reason: linkType === 'HOSPITAL_VISIT_CONFIRM' ? (prefill?.reason || '') : undefined,
@@ -237,7 +237,7 @@ export function PatientEngagementTab(props: PatientEngagementTabProps) {
     try {
       let res: CreateLinkResponse;
       if (c.linkType === 'QUESTIONNAIRE') {
-        res = await createQuestionnaireLink(patientId, { ...baseInput, questionnaireType: c.questionnaireType || 'GENERIC' });
+        res = await createQuestionnaireLink(patientId, { ...baseInput, questionnaireType: c.questionnaireType || 'HYPERTENSION_MONTHLY' });
       } else if (c.linkType === 'VITAL_RECHECK') {
         res = await createVitalRecheckLink(patientId, { ...baseInput, vitalType: c.vitalType || 'BLOOD_PRESSURE' });
       } else if (c.linkType === 'MEDICATION_CHECKIN') {
@@ -901,10 +901,11 @@ function localizeVitalType(value?: string): string {
 function localizeQuestionnaireType(value?: string): string {
   if (!value) return '随访问卷';
   const labels: Record<string, string> = {
-    HYPERTENSION_FOLLOWUP: '高血压随访问卷',
-    DIABETES_FOLLOWUP: '糖尿病随访问卷',
-    COPD_FOLLOWUP: '慢阻肺随访问卷',
-    GENERIC: '通用随访问卷',
+    HYPERTENSION_MONTHLY: '高血压月度随访问卷',
+    DIABETES_MONTHLY: '糖尿病月度随访问卷',
+    COPD_CAT: '慢阻肺 CAT 问卷',
+    LIPID_LIFESTYLE: '血脂生活方式问卷',
+    OBESITY_LIFESTYLE: '体重管理生活方式问卷',
   };
   return labels[value] || value;
 }
@@ -1180,11 +1181,12 @@ function ComposeModal(props: {
           {state.linkType === 'QUESTIONNAIRE' && (
             <label className="pe-admin-field">
               <span>问卷类型</span>
-              <select value={state.questionnaireType || 'HYPERTENSION_FOLLOWUP'} onChange={(e) => onChange({ questionnaireType: e.target.value })}>
-                <option value="HYPERTENSION_FOLLOWUP">高血压随访</option>
-                <option value="DIABETES_FOLLOWUP">糖尿病随访</option>
-                <option value="COPD_FOLLOWUP">慢阻肺随访</option>
-                <option value="GENERIC">通用随访</option>
+              <select value={state.questionnaireType || 'HYPERTENSION_MONTHLY'} onChange={(e) => onChange({ questionnaireType: e.target.value })}>
+                <option value="HYPERTENSION_MONTHLY">高血压月度随访</option>
+                <option value="DIABETES_MONTHLY">糖尿病月度随访</option>
+                <option value="LIPID_LIFESTYLE">血脂生活方式随访</option>
+                <option value="OBESITY_LIFESTYLE">体重管理生活方式随访</option>
+                <option value="COPD_CAT">慢阻肺 CAT（第二阶段）</option>
               </select>
             </label>
           )}

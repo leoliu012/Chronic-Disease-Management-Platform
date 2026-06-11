@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class CreateHospitalVisitReminderDto {
   @IsOptional()
@@ -19,4 +19,18 @@ export class CreateHospitalVisitReminderDto {
   @IsOptional()
   @IsString()
   electronicSignature?: string;
+
+  /** Persisted operational SLA for the follow-up task. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(720)
+  followUpDueWithinHours?: number;
+
+  /** Persisted SLA after a patient reports cannot-visit / refusal. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(720)
+  retryDueWithinHours?: number;
 }

@@ -34,6 +34,8 @@ import './entity-name-chip-v1.css';
 import './chronic-lead-invitation.css';
 import './gateway-promote-conflict-v1.css';
 import './admin-ops-v1.css';
+import './patient-level-action-queue-v9.css';
+import './clinical-rules-release-v9.css';
 import App from './App.tsx';
 
 createRoot(document.getElementById('root')!).render(

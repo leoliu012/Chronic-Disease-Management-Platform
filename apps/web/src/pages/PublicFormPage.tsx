@@ -452,8 +452,13 @@ function ScoreField({
 function questionnaireLabel(t: string): string {
   const map: Record<string, string> = {
     HYPERTENSION_FOLLOWUP: '高血压随访问卷',
+    HYPERTENSION_MONTHLY: '高血压月度随访问卷',
     DIABETES_FOLLOWUP: '糖尿病随访问卷',
+    DIABETES_MONTHLY: '糖尿病月度随访问卷',
     COPD_FOLLOWUP: '慢阻肺随访问卷',
+    COPD_CAT: '慢阻肺 CAT 症状评估',
+    LIPID_LIFESTYLE: '血脂生活方式问卷',
+    OBESITY_LIFESTYLE: '体重管理生活方式问卷',
   };
   return map[t] || `随访问卷：${t}`;
 }

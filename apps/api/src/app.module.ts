@@ -36,6 +36,7 @@ import { PatientEngagementModule } from './patient-engagement/patient-engagement
 import { CareRemindersModule } from './care-reminders/care-reminders.module';
 import { HealthModule } from './health/health.module';
 import { AdminOpsModule } from './admin-ops/admin-ops.module';
+import { CarePlansModule } from './care-plans/care-plans.module';
 
 const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [DevToolsModule];
 
@@ -69,6 +70,7 @@ const developmentOnlyModules = process.env.NODE_ENV === 'production' ? [] : [Dev
     CareRemindersModule,
     HealthModule,
     AdminOpsModule,
+    CarePlansModule,
     ...developmentOnlyModules,
     MedicationsModule,
     QuestionnairesModule,

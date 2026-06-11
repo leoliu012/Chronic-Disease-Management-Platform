@@ -885,7 +885,7 @@ export class CareReminderWorkerService
           title: `未完成 · ${occ.title}`,
           type: this.occurrenceTypeToTaskType(occ.occurrenceType),
           status: TaskStatus.PENDING,
-          dueAt: new Date(now.getTime() + 24 * 3600 * 1000),
+          dueAt: new Date(now.getTime() + occ.schedule.escalationTaskDueWithinMinutes * 60_000),
           assigneeId: occ.patient.responsibleNurseId ?? undefined,
           priority: 1,
         },

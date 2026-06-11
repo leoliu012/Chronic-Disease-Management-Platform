@@ -60,6 +60,14 @@ enum RiskEpisodeStatus {
   DISMISSED
 }
 
+enum ClinicalRuleLifecycleStatus {
+  DRAFT
+  PHYSICIAN_REVIEW
+  PUBLISHED
+  EFFECTIVE
+  DEACTIVATED
+}
+
 
 enum UserRole {
   ADMIN
@@ -211,6 +219,11 @@ model Patient {
   // patient_engagement_v3_2
   outboundAttempts        PatientOutboundAttempt[]
   hospitalVisitFeedbacks  HospitalVisitFeedback[]
+
+  // patient-level-stratified-management-v9
+  carePlans              CarePlan[]
+  riskStratifications    PatientRiskStratification[]
+  nextBestActions        NextBestAction[]
 }
 
 model DiseaseProfile {
@@ -301,6 +314,7 @@ model Task {
   processingEvents TaskProcessingEvent[]
   riskEpisode RiskEpisode? @relation("TaskRiskEpisode", fields: [riskEpisodeId], references: [id], onDelete: SetNull)
   referencedAsOpenByEpisodes RiskEpisode[] @relation("RiskEpisodeOpenTask")
+  nextBestActions NextBestAction[]
 
   @@index([patientId, status, dueAt])
   @@index([assigneeId, status, dueAt])
@@ -354,6 +368,16 @@ model RiskAlert {
   title              String
   description        String?
   triggerRule        String?
+
+  // patient-level-stratified-management-v9: immutable evaluation evidence
+  ruleId             String?
+  ruleVersion        String?
+  ruleSnapshot       Json?
+  evidenceBasis      String?
+  evaluatedAt        DateTime?
+  inputSnapshot      Json?
+  matchedConditions  Json?
+
   sourceVitalRecordId String?
   sourceQuestionnaireResultId String?
   riskEpisodeId      String?
@@ -418,6 +442,7 @@ model VitalMonitoringPlan {
   reminderLeadMinutes Int   @default(180)
   checkInWindowBeforeMinutes Int @default(180)
   missedWindowAfterMinutes Int @default(180)
+  missedFollowUpDueWithinMinutes Int @default(1440)
   sourcePreset   String?
   evidenceBasis  String?
   evidenceSource String?
@@ -490,6 +515,9 @@ model QuestionnaireResult {
   id                String     @id @default(uuid())
   patientId          String
   questionnaireType  String
+  // For H5 demo forms, retain the patient's original 0-9 UI score separately
+  // from the score scaled into the governed questionnaire template range.
+  rawScore           Int?
   score              Int
   riskLevel          RiskLevel  @default(LOW)
   riskConclusion     String
@@ -645,6 +673,8 @@ model HospitalVisitReminder {
 
   remindedBy        String?
   remindedAt        DateTime                    @default(now())
+  followUpDueWithinHours Int                     @default(48)
+  retryDueWithinHours    Int                     @default(24)
 
   revokedBy         String?
   revokedAt         DateTime?
@@ -681,7 +711,18 @@ model DiseaseRuleTemplate {
   managementGoal  String?
   riskBasis       String?
   version         String      @default("v1")
-  isActive        Boolean     @default(true)
+  isActive        Boolean     @default(false)
+
+  // patient-level-stratified-management-v9: release workflow
+  lifecycleStatus ClinicalRuleLifecycleStatus @default(DRAFT)
+  evidenceBasis   String?
+  effectiveFrom   DateTime?
+  effectiveUntil  DateTime?
+  publishedAt     DateTime?
+  publishedBy     String?
+  deactivatedAt   DateTime?
+  deactivatedBy   String?
+  basedOnTemplateId String?
 
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
@@ -689,6 +730,7 @@ model DiseaseRuleTemplate {
   vitalThresholdRules VitalThresholdRule[]
   followUpPolicies    FollowUpPolicy[]
   questionnaireTemplates QuestionnaireTemplate[]
+  approvals              ClinicalRuleApproval[]
 
   @@unique([diseaseType, version])
   @@index([diseaseType, isActive])
@@ -757,6 +799,109 @@ model QuestionnaireTemplate {
 
   @@index([templateId, isActive])
   @@index([questionnaireType, isActive])
+}
+
+// ============================================================================
+// patient-level-stratified-management-v9
+// ============================================================================
+
+model ClinicalRuleApproval {
+  id          String   @id @default(uuid())
+  templateId  String
+  reviewerId  String
+  reviewerRole String
+  decision    String   @default("APPROVED")
+  note        String?
+  createdAt   DateTime @default(now())
+
+  template DiseaseRuleTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, reviewerId])
+  @@index([templateId, decision, createdAt])
+}
+
+model CarePlan {
+  id                  String   @id @default(uuid())
+  patientId           String
+  // Only the active plan owns this token. Paused/completed history keeps null.
+  activeKey           String?  @unique
+  cohort              String   @default("THREE_HIGHS")
+  stratificationLevel RiskLevel @default(LOW)
+  goals               Json?
+  activeInterventions Json?
+  followUpCadence     Json?
+  referralStatus      String   @default("NONE")
+  nextReviewAt        DateTime?
+  owningTeamId        String?
+  version             Int      @default(1)
+  status              String   @default("ACTIVE")
+  enrolledAt          DateTime @default(now())
+  pausedAt            DateTime?
+  completedAt         DateTime?
+  createdBy           String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  patient              Patient                     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  riskStratifications  PatientRiskStratification[]
+  nextBestActions      NextBestAction[]
+
+  @@index([patientId, status])
+  @@index([cohort, stratificationLevel, status])
+  @@index([nextReviewAt, status])
+}
+
+model PatientRiskStratification {
+  id            String    @id @default(uuid())
+  carePlanId    String
+  patientId     String
+  riskLevel     RiskLevel
+  priorityScore Int
+  reasons       Json
+  policyVersion String
+  calculatedAt  DateTime  @default(now())
+
+  carePlan CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, calculatedAt])
+  @@index([carePlanId, calculatedAt])
+  @@index([riskLevel, priorityScore, calculatedAt])
+}
+
+model NextBestAction {
+  id             String   @id @default(uuid())
+  carePlanId     String
+  patientId      String
+  actionType     String
+  actionKey      String
+  activeKey      String?  @unique
+  title          String
+  reasonSummary  String
+  evidence       Json
+  priorityScore  Int
+  requiresDoctor Boolean  @default(false)
+  status         String   @default("PROPOSED")
+  dueAt          DateTime?
+  linkedTaskId   String?
+  acceptedBy     String?
+  acceptedAt     DateTime?
+  dismissedBy    String?
+  dismissedAt    DateTime?
+  dismissReason  String?
+  expiresAt      DateTime?
+  policyVersion  String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  carePlan   CarePlan @relation(fields: [carePlanId], references: [id], onDelete: Cascade)
+  patient    Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  linkedTask Task?    @relation(fields: [linkedTaskId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, status, priorityScore])
+  @@index([carePlanId, status])
+  @@index([actionType, status, dueAt])
+  @@index([linkedTaskId])
 }
 
 model IntegrationSource {
@@ -1316,9 +1461,18 @@ model PatientFormLink {
   @@index([riskAlertId])
   @@index([expiresAt])
   // patient_engagement_v3_2 — submission linkage
-  submissionType String?
-  submissionId   String?
-  submittedAt    DateTime?
+  submissionType      String?
+  submissionId        String?
+  submittedAt         DateTime?
+  // patient-level-stratified-management-v9 — explicit nurse review queue
+  manualReviewStatus  String    @default("NOT_REQUIRED")
+  // NOT_REQUIRED / PENDING / REVIEWED / DISMISSED
+  manualReviewDueAt   DateTime?
+  manualReviewedAt    DateTime?
+  manualReviewedBy    String?
+  manualReviewNote    String?
+
+  @@index([manualReviewStatus, manualReviewDueAt])
 }
 
 model PatientOutboundMessage {
@@ -1445,6 +1599,7 @@ model CareReminderSchedule {
   checkInWindowBeforeMinutes  Int      @default(180)
   checkInWindowAfterMinutes   Int      @default(180)
   escalationAfterMinutes      Int?
+  escalationTaskDueWithinMinutes Int @default(1440)
   isActive                    Boolean  @default(true)
   pausedAt                    DateTime?
   startDate                   DateTime?

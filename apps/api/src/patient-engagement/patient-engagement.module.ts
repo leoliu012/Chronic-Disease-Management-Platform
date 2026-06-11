@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SecurityModule } from '../security/security.module';
 import { ClinicalDispositionModule } from '../clinical-disposition/clinical-disposition.module';
+import { ClinicalRulesModule } from '../clinical-rules/clinical-rules.module';
 import { AdminPatientEngagementController } from './admin-patient-engagement.controller';
 import { PublicFormController, WechatOAuthController } from './public-form.controller';
 import { HospitalWechatAccountController } from './hospital-wechat-account.controller';
@@ -22,7 +23,7 @@ import { PatientEngagementTenantService } from './patient-engagement-tenant.serv
  * WechatOfficialAccountService.tokenRefreshInflight).
  */
 @Module({
-  imports: [PrismaModule, SecurityModule, ClinicalDispositionModule],
+  imports: [PrismaModule, SecurityModule, ClinicalDispositionModule, ClinicalRulesModule],
   controllers: [
     AdminPatientEngagementController,
     PublicFormController,

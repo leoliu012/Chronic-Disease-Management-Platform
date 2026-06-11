@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, getApiErrorMessage } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
@@ -6,529 +6,370 @@ import { usePolling } from '../hooks/usePolling';
 type Patient = {
   id: string;
   name: string;
-  hospitalPatientId?: string;
-  phone?: string;
-  responsibleDoctorId?: string;
-  responsibleNurseId?: string;
+  hospitalPatientId?: string | null;
+  phone?: string | null;
 };
 
-type VitalRecord = {
-  id: string;
-  type: string;
-  value: number;
-  unit: string;
-  measuredAt: string;
-  note?: string;
-  patient: Patient;
-};
-
-type Task = {
-  id: string;
-  title: string;
-  type: string;
-  status: string;
-  dueAt?: string;
-  patient?: Patient;
-};
-
-type NurseDashboard = {
-  nurseId: string;
-  summary: {
-    patientCount: number;
-    pendingAllocationPatientCount?: number;
-    pendingTaskCount: number;
-    todayTaskCount: number;
-    overdueTaskCount: number;
-    openRiskAlertCount: number;
-    recentAbnormalVitalCount: number;
-    completedTaskCount: number;
-  };
-  myPatients: Patient[];
-  pendingAllocationPatients?: Patient[];
-  recentAbnormalVitals: VitalRecord[];
-  completedTasks?: Task[];
-};
+type WorkItemBucket =
+  | 'ALL'
+  | 'CRITICAL_RISK'
+  | 'OVERDUE'
+  | 'PHONE_DUE_TODAY'
+  | 'FAILED_CONTACT_RETRY'
+  | 'REFERRAL_CONFIRMATION'
+  | 'SUBMISSION_REVIEW'
+  | 'GATEWAY_CONFLICT';
 
 type WorkItem = {
   id: string;
-  itemType: 'FOLLOW_UP_TASK' | 'RISK_FOLLOW_UP_TASK' | 'RISK_ALERT_ONLY' | 'HOSPITAL_VISIT_TASK' | 'GATEWAY_CONFLICT' | 'CARE_REMINDER_ESCALATION';
-  sourceType: 'TASK' | 'RISK_ALERT' | 'GATEWAY_CONFLICT' | 'CARE_REMINDER_OCCURRENCE';
+  itemType:
+    | 'FOLLOW_UP_TASK'
+    | 'RISK_FOLLOW_UP_TASK'
+    | 'HOSPITAL_VISIT_TASK'
+    | 'RISK_ALERT_ONLY'
+    | 'GATEWAY_CONFLICT'
+    | 'CARE_REMINDER_ESCALATION'
+    | 'CARE_PLAN_RECOMMENDATION'
+    | 'PATIENT_SUBMISSION_REVIEW';
+  sourceType: 'TASK' | 'RISK_ALERT' | 'GATEWAY_CONFLICT' | 'CARE_REMINDER_OCCURRENCE' | 'NEXT_BEST_ACTION' | 'PATIENT_FORM_LINK';
+  sourceId?: string;
   taskId?: string;
   alertId?: string;
+  nextBestActionId?: string;
   title: string;
-  description?: string;
+  description?: string | null;
   status: string;
+  priority: number;
   riskLevel?: string;
-  dueAt?: string;
+  dueAt?: string | null;
   createdAt: string;
-  patient?: Patient;
-  triggerRule?: string;
+  patient?: Patient | null;
+  riskReason: string;
+  mostRecentEvidence: string;
+  waitingSeconds: number;
+  slaRemainingSeconds: number | null;
+  assignedStaff: string;
+  recommendedAction: string;
+  bucketKeys: WorkItemBucket[];
   triggerCount?: number;
+  triggerRule?: string | null;
   actionUrl: string;
   actionText: string;
 };
 
-type HospitalVisitReminder = {
-  id: string;
-  patientId: string;
-  reason: string;
-  remindedAt: string;
-  relatedTaskId?: string | null;
-  patient?: Patient;
+type WorkItemsSummary = {
+  totalOpen: number;
+  criticalRiskPendingActionCount: number;
+  overdueTaskCount: number;
+  telephoneFollowUpsDueTodayCount: number;
+  failedContactRetryCount: number;
+  referralAwaitingConfirmationCount: number;
+  patientSubmissionsAwaitingReviewCount: number;
+  gatewayConflictCount: number;
+  carePlanRecommendationCount: number;
+  careReminderEscalationCount: number;
 };
 
 type WorkItemsResponse = {
-  summary: {
-    totalOpen: number;
-    regularTaskCount: number;
-    riskTaskCount: number;
-    alertOnlyCount: number;
-    overdueCount: number;
-    gatewayConflictCount?: number;
-    careReminderEscalationCount?: number;
-  };
+  summary: WorkItemsSummary;
+  activeBucket: WorkItemBucket;
   items: WorkItem[];
 };
 
-type WorkbenchSectionKey = 'workItems' | 'vitals' | 'patients' | 'completed';
-type WorkItemFilter = 'ALL' | 'RISK' | 'TASK' | 'OVERDUE';
-
-type SummaryItem = {
+type Card = {
+  bucket: WorkItemBucket;
   label: string;
+  description: string;
   value: number;
-  section: WorkbenchSectionKey;
-  filter?: WorkItemFilter;
-  description: string;
-  tone: 'primary' | 'warning' | 'danger' | 'success' | 'neutral';
+  tone: 'danger' | 'warning' | 'primary' | 'neutral';
 };
 
-const itemTypeLabelMap: Record<string, string> = {
+const bucketLabels: Record<WorkItemBucket, string> = {
+  ALL: '全部待处理事项',
+  CRITICAL_RISK: '极高危待处置',
+  OVERDUE: '逾期任务',
+  PHONE_DUE_TODAY: '今日电话随访',
+  FAILED_CONTACT_RETRY: '触达失败待重试',
+  REFERRAL_CONFIRMATION: '转诊待确认',
+  SUBMISSION_REVIEW: '患者提交待复核',
+  GATEWAY_CONFLICT: '接口冲突待处理',
+};
+
+const itemTypeLabels: Record<string, string> = {
   FOLLOW_UP_TASK: '随访任务',
-  RISK_FOLLOW_UP_TASK: '风险随访任务',
-  HOSPITAL_VISIT_TASK: '到院提醒任务',
-  RISK_ALERT_ONLY: '风险预警',
-  GATEWAY_CONFLICT: '网关冲突',
-  CARE_REMINDER_ESCALATION: '遗漏升级',
+  RISK_FOLLOW_UP_TASK: '风险处置任务',
+  HOSPITAL_VISIT_TASK: '到院确认任务',
+  RISK_ALERT_ONLY: '未转任务风险预警',
+  GATEWAY_CONFLICT: '接口冲突',
+  CARE_REMINDER_ESCALATION: '遗漏提醒升级',
+  CARE_PLAN_RECOMMENDATION: '患者级建议',
+  PATIENT_SUBMISSION_REVIEW: '患者提交待复核',
 };
 
-const riskLabelMap: Record<string, string> = {
-  LOW: '低危',
-  MEDIUM: '中危',
-  HIGH: '高危',
-  VERY_HIGH: '极高危',
-};
-
-const vitalTypeLabelMap: Record<string, string> = {
-  BLOOD_PRESSURE: '血压',
-  SYSTOLIC_BP: '血压（收缩压）',
-  DIASTOLIC_BP: '血压（舒张压）',
-  BLOOD_GLUCOSE: '血糖',
-  WEIGHT: '体重',
-  HEART_RATE: '心率',
-  SPO2: '血氧',
-  LDL_C: '低密度脂蛋白胆固醇',
-};
-
-const statusLabelMap: Record<string, string> = {
+const statusLabels: Record<string, string> = {
   PENDING: '待处理',
-  IN_PROGRESS: '待处理',
-  DONE: '已完成',
-  CANCELED: '已取消',
+  IN_PROGRESS: '处理中',
   OPEN: '未处理',
-  RESOLVED: '已处理',
-  DISMISSED: '已忽略',
+  MISSED: '已遗漏',
+  CONFLICT: '待核验',
+  PROPOSED: '待护士确认',
+  PENDING_REVIEW: '待人工复核',
+  REVIEWED: '已复核',
 };
 
-const workbenchSections: Array<{
-  key: WorkbenchSectionKey;
-  title: string;
-  description: string;
-}> = [
-  { key: 'workItems', title: '待处理事项', description: '任务、预警、风险随访合并处理' },
-  { key: 'vitals', title: '异常指标', description: '患者上传或院内同步异常值' },
-  { key: 'patients', title: '我的患者', description: '责任患者清单' },
-  { key: 'completed', title: '完成记录', description: '最近完成的随访与任务' },
-];
-
-function formatTime(value?: string) {
+function formatTime(value?: string | null) {
   if (!value) return '-';
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
-function getStatusClass(status: string) {
-  const normalized = status === 'IN_PROGRESS' ? 'pending' : status.toLowerCase().replace(/_/g, '-');
-  return `status-badge status-${normalized}`;
+function formatDuration(seconds?: number | null) {
+  if (seconds == null) return '-';
+  const abs = Math.abs(seconds);
+  if (abs < 60) return `${abs} 秒`;
+  if (abs < 3600) return `${Math.floor(abs / 60)} 分钟`;
+  if (abs < 86400) return `${Math.floor(abs / 3600)} 小时`;
+  return `${Math.floor(abs / 86400)} 天 ${Math.floor((abs % 86400) / 3600)} 小时`;
 }
 
-function getRiskClass(riskLevel?: string) {
-  return `risk-badge risk-${String(riskLevel || '').toLowerCase().replace(/_/g, '-')}`;
+function slaLabel(seconds?: number | null) {
+  if (seconds == null) return '-';
+  return seconds < 0 ? `已超时 ${formatDuration(seconds)}` : `剩余 ${formatDuration(seconds)}`;
 }
 
-function isOverdue(item: WorkItem) {
-  return Boolean(item.dueAt && new Date(item.dueAt).getTime() < Date.now());
+function riskClass(riskLevel?: string) {
+  return `risk-badge risk-${String(riskLevel ?? 'LOW').toLowerCase().replace(/_/g, '-')}`;
 }
 
-function PatientLink({ patient }: { patient?: Patient }) {
+function PatientLink({ patient }: { patient?: Patient | null }) {
   if (!patient) return <span className="muted">-</span>;
   return <Link to={`/patients/${patient.id}`}>{patient.name}</Link>;
 }
 
-function WorkItemsTable({
-  items,
-  busyItemId,
-  onStartAlertFollowUp,
-}: {
-  items: WorkItem[];
-  busyItemId: string;
-  onStartAlertFollowUp: (item: WorkItem) => void;
-}) {
-  if (items.length === 0) {
-    return <div className="empty-state compact-empty">当前没有待处理事项</div>;
-  }
-
-  return (
-    <div className="unified-work-item-list">
-      {items.map((item) => (
-        <article
-          key={item.id}
-          className={`unified-work-item-card ${item.itemType === 'RISK_ALERT_ONLY' ? 'alert-only' : ''} ${item.itemType === 'RISK_FOLLOW_UP_TASK' ? 'risk-task' : ''}`}
-        >
-          <div className="unified-work-item-topline">
-            <span className="badge">{itemTypeLabelMap[item.itemType] ?? item.itemType}</span>
-            <span className={getStatusClass(item.status)}>{statusLabelMap[item.status] ?? item.status}</span>
-            {item.riskLevel && <span className={getRiskClass(item.riskLevel)}>{riskLabelMap[item.riskLevel] ?? item.riskLevel}</span>}
-            {isOverdue(item) && <span className="work-item-overdue-pill">已逾期</span>}
-          </div>
-
-          <div className="unified-work-item-body">
-            <div>
-              <h3>{item.title}</h3>
-              <p>{item.description || item.triggerRule || '暂无补充说明'}</p>
-              {item.triggerRule && <p className="muted small">触发依据：{item.triggerRule}</p>}
-              {item.triggerCount && item.triggerCount > 1 && <p className="muted small">同一风险 episode 已累计触发 {item.triggerCount} 次</p>}
-            </div>
-            <dl className="work-item-meta-grid">
-              <div><dt>患者</dt><dd><PatientLink patient={item.patient} /></dd></div>
-              <div><dt>院内号</dt><dd>{item.patient?.hospitalPatientId ?? '-'}</dd></div>
-              <div><dt>截止时间</dt><dd>{formatTime(item.dueAt)}</dd></div>
-              <div><dt>来源</dt><dd>{item.sourceType === 'TASK' ? '待办任务' : item.sourceType === 'RISK_ALERT' ? '风险预警' : item.sourceType === 'GATEWAY_CONFLICT' ? '网关冲突' : '患者遗漏提醒'}</dd></div>
-            </dl>
-          </div>
-
-          <div className="unified-work-item-actions">
-            {item.itemType === 'RISK_ALERT_ONLY' ? (
-              <button
-                className="primary-btn nurse-primary-detail-link"
-                type="button"
-                disabled={busyItemId === item.id}
-                onClick={() => onStartAlertFollowUp(item)}
-              >
-                {busyItemId === item.id ? '正在生成随访任务...' : item.actionText}
-              </button>
-            ) : (
-              <Link className="primary-btn nurse-primary-detail-link" to={item.actionUrl}>
-                {item.actionText}
-              </Link>
-            )}
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function VitalsTable({ records }: { records: VitalRecord[] }) {
-  if (records.length === 0) return <div className="empty-state compact-empty">暂无异常指标</div>;
-
-  return (
-    <div className="table-wrap clean-table-wrap">
-      <table className="table clean-hospital-table">
-        <thead>
-          <tr><th>患者</th><th>指标</th><th>数值</th><th>时间</th><th>备注</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          {records.map((record) => (
-            <tr key={record.id}>
-              <td><PatientLink patient={record.patient} /></td>
-              <td>{vitalTypeLabelMap[record.type] ?? record.type}</td>
-              <td><strong>{record.value} {record.unit}</strong></td>
-              <td>{formatTime(record.measuredAt)}</td>
-              <td>{record.note ?? '-'}</td>
-              <td><Link className="secondary-btn compact-link-btn" to={`/patients/${record.patient.id}?workspace=monitoring&vitalId=${record.id}`}>查看指标</Link></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function PatientsTable({ patients }: { patients: Patient[] }) {
-  if (patients.length === 0) return <div className="empty-state compact-empty">暂无负责患者</div>;
-
-  return (
-    <div className="table-wrap clean-table-wrap">
-      <table className="table clean-hospital-table">
-        <thead>
-          <tr><th>姓名</th><th>院内 ID</th><th>电话</th><th>责任医生</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          {patients.map((patient) => (
-            <tr key={patient.id}>
-              <td><strong>{patient.name}</strong></td>
-              <td>{patient.hospitalPatientId ?? '-'}</td>
-              <td>{patient.phone ?? '-'}</td>
-              <td>{patient.responsibleDoctorId ?? '-'}</td>
-              <td><Link className="secondary-btn compact-link-btn" to={`/patients/${patient.id}`}>进入档案</Link></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function CompletedTasksTable({ tasks }: { tasks: Task[] }) {
-  if (tasks.length === 0) return <div className="empty-state compact-empty">暂无已完成任务记录</div>;
-
-  return (
-    <div className="table-wrap clean-table-wrap">
-      <table className="table clean-hospital-table">
-        <thead>
-          <tr><th>任务</th><th>患者</th><th>截止时间</th><th>状态</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          {tasks.map((task) => (
-            <tr key={task.id}>
-              <td><strong>{task.title}</strong></td>
-              <td><PatientLink patient={task.patient} /></td>
-              <td>{formatTime(task.dueAt)}</td>
-              <td><span className={getStatusClass(task.status)}>{statusLabelMap[task.status] ?? task.status}</span></td>
-              <td>{task.patient && <Link className="secondary-btn compact-link-btn" to={`/patients/${task.patient.id}?workspace=handling-history&historyTask=${task.id}`}>查看处置记录</Link>}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export function NurseDashboardPage() {
   const navigate = useNavigate();
-  const [data, setData] = useState<NurseDashboard | null>(null);
-  const [workItemsData, setWorkItemsData] = useState<WorkItemsResponse | null>(null);
-  const [activeVisitReminders, setActiveVisitReminders] = useState<HospitalVisitReminder[]>([]);
+  const [activeBucket, setActiveBucket] = useState<WorkItemBucket>('ALL');
+  const [summary, setSummary] = useState<WorkItemsSummary | null>(null);
+  const [items, setItems] = useState<WorkItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState<WorkbenchSectionKey>('workItems');
-  const [workItemFilter, setWorkItemFilter] = useState<WorkItemFilter>('ALL');
   const [busyItemId, setBusyItemId] = useState('');
-  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  async function loadDashboard(opts?: { silent?: boolean }) {
+  async function loadQueue(opts?: { silent?: boolean; bucket?: WorkItemBucket }) {
     if (!opts?.silent) setLoading(true);
     setError('');
-
+    const bucket = opts?.bucket ?? activeBucket;
     try {
-      const [dashboardRes, workItemsRes, visitRemindersRes] = await Promise.all([
-        api.get('/nurse-dashboard'),
-        api.get('/work-items'),
-        api.get('/hospital-visit-reminders?status=ACTIVE'),
+      const [summaryRes, queueRes] = await Promise.all([
+        api.get<WorkItemsSummary>('/work-items/summary'),
+        api.get<WorkItemsResponse>('/work-items', { params: { bucket } }),
       ]);
-      setData(dashboardRes.data);
-      setWorkItemsData(workItemsRes.data);
-      setActiveVisitReminders(visitRemindersRes.data ?? []);
+      setSummary(summaryRes.data);
+      setItems(queueRes.data.items ?? []);
     } catch (err) {
       console.error(err);
-      setError(getApiErrorMessage(err, '护士工作台加载失败，请确认后端服务已启动。'));
+      setError(getApiErrorMessage(err, '护士今日行动队列加载失败，请确认后端和数据库迁移已完成。'));
     } finally {
       if (!opts?.silent) setLoading(false);
     }
   }
 
-  async function startAlertFollowUp(item: WorkItem) {
-    if (!item.patient?.id || !item.alertId || busyItemId) return;
+  async function selectBucket(bucket: WorkItemBucket) {
+    setActiveBucket(bucket);
+    await loadQueue({ bucket });
+  }
 
+  async function startAlertDisposition(item: WorkItem) {
+    if (!item.patient?.id || !item.alertId) return;
     setBusyItemId(item.id);
-    setMessage('');
     setError('');
-
     try {
       const dueAt = new Date();
-      if (item.riskLevel === 'VERY_HIGH') dueAt.setHours(dueAt.getHours() + 4);
-      else if (item.riskLevel === 'HIGH') dueAt.setHours(dueAt.getHours() + 24);
-      else dueAt.setHours(dueAt.getHours() + 72);
-
-      await api.post(`/patients/${item.patient.id}/tasks`, {
-        title: item.title.replace(/^风险预警：/, '风险随访：'),
+      dueAt.setHours(dueAt.getHours() + (item.riskLevel === 'VERY_HIGH' ? 4 : item.riskLevel === 'HIGH' ? 24 : 72));
+      const response = await api.post(`/patients/${item.patient.id}/tasks`, {
+        title: item.title.replace(/^风险预警：/, '风险处置：'),
         type: 'RISK_ALERT_FOLLOW_UP',
         dueAt: dueAt.toISOString(),
         relatedAlertId: item.alertId,
       });
-
       await api.patch(`/risk-alerts/${item.alertId}/in-progress`, {
-        handlingNote: '护士已从“待处理事项”将该风险预警转为电话随访任务。',
+        handlingNote: '护士已从今日行动队列创建处置任务。',
       });
-
-      setMessage('已生成风险随访任务，即将进入患者详情页的电话随访 tab。');
-      navigate(`/patients/${item.patient.id}?workspace=follow-up`);
+      navigate(`/patients/${item.patient.id}/task-processing?taskId=${response.data.id}`);
     } catch (err) {
       console.error(err);
-      setError(getApiErrorMessage(err, '风险预警转随访任务失败，请稍后重试。'));
-      await loadDashboard();
+      setError(getApiErrorMessage(err, '风险预警转处置任务失败。'));
+      await loadQueue({ silent: true });
     } finally {
       setBusyItemId('');
     }
   }
 
+  async function acceptRecommendation(item: WorkItem) {
+    if (!item.nextBestActionId || !item.patient?.id) return;
+    setBusyItemId(item.id);
+    setError('');
+    try {
+      const response = await api.post(`/care-plans/next-best-actions/${item.nextBestActionId}/create-task`);
+      navigate(`/patients/${item.patient.id}/task-processing?taskId=${response.data.id}`);
+    } catch (err) {
+      console.error(err);
+      setError(getApiErrorMessage(err, '患者级建议转处置任务失败。'));
+      await loadQueue({ silent: true });
+    } finally {
+      setBusyItemId('');
+    }
+  }
+
+  async function reviewPatientSubmission(item: WorkItem) {
+    if (!item.sourceId) return;
+    const confirmed = window.confirm('确认已查看该患者提交内容并完成人工复核？');
+    if (!confirmed) return;
+    setBusyItemId(item.id);
+    setError('');
+    try {
+      await api.post(`/work-items/submissions/${item.sourceId}/review`, {
+        note: '护士已在今日行动队列确认复核。',
+      });
+      await loadQueue({ silent: true });
+    } catch (err) {
+      console.error(err);
+      setError(getApiErrorMessage(err, '患者提交复核状态更新失败。'));
+      await loadQueue({ silent: true });
+    } finally {
+      setBusyItemId('');
+    }
+  }
+
+  function runPrimaryAction(item: WorkItem) {
+    if (item.itemType === 'PATIENT_SUBMISSION_REVIEW') {
+      void reviewPatientSubmission(item);
+      return;
+    }
+    if (item.itemType === 'RISK_ALERT_ONLY') {
+      void startAlertDisposition(item);
+      return;
+    }
+    if (item.itemType === 'CARE_PLAN_RECOMMENDATION') {
+      void acceptRecommendation(item);
+      return;
+    }
+    navigate(item.actionUrl);
+  }
+
   useEffect(() => {
-    loadDashboard();
+    void loadQueue();
   }, []);
 
-  // 护士工作台：预警 / 待办任务每 15 秒自动刷新，无需手动 reload。
-  usePolling(() => loadDashboard({ silent: true }), 15000);
+  usePolling(() => loadQueue({ silent: true }), 15000);
 
-  const workItems = workItemsData?.items ?? [];
-  const filteredWorkItems = useMemo(() => {
-    if (workItemFilter === 'RISK') {
-      return workItems.filter((item) => item.itemType !== 'FOLLOW_UP_TASK');
-    }
-    if (workItemFilter === 'TASK') {
-      return workItems.filter((item) => item.itemType === 'FOLLOW_UP_TASK');
-    }
-    if (workItemFilter === 'OVERDUE') {
-      return workItems.filter((item) => isOverdue(item));
-    }
-    return workItems;
-  }, [workItems, workItemFilter]);
+  const cards: Card[] = summary ? [
+    { bucket: 'CRITICAL_RISK', label: '极高危待处置', description: '优先联系并升级', value: summary.criticalRiskPendingActionCount, tone: 'danger' },
+    { bucket: 'OVERDUE', label: '逾期任务', description: '已超过 SLA', value: summary.overdueTaskCount, tone: 'danger' },
+    { bucket: 'PHONE_DUE_TODAY', label: '今日电话随访', description: '今日需要联系', value: summary.telephoneFollowUpsDueTodayCount, tone: 'primary' },
+    { bucket: 'FAILED_CONTACT_RETRY', label: '触达失败待重试', description: '微信或短信失败', value: summary.failedContactRetryCount, tone: 'warning' },
+    { bucket: 'REFERRAL_CONFIRMATION', label: '转诊待确认', description: '追踪闭环状态', value: summary.referralAwaitingConfirmationCount, tone: 'warning' },
+    { bucket: 'SUBMISSION_REVIEW', label: '患者提交待复核', description: '需要人工审核', value: summary.patientSubmissionsAwaitingReviewCount, tone: 'primary' },
+    { bucket: 'GATEWAY_CONFLICT', label: '接口冲突待处理', description: '管理员核验', value: summary.gatewayConflictCount, tone: 'neutral' },
+  ] : [];
 
-  if (loading && !data) return <div className="loading-state">正在加载护士工作台...</div>;
-  if (!data) return <div className="empty-state">护士工作台加载失败</div>;
-
-  const completedTasks = data.completedTasks ?? [];
-  const summary = workItemsData?.summary;
-
-  const summaryItems: SummaryItem[] = [
-    { label: '待处理事项', value: summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount, section: 'workItems', filter: 'ALL', description: '任务与预警合并', tone: 'primary' },
-    { label: '风险随访', value: (summary?.riskTaskCount ?? 0) + (summary?.alertOnlyCount ?? 0) + (summary?.careReminderEscalationCount ?? 0) + (summary?.gatewayConflictCount ?? 0), section: 'workItems', filter: 'RISK', description: '风险/到院/遗漏闭环', tone: 'danger' },
-    { label: '普通随访', value: summary?.regularTaskCount ?? data.summary.pendingTaskCount, section: 'workItems', filter: 'TASK', description: '无关联预警', tone: 'warning' },
-    { label: '逾期事项', value: summary?.overdueCount ?? data.summary.overdueTaskCount, section: 'workItems', filter: 'OVERDUE', description: '优先联系', tone: 'danger' },
-    { label: '异常指标', value: data.summary.recentAbnormalVitalCount, section: 'vitals', description: '近期异常值', tone: 'warning' },
-    { label: '我的患者', value: data.summary.patientCount, section: 'patients', description: '责任患者清单', tone: 'neutral' },
-    { label: '完成记录', value: data.summary.completedTaskCount, section: 'completed', description: '最近完成', tone: 'success' },
-  ];
-
-  function openSummaryTarget(item: SummaryItem) {
-    setActiveSection(item.section);
-    if (item.filter) setWorkItemFilter(item.filter);
-  }
-
-  function getWorkbenchCount(sectionKey: WorkbenchSectionKey) {
-    if (!data) return summary?.totalOpen ?? 0;
-    if (sectionKey === 'workItems') return summary?.totalOpen ?? data.summary.pendingTaskCount + data.summary.openRiskAlertCount;
-    if (sectionKey === 'vitals') return data.summary.recentAbnormalVitalCount;
-    if (sectionKey === 'patients') return data.summary.patientCount;
-    if (sectionKey === 'completed') return data.summary.completedTaskCount;
-    return 0;
-  }
+  if (loading && !summary) return <div className="loading-state">正在加载护士今日行动队列...</div>;
 
   return (
-    <div className="business-page nurse-workbench-clean unified-workbench-page">
-      {activeVisitReminders.length > 0 && (
-        <section className="hospital-visit-workbench-banner" role="status">
-          <div>
-            <strong>已提醒以下患者到院：{activeVisitReminders.map((item) => item.patient?.name).filter(Boolean).join('、')}</strong>
-            <p>请从到院提醒中心进入患者详情右侧处置面板，完成再次提醒、已到院、未到院或拒绝到院记录。</p>
-          </div>
-          <Link className="primary-btn compact-link-btn" to="/hospital-visit-reminders">
-            查看详情
-          </Link>
-        </section>
-      )}
+    <div className="page nurse-action-queue-v9-page">
+      <header className="page-header nurse-action-queue-v9-header">
+        <div>
+          <p className="eyebrow">Patient-level stratified management</p>
+          <h1>护士今日行动队列</h1>
+          <p>先处理高风险、逾期、触达失败、转诊闭环和人工复核事项。患者级建议只有在护士确认后才会生成正式任务。</p>
+        </div>
+        <button className="secondary-btn" type="button" onClick={() => void loadQueue()}>刷新队列</button>
+      </header>
 
-      <section className="workbench-overview-strip" aria-label="护士工作台指标入口">
-        {summaryItems.map((item) => (
+      <section className="nurse-action-queue-v9-summary" aria-label="今日行动队列摘要">
+        {cards.map((card) => (
           <button
+            key={card.bucket}
             type="button"
-            key={item.label}
-            className={`workbench-metric-card workbench-metric-${item.tone} ${activeSection === item.section ? 'is-active' : ''}`}
-            onClick={() => openSummaryTarget(item)}
+            className={`nurse-action-queue-v9-card tone-${card.tone} ${activeBucket === card.bucket ? 'active' : ''}`}
+            onClick={() => void selectBucket(card.bucket)}
           >
-            <span className="metric-card-label">{item.label}</span>
-            <strong>{item.value}</strong>
-            <small>{item.description}</small>
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+            <small>{card.description}</small>
           </button>
         ))}
       </section>
 
-      <section className="workbench-layout-card nurse-workspace-layout-card">
-        <aside className="patient-detail-side-nav nurse-workspace-side-nav" aria-label="护士工作台区域导航">
-          <div className="patient-detail-side-nav-title">护士工作台工作区</div>
-          <div className="patient-detail-side-nav-list">
-            {workbenchSections.map((section) => (
-              <button
-                key={section.key}
-                type="button"
-                className={
-                  activeSection === section.key
-                    ? 'patient-detail-side-nav-item active'
-                    : 'patient-detail-side-nav-item'
-                }
-                onClick={() => setActiveSection(section.key)}
-              >
-                <span>
-                  <strong>{section.title}</strong>
-                  <small>{section.description}</small>
-                </span>
-                <em>{getWorkbenchCount(section.key)}</em>
-              </button>
-            ))}
+      <section className="nurse-action-queue-v9-panel">
+        <div className="nurse-action-queue-v9-panel-heading">
+          <div>
+            <h2>{bucketLabels[activeBucket]}</h2>
+            <p>{summary?.totalOpen ?? 0} 条开放事项；当前筛选显示 {items.length} 条。</p>
           </div>
-        </aside>
-
-        <main className="workbench-main-panel">
-          {activeSection === 'workItems' && (
-            <div className="workbench-section-stack">
-              <div className="clean-section-heading">
-                <div>
-                  <h2>待处理事项</h2>
-                </div>
-              </div>
-
-              <div className="segmented-tabs unified-work-item-tabs">
-                <button className={workItemFilter === 'ALL' ? 'active' : ''} onClick={() => setWorkItemFilter('ALL')} type="button">全部 <span>{workItems.length}</span></button>
-                <button className={workItemFilter === 'RISK' ? 'active' : ''} onClick={() => setWorkItemFilter('RISK')} type="button">风险/到院 <span>{workItems.filter((item) => item.itemType !== 'FOLLOW_UP_TASK').length}</span></button>
-                <button className={workItemFilter === 'TASK' ? 'active' : ''} onClick={() => setWorkItemFilter('TASK')} type="button">普通随访 <span>{workItems.filter((item) => item.itemType === 'FOLLOW_UP_TASK').length}</span></button>
-                <button className={workItemFilter === 'OVERDUE' ? 'active' : ''} onClick={() => setWorkItemFilter('OVERDUE')} type="button">逾期 <span>{workItems.filter((item) => isOverdue(item)).length}</span></button>
-              </div>
-
-              <section className="clean-subpanel">
-                <WorkItemsTable items={filteredWorkItems} busyItemId={busyItemId} onStartAlertFollowUp={startAlertFollowUp} />
-              </section>
-            </div>
+          {activeBucket !== 'ALL' && (
+            <button className="secondary-btn compact-link-btn" type="button" onClick={() => void selectBucket('ALL')}>查看全部</button>
           )}
+        </div>
 
-          {activeSection === 'vitals' && (
-            <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>最近异常指标</h2></div></div>
-              <section className="clean-subpanel"><VitalsTable records={data.recentAbnormalVitals} /></section>
-            </div>
-          )}
-
-          {activeSection === 'patients' && (
-            <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>我的患者</h2></div></div>
-              <section className="clean-subpanel"><PatientsTable patients={data.myPatients} /></section>
-            </div>
-          )}
-
-          {activeSection === 'completed' && (
-            <div className="workbench-section-stack">
-              <div className="clean-section-heading"><div><h2>完成记录</h2></div></div>
-              <section className="clean-subpanel"><CompletedTasksTable tasks={completedTasks} /></section>
-            </div>
-          )}
-        </main>
+        {items.length === 0 ? (
+          <div className="empty-state compact-empty">当前筛选下没有待处理事项</div>
+        ) : (
+          <div className="table-wrap nurse-action-queue-v9-table-wrap">
+            <table className="table nurse-action-queue-v9-table">
+              <thead>
+                <tr>
+                  <th>患者</th>
+                  <th>风险原因</th>
+                  <th>最近证据</th>
+                  <th>等待时间</th>
+                  <th>剩余 SLA</th>
+                  <th>责任人</th>
+                  <th>建议动作</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} className={item.priority === 0 ? 'critical-row' : ''}>
+                    <td>
+                      <PatientLink patient={item.patient} />
+                      <div className="muted small">{item.patient?.hospitalPatientId ?? itemTypeLabels[item.itemType] ?? item.itemType}</div>
+                    </td>
+                    <td>
+                      <span className={riskClass(item.riskLevel)}>{item.riskLevel ?? 'ROUTINE'}</span>
+                      <strong className="queue-cell-title">{item.riskReason}</strong>
+                      <div className="muted small">{statusLabels[item.status] ?? item.status} · {formatTime(item.dueAt)}</div>
+                    </td>
+                    <td><span className="queue-evidence">{item.mostRecentEvidence}</span></td>
+                    <td>{formatDuration(item.waitingSeconds)}</td>
+                    <td className={item.slaRemainingSeconds != null && item.slaRemainingSeconds < 0 ? 'sla-overdue' : ''}>{slaLabel(item.slaRemainingSeconds)}</td>
+                    <td>{item.assignedStaff}</td>
+                    <td><code>{item.recommendedAction}</code></td>
+                    <td>
+                      {item.itemType === 'PATIENT_SUBMISSION_REVIEW' && item.patient?.id && (
+                        <button
+                          className="secondary-btn compact-link-btn"
+                          type="button"
+                          onClick={() => navigate(item.actionUrl)}
+                        >
+                          查看详情
+                        </button>
+                      )}
+                      <button
+                        className="primary-btn compact-link-btn"
+                        type="button"
+                        disabled={busyItemId === item.id}
+                        onClick={() => runPrimaryAction(item)}
+                      >
+                        {busyItemId === item.id ? '处理中...' : item.actionText}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {error && (
@@ -537,30 +378,10 @@ export function NurseDashboardPage() {
             <div className="task-feedback-modal-icon">!</div>
             <div>
               <span>操作失败</span>
-              <h2>护士工作台操作未完成</h2>
+              <h2>护士今日行动队列操作未完成</h2>
               <p>{error}</p>
               <div className="task-feedback-modal-actions">
-                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>
-                  我知道了
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {message && (
-        <div className="task-feedback-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="task-feedback-modal task-feedback-modal-success">
-            <div className="task-feedback-modal-icon">✓</div>
-            <div>
-              <span>操作成功</span>
-              <h2>处理入口已准备好</h2>
-              <p>{message}</p>
-              <div className="task-feedback-modal-actions">
-                <button className="primary-btn compact-link-btn" type="button" onClick={() => setMessage('')}>
-                  知道了
-                </button>
+                <button className="primary-btn compact-link-btn" type="button" onClick={() => setError('')}>我知道了</button>
               </div>
             </div>
           </div>

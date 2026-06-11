@@ -21,6 +21,7 @@
 
 const {
   PrismaClient,
+  ClinicalRuleLifecycleStatus,
   DiseaseType,
   Gender,
   IntegrationSystemType,
@@ -199,33 +200,77 @@ const clinicalRuleTemplates = [
   },
 ];
 
-async function seedClinicalRules() {
-  for (const template of clinicalRuleTemplates) {
-    const dbTemplate = await prisma.diseaseRuleTemplate.upsert({
-      where: { diseaseType_version: { diseaseType: template.diseaseType, version: 'v1' } },
-      update: {
-        templateName: template.templateName,
-        description: template.description,
-        managementGoal: template.managementGoal,
-        riskBasis: template.riskBasis,
-        isActive: true,
-      },
-      create: {
-        id: template.id,
-        diseaseType: template.diseaseType,
-        templateName: template.templateName,
-        description: template.description,
-        managementGoal: template.managementGoal,
-        riskBasis: template.riskBasis,
-        version: 'v1',
-        isActive: true,
-      },
-    });
+const questionnaireRuleDefaults = {
+  HYPERTENSION_MONTHLY: {
+    scoringRule: { maxScore: 20, fields: ['症状', '用药依从性', '复测情况'] },
+    riskBands: [{ min: 0, max: 6, riskLevel: 'LOW' }, { min: 7, max: 13, riskLevel: 'MEDIUM' }, { min: 14, max: 20, riskLevel: 'HIGH' }],
+  },
+  DIABETES_MONTHLY: {
+    scoringRule: { maxScore: 24, fields: ['低血糖', '足部症状', '用药依从性'] },
+    riskBands: [{ min: 0, max: 8, riskLevel: 'LOW' }, { min: 9, max: 16, riskLevel: 'MEDIUM' }, { min: 17, max: 24, riskLevel: 'HIGH' }],
+  },
+  COPD_CAT: {
+    scoringRule: { maxScore: 40, fields: ['咳嗽', '咳痰', '活动耐量'] },
+    riskBands: [{ min: 0, max: 9, riskLevel: 'LOW' }, { min: 10, max: 20, riskLevel: 'MEDIUM' }, { min: 21, max: 40, riskLevel: 'HIGH' }],
+  },
+  CHD_MONTHLY: {
+    scoringRule: { maxScore: 20, fields: ['胸痛', '活动耐量', '用药依从性'] },
+    riskBands: [{ min: 0, max: 6, riskLevel: 'LOW' }, { min: 7, max: 13, riskLevel: 'MEDIUM' }, { min: 14, max: 20, riskLevel: 'HIGH' }],
+  },
+  LIPID_LIFESTYLE: {
+    scoringRule: { maxScore: 16, fields: ['饮食', '运动', '用药依从性'] },
+    riskBands: [{ min: 0, max: 5, riskLevel: 'LOW' }, { min: 6, max: 10, riskLevel: 'MEDIUM' }, { min: 11, max: 16, riskLevel: 'HIGH' }],
+  },
+  OBESITY_LIFESTYLE: {
+    scoringRule: { maxScore: 20, fields: ['饮食', '运动', '睡眠', '体重变化'] },
+    riskBands: [{ min: 0, max: 6, riskLevel: 'LOW' }, { min: 7, max: 13, riskLevel: 'MEDIUM' }, { min: 14, max: 20, riskLevel: 'HIGH' }],
+  },
+};
 
+async function seedClinicalRules() {
+  const now = new Date();
+  for (const template of clinicalRuleTemplates) {
+    let dbTemplate = await prisma.diseaseRuleTemplate.findUnique({
+      where: { diseaseType_version: { diseaseType: template.diseaseType, version: 'v1' } },
+    });
+    if (!dbTemplate) {
+      const existingEffective = await prisma.diseaseRuleTemplate.findFirst({
+        where: {
+          diseaseType: template.diseaseType,
+          lifecycleStatus: ClinicalRuleLifecycleStatus.EFFECTIVE,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      const shouldActivateSeed = !existingEffective;
+      dbTemplate = await prisma.diseaseRuleTemplate.create({
+        data: {
+          id: template.id,
+          diseaseType: template.diseaseType,
+          templateName: template.templateName,
+          description: template.description,
+          managementGoal: template.managementGoal,
+          riskBasis: template.riskBasis,
+          evidenceBasis: template.riskBasis,
+          version: 'v1',
+          isActive: shouldActivateSeed,
+          lifecycleStatus: shouldActivateSeed
+            ? ClinicalRuleLifecycleStatus.EFFECTIVE
+            : ClinicalRuleLifecycleStatus.DRAFT,
+          effectiveFrom: shouldActivateSeed ? now : undefined,
+          publishedAt: shouldActivateSeed ? now : undefined,
+          publishedBy: shouldActivateSeed ? 'SYSTEM_SEED' : undefined,
+        },
+      });
+    }
+
+    // Released rule rows are immutable. Demo seeding is create-only: a rerun
+    // may fill missing fixtures but must never rewrite a physician-reviewed
+    // threshold, SLA, questionnaire score band, or active release state.
     for (const [id, vitalType, displayName, unit, operator, thresholdValue, thresholdValueMax, riskLevel, alertTitle, followUpAction, sortOrder] of template.vitalThresholdRules) {
       await prisma.vitalThresholdRule.upsert({
         where: { id },
-        update: { templateId: dbTemplate.id, vitalType, displayName, unit, operator, thresholdValue, thresholdValueMax, riskLevel, alertTitle, alertDescription: followUpAction, followUpAction, sortOrder, isActive: true },
+        update: {},
         create: { id, templateId: dbTemplate.id, vitalType, displayName, unit, operator, thresholdValue, thresholdValueMax, riskLevel, alertTitle, alertDescription: followUpAction, followUpAction, sortOrder, isActive: true },
       });
     }
@@ -233,21 +278,23 @@ async function seedClinicalRules() {
     for (const [id, riskLevel, followUpType, dueWithinHours, frequencyDescription, taskTitle, instruction] of template.followUpPolicies) {
       await prisma.followUpPolicy.upsert({
         where: { id },
-        update: { templateId: dbTemplate.id, riskLevel, followUpType, dueWithinHours, frequencyDescription, taskTitle, instruction, isActive: true },
+        update: {},
         create: { id, templateId: dbTemplate.id, riskLevel, followUpType, dueWithinHours, frequencyDescription, taskTitle, instruction, isActive: true },
       });
     }
 
     for (const [id, questionnaireType, title, description] of template.questionnaires) {
+      const config = questionnaireRuleDefaults[questionnaireType];
+      if (!config) throw new Error(`Missing questionnaireRuleDefaults for ${questionnaireType}`);
       await prisma.questionnaireTemplate.upsert({
         where: { id },
-        update: { templateId: dbTemplate.id, questionnaireType, title, description, scoringRule: { demo: true }, riskBands: [{ riskLevel: 'LOW' }, { riskLevel: 'MEDIUM' }, { riskLevel: 'HIGH' }], isActive: true },
-        create: { id, templateId: dbTemplate.id, questionnaireType, title, description, scoringRule: { demo: true }, riskBands: [{ riskLevel: 'LOW' }, { riskLevel: 'MEDIUM' }, { riskLevel: 'HIGH' }], isActive: true },
+        update: {},
+        create: { id, templateId: dbTemplate.id, questionnaireType, title, description, scoringRule: config.scoringRule, riskBands: config.riskBands, isActive: true },
       });
     }
   }
 
-  console.log(`Clinical rules seeded: ${clinicalRuleTemplates.length} disease templates`);
+  console.log(`Clinical rules seeded create-only: ${clinicalRuleTemplates.length} disease templates`);
 }
 
 

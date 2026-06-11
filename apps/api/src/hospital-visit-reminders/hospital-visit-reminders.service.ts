@@ -80,6 +80,7 @@ export class HospitalVisitRemindersService {
       riskEpisodeId?: string | null;
       reason: string;
       remindedAt: Date;
+      followUpDueWithinHours: number;
       remindedBy?: string | null;
       patient?: { responsibleNurseId?: string | null } | null;
     },
@@ -97,7 +98,7 @@ export class HospitalVisitRemindersService {
     }
 
     const dueAt = new Date(reminder.remindedAt);
-    dueAt.setHours(dueAt.getHours() + 48);
+    dueAt.setHours(dueAt.getHours() + reminder.followUpDueWithinHours);
     const relatedAlert = reminder.sourceRiskAlertId
       ? await this.prisma.riskAlert.findUnique({
           where: { id: reminder.sourceRiskAlertId },
@@ -149,6 +150,7 @@ export class HospitalVisitRemindersService {
       riskEpisodeId?: string | null;
       reason: string;
       remindedAt: Date;
+      followUpDueWithinHours: number;
       remindedBy?: string | null;
       status: HospitalVisitReminderStatus;
       patient?: { responsibleNurseId?: string | null } | null;
@@ -264,6 +266,8 @@ export class HospitalVisitRemindersService {
         reason,
         note: dto.note,
         remindedBy: user.id,
+        followUpDueWithinHours: dto.followUpDueWithinHours ?? 48,
+        retryDueWithinHours: dto.retryDueWithinHours ?? 24,
         status: HospitalVisitReminderStatus.ACTIVE,
       },
       include: this.includePatient,
@@ -286,6 +290,8 @@ export class HospitalVisitRemindersService {
         reason,
         note: dto.note,
         electronicSignature,
+        followUpDueWithinHours: reminder.followUpDueWithinHours,
+        retryDueWithinHours: reminder.retryDueWithinHours,
         generatedTaskId: task?.id ?? null,
         generatedTaskType: HOSPITAL_VISIT_TASK_TYPE,
       },

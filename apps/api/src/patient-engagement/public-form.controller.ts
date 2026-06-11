@@ -26,12 +26,26 @@ import { WechatOfficialAccountService } from './wechat-official-account.service'
 import { HospitalWechatOfficialAccountService } from './hospital-wechat-account.service';
 import { ClinicalDispositionService } from '../clinical-disposition/clinical-disposition.service';
 import {
+  ClinicalRulesService,
+  type ClinicalQuestionnaireRuleEvaluation,
+  type ClinicalRuleTrace,
+} from '../clinical-rules/clinical-rules.service';
+import {
   IdentityCheckDto,
   SubmitPublicHospitalVisitDto,
   SubmitPublicMedicationCheckInDto,
   SubmitPublicQuestionnaireDto,
   SubmitPublicVitalDto,
 } from './dto/submit-public.dto';
+
+type PublicVitalRuleEvaluation = {
+  isAbnormal: boolean;
+  riskLevel: RiskLevel;
+  trigger: string;
+  followUpDueWithinHours?: number;
+  followUpTaskTitle?: string;
+  ruleTrace: ClinicalRuleTrace;
+};
 
 /**
  * PublicFormController (v2)
@@ -59,6 +73,7 @@ export class PublicFormController {
     private readonly wechat: WechatOfficialAccountService,
     private readonly accounts: HospitalWechatOfficialAccountService,
     private readonly disposition: ClinicalDispositionService,
+    private readonly clinicalRules: ClinicalRulesService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -74,14 +89,29 @@ export class PublicFormController {
     formLinkId: string,
     submissionType: string,
     submissionId: string,
+    requiresManualReview = true,
   ): Promise<void> {
     try {
+      const submittedAt = new Date();
       await tx.patientFormLink.update({
         where: { id: formLinkId },
-        data: { submissionType, submissionId, submittedAt: new Date() },
+        data: {
+          submissionType,
+          submissionId,
+          submittedAt,
+          ...(requiresManualReview
+            ? {
+                manualReviewStatus: 'PENDING',
+                manualReviewDueAt: new Date(submittedAt.getTime() + this.submissionReviewSlaHours() * 60 * 60 * 1000),
+                manualReviewedAt: null,
+                manualReviewedBy: null,
+                manualReviewNote: null,
+              }
+            : {}),
+        },
       });
     } catch {
-      // columns may not exist on trees that haven't run the v3.2 migration
+      // columns may not exist on trees that haven't run the v3.2 / v9 migration
     }
   }
 
@@ -268,8 +298,18 @@ export class PublicFormController {
 
     const payload: any = formLink.payload || {};
     const questionnaireType = String(payload.questionnaireType || 'GENERIC');
-    const score = Math.max(0, Math.round(Number(dto.score ?? this.estimateScore(dto.answers))));
-    const evaluation = this.evaluateQuestionnaire(score);
+    // New links carry the immutable issued rule snapshot. For links issued just
+    // before the v9 rollout, bind once to the currently effective template so
+    // their compact H5 score can still be interpreted consistently.
+    const questionnaireRuleSnapshot = payload.questionnaireRuleSnapshot
+      ?? (await this.clinicalRules.prepareQuestionnaireLinkPayload({ questionnaireType })).questionnaireRuleSnapshot;
+    const rawScore = this.safeQuestionnaireRawScore(dto.score ?? this.estimateScore(dto.answers));
+    const score = this.scaleQuestionnaireScore(rawScore, questionnaireRuleSnapshot);
+    const evaluation = await this.evaluateConfiguredQuestionnaire(
+      questionnaireType,
+      score,
+      questionnaireRuleSnapshot?.questionnaireTemplateId,
+    );
 
     const result = await this.prisma.$transaction(async (tx) => {
       // Bug 4 fix: atomic claim BEFORE any business write.
@@ -279,6 +319,7 @@ export class PublicFormController {
         data: {
           patientId: formLink.patientId,
           questionnaireType,
+          rawScore,
           score,
           riskLevel: evaluation.riskLevel,
           riskConclusion: evaluation.riskConclusion,
@@ -291,19 +332,19 @@ export class PublicFormController {
       let alertId: string | null = null;
       if (evaluation.shouldCreateAlert) {
         const patient = await tx.patient.findUnique({ where: { id: formLink.patientId } });
-        const dueAt = new Date();
-        dueAt.setHours(dueAt.getHours() + (evaluation.riskLevel === RiskLevel.VERY_HIGH ? 4 : 24));
+        const dueAt = this.dueAtFromHours(evaluation.followUpDueWithinHours);
         const disposition = await this.disposition.signalRisk(tx, {
           patientId: formLink.patientId,
           riskCategory: 'QUESTIONNAIRE_HIGH_RISK',
           correlationKey: `QUESTIONNAIRE_HIGH_RISK:${questionnaireType}`,
           riskLevel: evaluation.riskLevel,
           title: `问卷高风险: ${questionnaireType}`,
-          description: `H5 链接提交, 评分 ${score}/10. ${evaluation.riskConclusion}`,
-          triggerRule: '患者通过 H5 链接提交问卷, 评分 ≥ 8 自动触发预警',
+          description: `H5 链接提交，评分 ${score}。${evaluation.riskConclusion}`,
+          triggerRule: `版本化问卷规则：${evaluation.ruleTrace.ruleVersion ?? 'unknown'}`,
           sourceQuestionnaireResultId: qr.id,
-          evidence: { sourceType: 'QuestionnaireResult', questionnaireResultId: qr.id, questionnaireType, score, formLinkId: formLink.id },
-          taskTitle: `问卷复核: ${questionnaireType}`,
+          evidence: { sourceType: 'QuestionnaireResult', questionnaireResultId: qr.id, questionnaireType, rawScore, score, formLinkId: formLink.id },
+          ruleTrace: evaluation.ruleTrace,
+          taskTitle: evaluation.followUpTaskTitle,
           taskType: 'QUESTIONNAIRE_REVIEW',
           dueAt,
           assigneeId: patient?.responsibleNurseId,
@@ -334,6 +375,7 @@ export class PublicFormController {
         ipAddress: req?.ip,
         metadata: {
           questionnaireResultId: result.questionnaireResult.id,
+          rawScore,
           score,
           riskLevel: evaluation.riskLevel,
         } as any,
@@ -359,90 +401,66 @@ export class PublicFormController {
 
     const measuredAt = dto.measuredAt ? new Date(dto.measuredAt) : new Date();
     if (Number.isNaN(measuredAt.getTime())) throw new BadRequestException('measuredAt invalid');
+    const patient = await this.prisma.patient.findUnique({ where: { id: formLink.patientId }, include: { diseaseProfiles: true } });
+    if (!patient) throw new NotFoundException('患者不存在');
 
     const created: any[] = [];
     const alerts: string[] = [];
 
-    await this.prisma.$transaction(async (tx) => {
-      await this.formLink.claimForSubmission(tx, formLink.id);
+    if (dto.vitalType === 'BLOOD_PRESSURE') {
+      const systolic = Number(dto.systolic);
+      const diastolic = Number(dto.diastolic);
+      if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
+        throw new BadRequestException('血压必须填写收缩压与舒张压');
+      }
+      const unit = dto.unit || 'mmHg';
+      const [systolicEval, diastolicEval] = await Promise.all([
+        this.evaluateConfiguredVital(patient, 'SYSTOLIC_BP', systolic, unit, measuredAt),
+        this.evaluateConfiguredVital(patient, 'DIASTOLIC_BP', diastolic, unit, measuredAt),
+      ]);
+      const worst = this.worstEvaluation([systolicEval, diastolicEval]);
 
-      if (dto.vitalType === 'BLOOD_PRESSURE') {
-        const systolic = Number(dto.systolic);
-        const diastolic = Number(dto.diastolic);
-        if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) {
-          throw new BadRequestException('血压必须填写收缩压与舒张压');
-        }
-        const systolicEval = this.evaluateVital('SYSTOLIC_BP', systolic);
-        const diastolicEval = this.evaluateVital('DIASTOLIC_BP', diastolic);
+      await this.prisma.$transaction(async (tx) => {
+        await this.formLink.claimForSubmission(tx, formLink.id);
         const sysRec = await tx.vitalRecord.create({
-          data: {
-            patientId: formLink.patientId,
-            type: 'SYSTOLIC_BP',
-            value: systolic,
-            unit: dto.unit || 'mmHg',
-            measuredAt,
-            dataSource: DataSource.MINI_PROGRAM,
-            isAbnormal: systolicEval.isAbnormal,
-            note: this.composeNote('H5_LINK vital_recheck', dto.note),
-          },
+          data: { patientId: formLink.patientId, type: 'SYSTOLIC_BP', value: systolic, unit, measuredAt, dataSource: DataSource.MINI_PROGRAM, isAbnormal: systolicEval.isAbnormal, note: this.composeNote('H5_LINK vital_recheck', dto.note) },
         });
         const diaRec = await tx.vitalRecord.create({
-          data: {
-            patientId: formLink.patientId,
-            type: 'DIASTOLIC_BP',
-            value: diastolic,
-            unit: dto.unit || 'mmHg',
-            measuredAt,
-            dataSource: DataSource.MINI_PROGRAM,
-            isAbnormal: diastolicEval.isAbnormal,
-            note: this.composeNote('H5_LINK vital_recheck', dto.note),
-          },
+          data: { patientId: formLink.patientId, type: 'DIASTOLIC_BP', value: diastolic, unit, measuredAt, dataSource: DataSource.MINI_PROGRAM, isAbnormal: diastolicEval.isAbnormal, note: this.composeNote('H5_LINK vital_recheck', dto.note) },
         });
         created.push(sysRec, diaRec);
-
-        const worst = this.worstEvaluation([systolicEval, diastolicEval]);
         if (worst.isAbnormal) {
-          const patient = await tx.patient.findUnique({ where: { id: formLink.patientId } });
-          const dueAt = new Date();
-          dueAt.setHours(dueAt.getHours() + (worst.riskLevel === RiskLevel.VERY_HIGH ? 4 : 24));
           const disposition = await this.disposition.signalRisk(tx, {
             patientId: formLink.patientId,
             riskCategory: 'VITAL_ABNORMAL',
             correlationKey: 'VITAL_ABNORMAL:BLOOD_PRESSURE',
             riskLevel: worst.riskLevel,
             title: '异常健康指标: 血压',
-            description: `H5 链接提交: 血压 ${systolic}/${diastolic} mmHg; ${worst.trigger}`,
+            description: `H5 链接提交: 血压 ${systolic}/${diastolic} ${unit}; ${worst.trigger}`,
             triggerRule: worst.trigger,
             sourceVitalRecordId: sysRec.id,
-            evidence: { sourceType: 'VitalRecord', vitalRecordIds: [sysRec.id, diaRec.id], vitalType: 'BLOOD_PRESSURE', systolic, diastolic, unit: dto.unit || 'mmHg', measuredAt, formLinkId: formLink.id },
-            taskTitle: '异常健康指标: 血压',
+            evidence: { sourceType: 'VitalRecord', vitalRecordIds: [sysRec.id, diaRec.id], vitalType: 'BLOOD_PRESSURE', systolic, diastolic, unit, measuredAt, formLinkId: formLink.id },
+            ruleTrace: worst.ruleTrace,
+            taskTitle: worst.followUpTaskTitle ?? '异常健康指标: 血压',
             taskType: 'RISK_ALERT_FOLLOW_UP',
-            dueAt,
-            assigneeId: patient?.responsibleNurseId,
+            dueAt: this.dueAtFromHours(worst.followUpDueWithinHours),
+            assigneeId: patient.responsibleNurseId,
           });
           alerts.push(disposition.alert.id);
         }
-      } else {
-        const value = Number(dto.value);
-        if (!Number.isFinite(value)) throw new BadRequestException('请输入有效的指标数值');
-        const evaluation = this.evaluateVital(dto.vitalType, value);
+        await this.completeVitalSubmissionInTx(tx, formLink.id, created[0]?.id);
+      });
+    } else {
+      const value = Number(dto.value);
+      if (!Number.isFinite(value)) throw new BadRequestException('请输入有效的指标数值');
+      const evaluation = await this.evaluateConfiguredVital(patient, dto.vitalType, value, dto.unit, measuredAt);
+      await this.prisma.$transaction(async (tx) => {
+        await this.formLink.claimForSubmission(tx, formLink.id);
         const rec = await tx.vitalRecord.create({
-          data: {
-            patientId: formLink.patientId,
-            type: dto.vitalType,
-            value,
-            unit: dto.unit,
-            measuredAt,
-            dataSource: DataSource.MINI_PROGRAM,
-            isAbnormal: evaluation.isAbnormal,
-            note: this.composeNote('H5_LINK vital_recheck', dto.note),
-          },
+          data: { patientId: formLink.patientId, type: dto.vitalType, value, unit: dto.unit, measuredAt, dataSource: DataSource.MINI_PROGRAM, isAbnormal: evaluation.isAbnormal, note: this.composeNote('H5_LINK vital_recheck', dto.note) },
         });
         created.push(rec);
         if (evaluation.isAbnormal) {
-          const patient = await tx.patient.findUnique({ where: { id: formLink.patientId } });
-          const dueAt = new Date();
-          dueAt.setHours(dueAt.getHours() + (evaluation.riskLevel === RiskLevel.VERY_HIGH ? 4 : 24));
           const disposition = await this.disposition.signalRisk(tx, {
             patientId: formLink.patientId,
             riskCategory: 'VITAL_ABNORMAL',
@@ -453,43 +471,22 @@ export class PublicFormController {
             triggerRule: evaluation.trigger,
             sourceVitalRecordId: rec.id,
             evidence: { sourceType: 'VitalRecord', vitalRecordId: rec.id, vitalType: dto.vitalType, value, unit: dto.unit, measuredAt, formLinkId: formLink.id },
-            taskTitle: `异常健康指标: ${this.vitalLabel(dto.vitalType)}`,
+            ruleTrace: evaluation.ruleTrace,
+            taskTitle: evaluation.followUpTaskTitle ?? `异常健康指标: ${this.vitalLabel(dto.vitalType)}`,
             taskType: 'RISK_ALERT_FOLLOW_UP',
-            dueAt,
-            assigneeId: patient?.responsibleNurseId,
+            dueAt: this.dueAtFromHours(evaluation.followUpDueWithinHours),
+            assigneeId: patient.responsibleNurseId,
           });
           alerts.push(disposition.alert.id);
         }
-      }
-
-      await tx.patientOutboundMessage.updateMany({
-        where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
-        data: { status: 'SUBMITTED', submittedAt: new Date() },
+        await this.completeVitalSubmissionInTx(tx, formLink.id, rec.id);
       });
-
-      // v3: mark linked CareReminderOccurrence COMPLETED (no-op if none).
-      if (created.length > 0) {
-        await this._linkSubmissionInTx(tx, formLink.id, 'VitalRecord', created[0].id);
-        await this._tryCompleteOccurrenceInTx(tx, formLink.id, 'VitalRecord', created[0].id);
-      }
-    });
+    }
 
     await this.prisma.engagementEventLog.create({
-      data: {
-        patientId: formLink.patientId,
-        formLinkId: formLink.id,
-        eventType: 'FORM_SUBMITTED',
-        ipAddress: req?.ip,
-        metadata: { vitalRecordIds: created.map((c) => c.id), generatedAlertIds: alerts } as any,
-      },
+      data: { patientId: formLink.patientId, formLinkId: formLink.id, eventType: 'FORM_SUBMITTED', ipAddress: req?.ip, metadata: { vitalRecordIds: created.map((c) => c.id), generatedAlertIds: alerts } as any },
     });
-
-    return {
-      ok: true,
-      message: '提交成功, 感谢您的配合.',
-      vitalRecordIds: created.map((c) => c.id),
-      alertCount: alerts.length,
-    };
+    return { ok: true, message: '提交成功, 感谢您的配合.', vitalRecordIds: created.map((c) => c.id), alertCount: alerts.length };
   }
 
   @Post(':token/medication-checkin')
@@ -532,27 +529,11 @@ export class PublicFormController {
         data: { lastCheckInAt: checkedAt },
       });
 
-      let alertId: string | null = null;
-      if (!dto.taken) {
-        const patient = await tx.patient.findUnique({ where: { id: formLink.patientId } });
-        const dueAt = new Date();
-        dueAt.setHours(dueAt.getHours() + 24);
-        const disposition = await this.disposition.signalRisk(tx, {
-          patientId: formLink.patientId,
-          riskCategory: 'MEDICATION_ADHERENCE',
-          correlationKey: `MEDICATION_ADHERENCE:${medication.id}`,
-          riskLevel: RiskLevel.MEDIUM,
-          title: `用药依从性异常: ${medication.medicationName}`,
-          description: `患者通过 H5 链接反馈未按时服用 ${medication.medicationName}`,
-          triggerRule: '患者通过 H5 链接提交漏服/未服药打卡',
-          evidence: { sourceType: 'MedicationCheckIn', medicationCheckInId: checkIn.id, medicationId: medication.id, medicationName: medication.medicationName, taken: false, checkedAt, formLinkId: formLink.id },
-          taskTitle: `用药随访: ${medication.medicationName}`,
-          taskType: 'MEDICATION_ADHERENCE_FOLLOW_UP',
-          dueAt,
-          assigneeId: patient?.responsibleNurseId,
-        });
-        alertId = disposition.alert.id;
-      }
+      // A single missed dose is retained as evidence. Sustained adherence
+      // below 70% over 30 days becomes a patient-level NextBestAction during
+      // the CarePlan refresh pass; reminder occurrence escalation remains
+      // available for time-sensitive workflows.
+      const alertId: string | null = null;
 
       await tx.patientOutboundMessage.updateMany({
         where: { formLinkId: formLink.id, status: { in: ['SENT', 'PENDING', 'CLICKED'] } },
@@ -578,7 +559,7 @@ export class PublicFormController {
 
     return {
       ok: true,
-      message: dto.taken ? '已记录本次服药' : '已记录本次反馈, 护士会主动与您联系.',
+      message: dto.taken ? '已记录本次服药' : '已记录本次反馈，管理团队会结合近期依从性持续评估。',
       checkInId: result.checkIn.id,
     };
   }
@@ -643,14 +624,18 @@ export class PublicFormController {
             if (reminder.sourceTaskId) {
               taskCreated = await tx.task.update({
                 where: { id: reminder.sourceTaskId },
-                data: { status: TaskStatus.IN_PROGRESS },
+                data: {
+                  status: TaskStatus.IN_PROGRESS,
+                  title: action === 'REFUSED' ? '患者拒绝到院 — 需护士跟进' : '患者暂无法到院 — 需护士跟进',
+                  dueAt: new Date(Date.now() + reminder.retryDueWithinHours * 60 * 60 * 1000),
+                },
               });
             } else if (reminder.sourceRiskAlertId) {
               const ensured = await this.disposition.ensureOpenTaskForAlert(tx, {
                 alertId: reminder.sourceRiskAlertId,
                 taskTitle: action === 'REFUSED' ? '患者拒绝到院 — 需护士跟进' : '患者暂无法到院 — 需护士跟进',
                 taskType: 'HOSPITAL_VISIT_FOLLOW_UP',
-                dueAt: new Date(Date.now() + 24 * 3600 * 1000),
+                dueAt: new Date(Date.now() + reminder.retryDueWithinHours * 60 * 60 * 1000),
                 assigneeId: reminder.remindedBy,
               });
               taskCreated = ensured.task;
@@ -666,7 +651,7 @@ export class PublicFormController {
                   type: 'HOSPITAL_VISIT_FOLLOW_UP',
                   status: TaskStatus.IN_PROGRESS,
                   priority: 1,
-                  dueAt: new Date(Date.now() + 24 * 3600 * 1000),
+                  dueAt: new Date(Date.now() + reminder.retryDueWithinHours * 60 * 60 * 1000),
                   assigneeId: reminder.remindedBy ?? undefined,
                 },
               });
@@ -773,6 +758,7 @@ export class PublicFormController {
         formLink.id,
         'PatientDirectMessage',
         acknowledgedId ?? formLink.id,
+        false,
       );
       await this._tryCompleteOccurrenceInTx(
         tx,
@@ -819,17 +805,87 @@ export class PublicFormController {
       const n = Number(v);
       if (Number.isFinite(n)) total += Math.max(0, Math.min(3, n));
     }
-    return Math.max(0, Math.min(10, Math.round(total)));
+    return Math.max(0, Math.min(9, Math.round(total)));
   }
 
-  private evaluateQuestionnaire(score: number) {
+  private safeQuestionnaireRawScore(value: unknown) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) throw new BadRequestException('问卷评分格式无效');
+    return Math.max(0, Math.min(9, Math.round(numeric)));
+  }
+
+  private scaleQuestionnaireScore(rawScore: number, snapshot: any) {
+    const configuredMax = Number(snapshot?.scoringRule?.maxScore ?? 9);
+    const maxScore = Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 9;
+    return Math.max(0, Math.round((rawScore / 9) * maxScore));
+  }
+
+  private async completeVitalSubmissionInTx(tx: any, formLinkId: string, vitalRecordId?: string): Promise<void> {
+    await tx.patientOutboundMessage.updateMany({ where: { formLinkId, status: { in: ['SENT', 'PENDING', 'CLICKED'] } }, data: { status: 'SUBMITTED', submittedAt: new Date() } });
+    if (!vitalRecordId) return;
+    await this._linkSubmissionInTx(tx, formLinkId, 'VitalRecord', vitalRecordId);
+    await this._tryCompleteOccurrenceInTx(tx, formLinkId, 'VitalRecord', vitalRecordId);
+  }
+
+  private submissionReviewSlaHours(): number {
+    const configured = Number(process.env.PATIENT_SUBMISSION_REVIEW_SLA_HOURS ?? 24);
+    return Number.isFinite(configured) && configured > 0 ? configured : 24;
+  }
+
+  private dueAtFromHours(hours?: number): Date {
+    if (hours === undefined) throw new BadRequestException('异常规则缺少版本化随访 SLA，已阻止自动任务创建');
+    return new Date(Date.now() + hours * 60 * 60 * 1000);
+  }
+
+  private async evaluateConfiguredQuestionnaire(
+    questionnaireType: string,
+    score: number,
+    questionnaireTemplateId?: string,
+  ): Promise<ClinicalQuestionnaireRuleEvaluation> {
+    const configured = await this.clinicalRules.evaluateQuestionnaire(questionnaireType, score, { questionnaireTemplateId });
+    if (configured) return configured;
+    if (process.env.CLINICAL_RULE_ALLOW_LEGACY_FALLBACK !== 'true') {
+      throw new BadRequestException('该问卷尚未配置已生效的版本化规则，已阻止未审核规则自动判定');
+    }
+    const legacy = this.evaluateQuestionnaireLegacy(score);
+    return {
+      ...legacy,
+      followUpDueWithinHours: legacy.riskLevel === RiskLevel.VERY_HIGH ? 4 : 24,
+      followUpTaskTitle: `开发回退：问卷复核 ${questionnaireType}`,
+      ruleTrace: {
+        ruleId: 'LEGACY_QUESTIONNAIRE_FALLBACK', ruleVersion: 'legacy-dev-only',
+        ruleSnapshot: { thresholds: { VERY_HIGH: 9, HIGH: 8, MEDIUM: 6 } },
+        evidenceBasis: '开发环境兼容回退逻辑；禁止作为正式发布规则使用。', evaluatedAt: new Date(),
+        inputSnapshot: { questionnaireType, score }, matchedConditions: { riskLevel: legacy.riskLevel },
+      },
+    };
+  }
+
+  private async evaluateConfiguredVital(patient: any, type: string, value: number, unit: string, measuredAt: Date): Promise<PublicVitalRuleEvaluation> {
+    const configured = await this.clinicalRules.evaluateVital(patient, { type, value, unit, measuredAt: measuredAt.toISOString(), dataSource: DataSource.MINI_PROGRAM } as any);
+    if (configured) return { ...configured, trigger: configured.triggerRule };
+    if (process.env.CLINICAL_RULE_ALLOW_LEGACY_FALLBACK === 'true') {
+      const legacy = this.evaluateVitalLegacy(type, value);
+      return {
+        ...legacy,
+        followUpDueWithinHours: legacy.riskLevel === RiskLevel.VERY_HIGH ? 4 : legacy.riskLevel === RiskLevel.HIGH ? 24 : 72,
+        followUpTaskTitle: `开发回退：${this.vitalLabel(type)}异常复核`,
+        ruleTrace: { ruleId: 'LEGACY_H5_VITAL_FALLBACK', ruleVersion: 'legacy-dev-only', ruleSnapshot: { type, trigger: legacy.trigger }, evidenceBasis: '开发环境兼容回退逻辑；禁止作为正式发布规则使用。', evaluatedAt: new Date(), inputSnapshot: { type, value, unit, measuredAt }, matchedConditions: legacy },
+      };
+    }
+    return { isAbnormal: false, riskLevel: RiskLevel.LOW, trigger: '未命中已生效的版本化自动异常规则', ruleTrace: { ruleId: 'NO_EFFECTIVE_RULE_MATCH', ruleVersion: 'no-effective-rule-match', ruleSnapshot: {}, evidenceBasis: '未使用自动异常判定。', evaluatedAt: new Date(), inputSnapshot: { type, value, unit, measuredAt }, matchedConditions: [] } };
+  }
+
+  // Development-only compatibility paths. Production keeps
+  // CLINICAL_RULE_ALLOW_LEGACY_FALLBACK=false.
+  private evaluateQuestionnaireLegacy(score: number) {
     if (score >= 9) return { riskLevel: RiskLevel.VERY_HIGH, riskConclusion: '问卷提示极高风险, 请尽快复核患者症状并安排随访.', shouldCreateAlert: true };
     if (score >= 8) return { riskLevel: RiskLevel.HIGH, riskConclusion: '问卷提示高风险, 建议护士在 24 小时内复核.', shouldCreateAlert: true };
     if (score >= 6) return { riskLevel: RiskLevel.MEDIUM, riskConclusion: '问卷提示中等风险, 建议持续观察并按计划随访.', shouldCreateAlert: false };
     return { riskLevel: RiskLevel.LOW, riskConclusion: '问卷暂未提示明显风险.', shouldCreateAlert: false };
   }
 
-  private evaluateVital(type: string, value: number): { isAbnormal: boolean; riskLevel: RiskLevel; trigger: string } {
+  private evaluateVitalLegacy(type: string, value: number): { isAbnormal: boolean; riskLevel: RiskLevel; trigger: string } {
     if (type === 'SYSTOLIC_BP') {
       if (value >= 180) return { isAbnormal: true, riskLevel: RiskLevel.VERY_HIGH, trigger: '收缩压 ≥ 180 mmHg, 极高危' };
       if (value >= 160) return { isAbnormal: true, riskLevel: RiskLevel.HIGH, trigger: '收缩压 ≥ 160 mmHg, 高危' };
@@ -855,7 +911,7 @@ export class PublicFormController {
     return { isAbnormal: false, riskLevel: RiskLevel.LOW, trigger: '未触发异常规则' };
   }
 
-  private worstEvaluation(items: Array<{ isAbnormal: boolean; riskLevel: RiskLevel; trigger: string }>) {
+  private worstEvaluation<T extends { isAbnormal: boolean; riskLevel: RiskLevel }>(items: T[]): T {
     const rank: Record<RiskLevel, number> = {
       [RiskLevel.LOW]: 0,
       [RiskLevel.MEDIUM]: 1,

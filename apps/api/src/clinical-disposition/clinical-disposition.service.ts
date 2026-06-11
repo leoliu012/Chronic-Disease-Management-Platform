@@ -29,6 +29,16 @@ const priorityForRisk: Record<RiskLevel, number> = {
   [RiskLevel.LOW]: 3,
 };
 
+export type RuleTraceInput = {
+  ruleId?: string | null;
+  ruleVersion?: string | null;
+  ruleSnapshot?: unknown;
+  evidenceBasis?: string | null;
+  evaluatedAt?: Date;
+  inputSnapshot?: unknown;
+  matchedConditions?: unknown;
+};
+
 export type SignalRiskInput = {
   patientId: string;
   riskCategory: string;
@@ -40,6 +50,7 @@ export type SignalRiskInput = {
   sourceVitalRecordId?: string | null;
   sourceQuestionnaireResultId?: string | null;
   evidence?: unknown;
+  ruleTrace?: RuleTraceInput;
   triggeredAt?: Date;
   createTask?: boolean;
   taskTitle?: string;
@@ -225,6 +236,13 @@ export class ClinicalDispositionService {
         title: input.title,
         description: input.description ?? undefined,
         triggerRule: input.triggerRule ?? undefined,
+        ruleId: input.ruleTrace?.ruleId ?? undefined,
+        ruleVersion: input.ruleTrace?.ruleVersion ?? undefined,
+        ruleSnapshot: this.asJson(input.ruleTrace?.ruleSnapshot),
+        evidenceBasis: input.ruleTrace?.evidenceBasis ?? undefined,
+        evaluatedAt: input.ruleTrace?.evaluatedAt ?? new Date(),
+        inputSnapshot: this.asJson(input.ruleTrace?.inputSnapshot),
+        matchedConditions: this.asJson(input.ruleTrace?.matchedConditions),
         sourceVitalRecordId: input.sourceVitalRecordId ?? undefined,
         sourceQuestionnaireResultId: input.sourceQuestionnaireResultId ?? undefined,
         riskEpisodeId: episode.id,

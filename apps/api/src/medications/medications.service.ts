@@ -1,10 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { RiskAlert, RiskLevel, Task } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMedicationCheckInDto } from './dto/create-medication-check-in.dto';
 import { CreateMedicationDto } from './dto/create-medication.dto';
 import { UpdateMedicationDto } from './dto/update-medication.dto';
-import { ClinicalDispositionService } from '../clinical-disposition/clinical-disposition.service';
 
 type FrequencyUnit = 'DAY' | 'WEEK' | 'MONTH';
 type TimingRelation = 'NONE' | 'BEFORE_MEAL' | 'AFTER_MEAL' | 'WITH_MEAL';
@@ -32,16 +30,7 @@ type MedicationForSchedule = {
 
 @Injectable()
 export class MedicationsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly disposition: ClinicalDispositionService,
-  ) {}
-
-  private getMedicationFollowUpDueAt() {
-    const dueAt = new Date();
-    dueAt.setHours(dueAt.getHours() + 24);
-    return dueAt;
-  }
+  constructor(private readonly prisma: PrismaService) {}
 
   private clampNumber(value: unknown, min: number, max: number, fallback: number) {
     const numeric = Number(value);
@@ -643,34 +632,12 @@ export class MedicationsService {
         },
       });
 
-      let generatedRiskAlert: RiskAlert | null = null;
-      let generatedTask: Task | null = null;
-
-      if (!dto.taken) {
-        const disposition = await this.disposition.signalRisk(tx, {
-          patientId: medication.patientId,
-          riskCategory: 'MEDICATION_ADHERENCE',
-          correlationKey: `MEDICATION_ADHERENCE:${medication.id}`,
-          riskLevel: RiskLevel.MEDIUM,
-          title: `用药依从性异常：${medication.medicationName}`,
-          description: `患者反馈本次未按时服用 ${medication.medicationName}；剂量：${medication.dosage}；频次：${medication.frequency}`,
-          triggerRule: '患者微信小程序提交漏服/未服药打卡',
-          evidence: {
-            sourceType: 'MedicationCheckIn',
-            medicationCheckInId: checkIn.id,
-            medicationId: medication.id,
-            medicationName: medication.medicationName,
-            taken: false,
-            checkedAt,
-          },
-          taskTitle: `用药随访：${medication.medicationName}`,
-          taskType: 'MEDICATION_ADHERENCE_FOLLOW_UP',
-          dueAt: this.getMedicationFollowUpDueAt(),
-          assigneeId: medication.patient.responsibleNurseId,
-        });
-        generatedRiskAlert = disposition.alert;
-        generatedTask = disposition.task;
-      }
+      // One missed dose is longitudinal evidence, not an immediate clinical
+      // disposition task. The CarePlan refresh worker escalates sustained
+      // adherence below 70% over 30 days; care-reminder occurrence escalation
+      // still handles time-sensitive missed reminder workflows.
+      const generatedRiskAlert = null;
+      const generatedTask = null;
 
       return {
         checkIn,

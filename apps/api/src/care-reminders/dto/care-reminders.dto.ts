@@ -77,6 +77,13 @@ export class CreateMedicationScheduleDto {
   @Min(0)
   @Max(10080)
   escalationAfterMinutes?: number;
+
+  /** Persisted SLA for the nurse task created after escalation. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10080)
+  escalationTaskDueWithinMinutes?: number;
 }
 
 export class CreateVitalScheduleDto {
@@ -136,6 +143,13 @@ export class CreateVitalScheduleDto {
   @Max(10080)
   escalationAfterMinutes?: number;
 
+  /** Persisted SLA for the nurse task created after escalation. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10080)
+  escalationTaskDueWithinMinutes?: number;
+
   @IsOptional()
   @IsString()
   vitalMonitoringPlanId?: string;
@@ -187,6 +201,13 @@ export class UpdateScheduleDto {
   @Min(0)
   @Max(10080)
   escalationAfterMinutes?: number;
+
+  /** Persisted SLA for the nurse task created after escalation. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10080)
+  escalationTaskDueWithinMinutes?: number;
 
   @IsOptional()
   @IsBoolean()

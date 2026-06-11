@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import type { Prisma } from '@prisma/client';
+import { ClinicalRulesService } from '../clinical-rules/clinical-rules.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -29,7 +30,10 @@ export class FormLinkService {
   private static readonly MAX_IDENTITY_FAILURES = 5;
   private static readonly IDENTITY_LOCK_MINUTES = 15;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly clinicalRules: ClinicalRulesService,
+  ) {}
 
   // ---------------------------------------------------------------------------
   // helpers
@@ -70,6 +74,9 @@ export class FormLinkService {
     const { token, tokenHash } = this.generateToken();
     const expiresInHours = input.expiresInHours ?? FormLinkService.DEFAULT_EXPIRES_HOURS;
     const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
+    const payload = input.type === 'QUESTIONNAIRE'
+      ? await this.clinicalRules.prepareQuestionnaireLinkPayload(input.payload)
+      : input.payload;
 
     const formLink = await this.prisma.patientFormLink.create({
       data: {
@@ -81,7 +88,7 @@ export class FormLinkService {
         tokenHash,
         title: input.title,
         description: input.description ?? undefined,
-        payload: (input.payload as any) ?? undefined,
+        payload: (payload as any) ?? undefined,
         expiresAt,
         maxSubmit: input.maxSubmit ?? 1,
         requiresIdentityCheck: input.requiresIdentityCheck ?? false,

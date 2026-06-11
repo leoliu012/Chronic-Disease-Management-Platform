@@ -34,6 +34,7 @@ export type CreateScheduleInput = {
   checkInWindowBeforeMinutes?: number;
   checkInWindowAfterMinutes?: number;
   escalationAfterMinutes?: number | null;
+  escalationTaskDueWithinMinutes?: number;
   startDate?: Date | null;
   endDate?: Date | null;
   createdBy?: string | null;
@@ -49,6 +50,7 @@ export type UpdateScheduleInput = Partial<{
   checkInWindowBeforeMinutes: number;
   checkInWindowAfterMinutes: number;
   escalationAfterMinutes: number | null;
+  escalationTaskDueWithinMinutes: number;
   startDate: Date | null;
   endDate: Date | null;
   isActive: boolean;
@@ -103,6 +105,7 @@ export class CareReminderScheduleService {
         checkInWindowBeforeMinutes: input.checkInWindowBeforeMinutes ?? 180,
         checkInWindowAfterMinutes: input.checkInWindowAfterMinutes ?? 180,
         escalationAfterMinutes: input.escalationAfterMinutes ?? undefined,
+        escalationTaskDueWithinMinutes: input.escalationTaskDueWithinMinutes ?? 1440,
         startDate: input.startDate ?? undefined,
         endDate: input.endDate ?? undefined,
         createdBy: input.createdBy ?? undefined,
@@ -139,6 +142,7 @@ export class CareReminderScheduleService {
     if (patch.checkInWindowBeforeMinutes !== undefined) data.checkInWindowBeforeMinutes = patch.checkInWindowBeforeMinutes;
     if (patch.checkInWindowAfterMinutes !== undefined) data.checkInWindowAfterMinutes = patch.checkInWindowAfterMinutes;
     if (patch.escalationAfterMinutes !== undefined) data.escalationAfterMinutes = patch.escalationAfterMinutes ?? null;
+    if (patch.escalationTaskDueWithinMinutes !== undefined) data.escalationTaskDueWithinMinutes = patch.escalationTaskDueWithinMinutes;
     if (patch.startDate !== undefined) data.startDate = patch.startDate ?? null;
     if (patch.endDate !== undefined) data.endDate = patch.endDate ?? null;
     if (patch.isActive !== undefined) {
@@ -192,6 +196,7 @@ export class CareReminderScheduleService {
             checkInWindowBeforeMinutes: input.checkInWindowBeforeMinutes ?? 180,
             checkInWindowAfterMinutes: input.checkInWindowAfterMinutes ?? 180,
             escalationAfterMinutes: input.escalationAfterMinutes ?? null,
+            escalationTaskDueWithinMinutes: input.escalationTaskDueWithinMinutes ?? existing.escalationTaskDueWithinMinutes,
             // re-activate a previously cancelled/paused binding
             isActive: true,
             pausedAt: null,
@@ -273,6 +278,7 @@ export class CareReminderScheduleService {
     timesPerUnit: number;
     customMeasureTimes: unknown;
     customMeasureDays: unknown;
+    missedFollowUpDueWithinMinutes: number;
     isActive: boolean;
   }) {
     return {
@@ -282,6 +288,7 @@ export class CareReminderScheduleService {
       timesPerUnit: plan.timesPerUnit || 1,
       scheduledTimes: this.toStringArray(plan.customMeasureTimes),
       scheduledDays: this.toStringArray(plan.customMeasureDays),
+      escalationTaskDueWithinMinutes: plan.missedFollowUpDueWithinMinutes,
       isActive: plan.isActive,
       payload: {
         vitalPlanId: plan.id,
@@ -299,9 +306,10 @@ export class CareReminderScheduleService {
       frequencyUnit: string;
       timesPerUnit: number;
       scheduledTimes: unknown;
+      escalationTaskDueWithinMinutes: number;
       isActive: boolean;
     },
-    want: { title: string; frequencyUnit: string; timesPerUnit: number; scheduledTimes: string[]; isActive: boolean },
+    want: { title: string; frequencyUnit: string; timesPerUnit: number; scheduledTimes: string[]; escalationTaskDueWithinMinutes?: number; isActive: boolean },
   ): boolean {
     const cur = JSON.stringify(this.toStringArray(s.scheduledTimes));
     const next = JSON.stringify(want.scheduledTimes);
@@ -309,6 +317,7 @@ export class CareReminderScheduleService {
       s.title === want.title &&
       s.frequencyUnit === want.frequencyUnit &&
       s.timesPerUnit === want.timesPerUnit &&
+      (want.escalationTaskDueWithinMinutes === undefined || s.escalationTaskDueWithinMinutes === want.escalationTaskDueWithinMinutes) &&
       s.isActive === want.isActive &&
       cur === next
     );
@@ -400,6 +409,7 @@ export class CareReminderScheduleService {
           scheduledTimes: want.scheduledTimes as any,
           scheduledDays: want.scheduledDays as any,
           payload: want.payload as any,
+          escalationTaskDueWithinMinutes: want.escalationTaskDueWithinMinutes,
           isActive: want.isActive,
           pausedAt: want.isActive ? null : s.pausedAt ?? new Date(),
         },

@@ -1,0 +1,44 @@
+.clinical-rules-release-v9-page .notice-card {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.rule-release-actionbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.status-pill.lifecycle-draft {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.status-pill.lifecycle-physician_review {
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.status-pill.lifecycle-published {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.status-pill.lifecycle-effective {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.status-pill.lifecycle-deactivated {
+  background: #fef2f2;
+  color: #b91c1c;
+}

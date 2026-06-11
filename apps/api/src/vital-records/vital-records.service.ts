@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { RiskLevel, RiskAlert, Task } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ClinicalRulesService } from '../clinical-rules/clinical-rules.service';
+import { ClinicalRulesService, type ClinicalRuleTrace } from '../clinical-rules/clinical-rules.service';
 import { CreateVitalRecordDto } from './dto/create-vital-record.dto';
 import { ClinicalDispositionService } from '../clinical-disposition/clinical-disposition.service';
 import { QueryVitalRecordsDto } from './dto/query-vital-records.dto';
@@ -17,6 +17,7 @@ type VitalRuleEvaluation = {
   matchedTemplateName?: string;
   followUpDueWithinHours?: number;
   followUpTaskTitle?: string;
+  ruleTrace: ClinicalRuleTrace;
 };
 
 const vitalTypeLabelMap: Record<string, string> = {
@@ -51,27 +52,12 @@ export class VitalRecordsService {
   ) {}
 
   private getAlertReviewDueAt(ruleEvaluation: VitalRuleEvaluation) {
-    if (ruleEvaluation.followUpDueWithinHours) {
+    if (ruleEvaluation.followUpDueWithinHours !== undefined) {
       const dueAt = new Date();
       dueAt.setHours(dueAt.getHours() + ruleEvaluation.followUpDueWithinHours);
       return dueAt;
     }
-
-    const riskLevel = ruleEvaluation.riskLevel;
-    const dueAt = new Date();
-
-    if (riskLevel === RiskLevel.VERY_HIGH) {
-      dueAt.setHours(dueAt.getHours() + 4);
-      return dueAt;
-    }
-
-    if (riskLevel === RiskLevel.HIGH) {
-      dueAt.setHours(dueAt.getHours() + 24);
-      return dueAt;
-    }
-
-    dueAt.setDate(dueAt.getDate() + 3);
-    return dueAt;
+    throw new BadRequestException('异常规则缺少版本化随访 SLA，已阻止自动任务创建');
   }
 
   private getAlertReviewTaskTitle(ruleEvaluation: VitalRuleEvaluation) {
@@ -197,17 +183,51 @@ export class VitalRecordsService {
       title: `异常健康指标：${label}`,
       description: `${label} ${value} ${unit}；${triggerRule}`,
       triggerRule,
+      followUpDueWithinHours: riskLevel === RiskLevel.VERY_HIGH ? 4 : riskLevel === RiskLevel.HIGH ? 24 : 72,
+      followUpTaskTitle: `开发回退：${label}异常复核`,
+      ruleTrace: {
+        ruleId: 'LEGACY_VITAL_FALLBACK',
+        ruleVersion: 'legacy-dev-only',
+        ruleSnapshot: { type, triggerRule },
+        evidenceBasis: '开发环境兼容回退逻辑；禁止作为正式发布规则使用。',
+        evaluatedAt: new Date(),
+        inputSnapshot: { vitalType: type, value, unit },
+        matchedConditions: { triggerRule, riskLevel },
+      },
+    };
+  }
+
+  private noAutomatedRuleEvaluation(dto: CreateVitalRecordDto): VitalRuleEvaluation {
+    const value = Number(dto.value);
+    const label = vitalTypeLabelMap[dto.type] ?? dto.type;
+    const manuallyFlagged = Boolean(dto.isAbnormal);
+    return {
+      isAbnormal: manuallyFlagged,
+      riskLevel: manuallyFlagged ? RiskLevel.MEDIUM : RiskLevel.LOW,
+      title: manuallyFlagged ? `人工标记异常指标：${label}` : `健康指标：${label}`,
+      description: manuallyFlagged
+        ? `${label} ${value} ${dto.unit}；护士人工标记异常，未使用自动阈值判定`
+        : `${label} ${value} ${dto.unit}；当前没有命中已生效的自动异常规则`,
+      triggerRule: manuallyFlagged ? '护士人工标记异常' : '未命中已生效的版本化自动异常规则',
+      followUpDueWithinHours: manuallyFlagged ? 72 : undefined,
+      followUpTaskTitle: manuallyFlagged ? `人工复核：${label}` : undefined,
+      ruleTrace: {
+        ruleId: manuallyFlagged ? 'NURSE_MANUAL_FLAG' : 'NO_EFFECTIVE_RULE_MATCH',
+        ruleVersion: 'manual-or-no-match',
+        ruleSnapshot: { manuallyFlagged },
+        evidenceBasis: manuallyFlagged ? '护士人工录入标记；需在任务处理中复核。' : '未使用自动异常判定。',
+        evaluatedAt: new Date(),
+        inputSnapshot: { vitalType: dto.type, value, unit: dto.unit },
+        matchedConditions: [],
+      },
     };
   }
 
   private async evaluateVitalRule(patient: any, dto: CreateVitalRecordDto): Promise<VitalRuleEvaluation> {
     const configuredRuleEvaluation = await this.clinicalRulesService.evaluateVital(patient, dto);
-
-    if (configuredRuleEvaluation) {
-      return configuredRuleEvaluation;
-    }
-
-    return this.evaluateVitalRuleFallback(dto);
+    if (configuredRuleEvaluation) return configuredRuleEvaluation;
+    if (process.env.CLINICAL_RULE_ALLOW_LEGACY_FALLBACK === 'true') return this.evaluateVitalRuleFallback(dto);
+    return this.noAutomatedRuleEvaluation(dto);
   }
 
   private async createBloodPressurePair(patient: any, patientId: string, dto: CreateVitalRecordDto) {
@@ -279,6 +299,15 @@ export class VitalRecordsService {
           title: '健康指标：血压',
           description: `血压 ${systolic}/${diastolic} ${unit}，正常`,
           triggerRule: '未触发自动异常规则',
+          ruleTrace: {
+            ruleId: 'NO_EFFECTIVE_RULE_MATCH',
+            ruleVersion: 'manual-or-no-match',
+            ruleSnapshot: { vitalType: 'BLOOD_PRESSURE' },
+            evidenceBasis: '未使用自动异常判定。',
+            evaluatedAt: new Date(),
+            inputSnapshot: { vitalType: 'BLOOD_PRESSURE', systolic, diastolic, unit },
+            matchedConditions: [],
+          },
         };
 
     return this.prisma.$transaction(async (tx) => {
@@ -343,6 +372,7 @@ export class VitalRecordsService {
             unit,
             measuredAt,
           },
+          ruleTrace: ruleEvaluation.ruleTrace,
           taskTitle: this.getAlertReviewTaskTitle(ruleEvaluation),
           taskType: 'RISK_ALERT_FOLLOW_UP',
           dueAt: this.getAlertReviewDueAt(ruleEvaluation),
@@ -446,6 +476,7 @@ export class VitalRecordsService {
             unit: dto.unit,
             measuredAt,
           },
+          ruleTrace: ruleEvaluation.ruleTrace,
           taskTitle: this.getAlertReviewTaskTitle(ruleEvaluation),
           taskType: 'RISK_ALERT_FOLLOW_UP',
           dueAt: this.getAlertReviewDueAt(ruleEvaluation),

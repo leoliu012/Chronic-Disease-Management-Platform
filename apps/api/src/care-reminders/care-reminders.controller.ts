@@ -105,6 +105,7 @@ export class CareRemindersController {
       checkInWindowBeforeMinutes: dto.checkInWindowBeforeMinutes ?? 60,
       checkInWindowAfterMinutes: dto.checkInWindowAfterMinutes ?? 240,
       escalationAfterMinutes: dto.escalationAfterMinutes ?? 240,
+      escalationTaskDueWithinMinutes: dto.escalationTaskDueWithinMinutes ?? 1440,
       createdBy: user.id,
     });
 
@@ -114,7 +115,7 @@ export class CareRemindersController {
       targetType: 'CareReminderSchedule',
       targetId: schedule.id,
       ipAddress: req?.ip,
-      afterData: { reminderType: 'MEDICATION_CHECKIN', patientId, times: dto.scheduledTimes },
+      afterData: { reminderType: 'MEDICATION_CHECKIN', patientId, times: dto.scheduledTimes, escalationTaskDueWithinMinutes: schedule.escalationTaskDueWithinMinutes },
     });
     // v3.3: the medication record is the source of truth — reconcile the
     // schedule's times/frequency/title to it (ignore any client-supplied
@@ -174,6 +175,7 @@ export class CareRemindersController {
       checkInWindowBeforeMinutes: dto.checkInWindowBeforeMinutes ?? 60,
       checkInWindowAfterMinutes: dto.checkInWindowAfterMinutes ?? 240,
       escalationAfterMinutes: dto.escalationAfterMinutes ?? 240,
+      escalationTaskDueWithinMinutes: plan.missedFollowUpDueWithinMinutes,
       createdBy: user.id,
     });
 
@@ -183,7 +185,7 @@ export class CareRemindersController {
       targetType: 'CareReminderSchedule',
       targetId: schedule.id,
       ipAddress: req?.ip,
-      afterData: { reminderType: 'VITAL_RECHECK', vitalType: plan.vitalType, patientId, times: planTimes },
+      afterData: { reminderType: 'VITAL_RECHECK', vitalType: plan.vitalType, patientId, times: planTimes, escalationTaskDueWithinMinutes: schedule.escalationTaskDueWithinMinutes },
     });
     // v3.3: the plan is the source of truth — reconcile the schedule to it and
     // return the reconciled row.

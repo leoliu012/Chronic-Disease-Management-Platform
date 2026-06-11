@@ -1,0 +1,145 @@
+.nurse-action-queue-v9-page {
+  display: grid;
+  gap: 18px;
+}
+
+.nurse-action-queue-v9-header {
+  align-items: flex-start;
+}
+
+.nurse-action-queue-v9-header .eyebrow {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.nurse-action-queue-v9-header p:last-child {
+  max-width: 880px;
+  margin-bottom: 0;
+  color: #475569;
+}
+
+.nurse-action-queue-v9-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 12px;
+}
+
+.nurse-action-queue-v9-card {
+  display: grid;
+  gap: 5px;
+  min-height: 130px;
+  padding: 16px;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.nurse-action-queue-v9-card:hover,
+.nurse-action-queue-v9-card.active {
+  transform: translateY(-2px);
+  border-color: #2563eb;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+}
+
+.nurse-action-queue-v9-card span,
+.nurse-action-queue-v9-card small {
+  color: #475569;
+}
+
+.nurse-action-queue-v9-card strong {
+  font-size: 34px;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.nurse-action-queue-v9-card.tone-danger {
+  border-left: 4px solid #dc2626;
+}
+
+.nurse-action-queue-v9-card.tone-warning {
+  border-left: 4px solid #d97706;
+}
+
+.nurse-action-queue-v9-card.tone-primary {
+  border-left: 4px solid #2563eb;
+}
+
+.nurse-action-queue-v9-card.tone-neutral {
+  border-left: 4px solid #64748b;
+}
+
+.nurse-action-queue-v9-panel {
+  overflow: hidden;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.nurse-action-queue-v9-panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.nurse-action-queue-v9-panel-heading h2,
+.nurse-action-queue-v9-panel-heading p {
+  margin: 0;
+}
+
+.nurse-action-queue-v9-panel-heading p {
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.nurse-action-queue-v9-table-wrap {
+  overflow-x: auto;
+}
+
+.nurse-action-queue-v9-table {
+  min-width: 1280px;
+}
+
+.nurse-action-queue-v9-table td {
+  vertical-align: top;
+}
+
+.nurse-action-queue-v9-table tr.critical-row td {
+  background: #fff7f7;
+}
+
+.queue-cell-title,
+.queue-evidence {
+  display: block;
+  margin-top: 6px;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.queue-evidence {
+  max-width: 360px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.sla-overdue {
+  color: #b91c1c;
+  font-weight: 800;
+}
+
+.nurse-action-queue-v9-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: #334155;
+}
