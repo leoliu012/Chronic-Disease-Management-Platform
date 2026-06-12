@@ -590,7 +590,12 @@ model AuthLoginThrottle {
 
 model PatientBindingRequest {
   id                String               @id @default(uuid())
-  demoOpenId        String
+  // deprecated: legacy local demo identifier. New mini-program flows use
+  // miniProgramAppId + miniProgramOpenId from a backend-issued mini session.
+  demoOpenId        String?
+  miniProgramAppId  String?
+  miniProgramOpenId String?
+  miniProgramUnionId String?
   patientId         String
   hospitalPatientId String?
   phone             String
@@ -604,13 +609,18 @@ model PatientBindingRequest {
   updatedAt         DateTime @updatedAt
 
   @@index([demoOpenId, status, createdAt])
+  @@index([miniProgramAppId, miniProgramOpenId, status, createdAt])
   @@index([patientId, status])
   @@index([status, createdAt])
 }
 
 model PatientSession {
   id          String   @id @default(uuid())
-  demoOpenId  String
+  // deprecated: legacy local demo identifier.
+  demoOpenId  String?
+  miniProgramAppId  String?
+  miniProgramOpenId String?
+  miniProgramUnionId String?
   patientId   String
   tokenHash   String   @unique
   expiresAt   DateTime
@@ -620,7 +630,23 @@ model PatientSession {
   createdAt   DateTime @default(now())
 
   @@index([demoOpenId, patientId])
+  @@index([miniProgramAppId, miniProgramOpenId, patientId])
   @@index([patientId, expiresAt])
+  @@index([expiresAt])
+}
+
+model MiniProgramAuthSession {
+  id                 String   @id @default(uuid())
+  miniProgramAppId   String
+  miniProgramOpenId  String
+  miniProgramUnionId String?
+  tokenHash          String   @unique
+  expiresAt          DateTime
+  lastUsedAt         DateTime?
+  revokedAt          DateTime?
+  createdAt          DateTime @default(now())
+
+  @@index([miniProgramAppId, miniProgramOpenId])
   @@index([expiresAt])
 }
 
@@ -655,7 +681,12 @@ model PatientConsent {
   id                  String               @id @default(uuid())
 
   // ---- 患者端可信标识 ----
-  demoOpenId          String
+  // deprecated: legacy local demo identifier. New mini-program flows use
+  // miniProgramAppId + miniProgramOpenId from a backend-issued mini session.
+  demoOpenId          String?
+  miniProgramAppId    String?
+  miniProgramOpenId   String?
+  miniProgramUnionId  String?
   hospitalPatientId   String?
 
   // ---- 松耦合关联（签署时可能尚不存在）----
@@ -680,6 +711,7 @@ model PatientConsent {
   updatedAt           DateTime             @updatedAt
 
   @@index([demoOpenId, status, createdAt])
+  @@index([miniProgramAppId, miniProgramOpenId, status, createdAt])
   @@index([chronicLeadId])
   @@index([patientId])
   @@index([bindingRequestId])

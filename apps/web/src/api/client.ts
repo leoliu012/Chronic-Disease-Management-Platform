@@ -4,7 +4,7 @@ import { buildAutoTaskProcessingEventPayload, rememberClinicalEntitySnapshotsFro
 export const AUTH_TOKEN_STORAGE_KEY = 'chronic_care_access_token';
 export const AUTH_USER_STORAGE_KEY = 'chronic_care_current_user';
 
-const DEFAULT_API_BASE_URL = 'http://localhost:3000';
+const DEFAULT_API_BASE_URL = '/api';
 const OPERATION_NOTICE_EVENT = 'operation-notice';
 const MUTATION_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 

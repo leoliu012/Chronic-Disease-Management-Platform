@@ -24,9 +24,11 @@ export type IdentityMatchType = (typeof IDENTITY_MATCH_TYPES)[number];
  * 完成「提交绑定申请」——签署同意书与提交绑定申请是患者端同一连续流程的两步。
  */
 export class SubmitConsentDto {
+  /** @deprecated New mini-program flow identifies the user via x-mini-session-token. */
+  @IsOptional()
   @IsString()
   @MaxLength(128)
-  demoOpenId!: string;
+  demoOpenId?: string;
 
   /**
    * 患者点了「同意」= true。任何 false / 缺失都会被拒绝。
@@ -34,9 +36,10 @@ export class SubmitConsentDto {
   @IsBoolean()
   consentAccepted!: boolean;
 
+  @IsOptional()
   @IsString()
   @MaxLength(64)
-  consentVersion!: string;
+  consentVersion?: string;
 
   /**
    * 本次匹配到的对象类型，来自 identity/lookup 的返回。

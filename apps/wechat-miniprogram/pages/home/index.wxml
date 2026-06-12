@@ -13,7 +13,33 @@
           <view class="hello">您好，{{patient.name || '慢病患者'}}</view>
           <view class="card-subtitle">{{patientDesc}}</view>
         </view>
-        <view class="switch-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">切换</view>
+        <view class="hero-actions">
+          <view class="switch-btn tap-btn" hover-class="tap-btn-hover" catchtap="goBind">切换</view>
+          <view
+            class="official-bind-chip tap-btn"
+            hover-class="tap-btn-hover"
+            catchtap="createOfficialAccountBindUrl"
+          >
+            公众号
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="card official-account-card">
+      <view class="item-title">公众号消息提醒</view>
+      <view class="item-desc">绑定本院服务号后，复测、随访和用药提醒可通过公众号发送给您。</view>
+      <button
+        class="primary-btn"
+        loading="{{officialAccountLinkLoading}}"
+        bindtap="createOfficialAccountBindUrl"
+      >
+        绑定公众号接收提醒
+      </button>
+      <view wx:if="{{officialAccountBindUrl}}" class="link-box">
+        <view class="item-desc">链接已生成并复制，请在微信里打开完成授权。</view>
+        <text class="link-text">{{officialAccountBindUrl}}</text>
+        <button class="secondary-btn compact-btn" bindtap="copyOfficialAccountBindUrl">再次复制链接</button>
       </view>
     </view>
 

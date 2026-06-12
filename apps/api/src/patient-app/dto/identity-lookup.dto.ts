@@ -9,6 +9,7 @@ import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
  * 不再接受扫码二维码携带的 leadId —— 扫码直达同意书的入口已移除。
  */
 export class IdentityLookupDto {
+  /** @deprecated New mini-program flow identifies the user via x-mini-session-token. */
   @IsOptional()
   @IsString()
   @MaxLength(128)

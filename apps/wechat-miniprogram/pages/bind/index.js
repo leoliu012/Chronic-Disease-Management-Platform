@@ -10,8 +10,9 @@
  */
 
 const {
-  request,
-  getDemoOpenId,
+  miniAuthRequest,
+  patientRequest,
+  ensureMiniSession,
   persistPatientSession,
   resetPatientIdentity
 } = require('../../utils/request');
@@ -65,8 +66,6 @@ const STATUS_POLL_INTERVAL_MS = 5000;
 
 Page({
   data: {
-    apiBaseUrl: 'http://127.0.0.1:3000',
-    demoOpenId: '',
     phone: '',
     hospitalPatientId: '',
     idCardLast4: '',
@@ -76,6 +75,9 @@ Page({
     patient: null,
     bound: false,
     message: '',
+    officialAccountBindUrl: '',
+    officialAccountBindExpiresAt: '',
+    officialAccountLinkLoading: false,
 
     loading: false,
     searching: false,
@@ -95,27 +97,25 @@ Page({
     consentVersion: ''
   },
 
-  onLoad() {
+  async onLoad() {
     const app = getApp();
     this.setData({
-      apiBaseUrl:
-        app.globalData.apiBaseUrl ||
-        wx.getStorageSync('apiBaseUrl') ||
-        'http://127.0.0.1:3000',
-      demoOpenId: getDemoOpenId(),
       bindingStatus:
         app.globalData.bindingStatus || wx.getStorageSync('bindingStatus') || 'UNBOUND',
       patient: app.globalData.patient || wx.getStorageSync('patient') || null
     });
-    this.checkBindingStatus();
+    try {
+      await ensureMiniSession();
+      this.checkBindingStatus();
+    } catch (error) {
+      wx.showToast({ title: error.message, icon: 'none' });
+    }
   },
 
   onShow() {
     // 进入 / 返回本页时立即刷新一次绑定状态；checkBindingStatus 内部会根据
     // 结果决定是否开启轮询（PENDING 时轮询，其余状态停止）。
-    if (this.data.demoOpenId) {
-      this.checkBindingStatus({ silent: true });
-    }
+    this.checkBindingStatus({ silent: true });
   },
 
   onHide() {
@@ -143,9 +143,6 @@ Page({
     }
   },
 
-  onApiBaseUrlInput(event) {
-    this.setData({ apiBaseUrl: event.detail.value.trim() });
-  },
   onPhoneInput(event) {
     this.setData({ phone: event.detail.value.trim() });
   },
@@ -156,25 +153,17 @@ Page({
     this.setData({ idCardLast4: event.detail.value.trim() });
   },
 
-  saveBaseUrl() {
-    const app = getApp();
-    const apiBaseUrl = this.data.apiBaseUrl || 'http://127.0.0.1:3000';
-    app.globalData.apiBaseUrl = apiBaseUrl;
-    wx.setStorageSync('apiBaseUrl', apiBaseUrl);
-  },
-
   async checkBindingStatus(options) {
     const silent = options && options.silent;
-    this.saveBaseUrl();
     if (!silent) this.setData({ loading: true, message: '' });
 
     const prevStatus = this.data.bindingStatus;
 
     try {
-      const result = await request({
-        url: '/patient-app/demo-login',
+      const result = await miniAuthRequest({
+        url: '/patient-app/session',
         method: 'POST',
-        data: { demoOpenId: this.data.demoOpenId }
+        data: {}
       });
 
       persistPatientSession(result);
@@ -185,6 +174,8 @@ Page({
         bindingRequest: result.bindingRequest || null,
         patient: result.patient || this.data.patient || null,
         bound,
+        officialAccountBindUrl: bound ? this.data.officialAccountBindUrl : '',
+        officialAccountBindExpiresAt: bound ? this.data.officialAccountBindExpiresAt : '',
         message: result.message || ''
       });
 
@@ -233,15 +224,13 @@ Page({
       return;
     }
 
-    this.saveBaseUrl();
     this.setData({ searching: true, message: '', lookupDone: false });
 
     try {
-      const res = await request({
+      const res = await miniAuthRequest({
         url: '/patient-app/identity/lookup',
         method: 'POST',
         data: {
-          demoOpenId: this.data.demoOpenId,
           phone: phone || undefined,
           hospitalPatientId: hospitalPatientId || undefined,
           idCardLast4: idCardLast4 || undefined
@@ -335,6 +324,9 @@ Page({
       bindingRequest: null,
       patient: null,
       bound: false,
+      officialAccountBindUrl: '',
+      officialAccountBindExpiresAt: '',
+      officialAccountLinkLoading: false,
       message: '已重置本机身份，可作为新用户重新搜索院内信息并提交绑定申请。',
       lookupDone: false,
       matchType: '',
@@ -350,6 +342,70 @@ Page({
       url: '/pages/home/index',
       fail() {
         wx.redirectTo({ url: '/pages/home/index' });
+      }
+    });
+  },
+
+  async createOfficialAccountBindUrl() {
+    if (!this.data.bound) {
+      wx.showToast({ title: '请先完成患者绑定审核', icon: 'none' });
+      return;
+    }
+
+    this.setData({ officialAccountLinkLoading: true });
+    try {
+      const result = await patientRequest({
+        url: '/official-account/bind-url',
+        method: 'POST',
+        data: {}
+      });
+      const url = result && result.oauthStartUrl;
+      if (!url) {
+        throw new Error('后端未返回公众号绑定链接');
+      }
+
+      this.setData({
+        officialAccountBindUrl: url,
+        officialAccountBindExpiresAt: result.expiresAt || ''
+      });
+
+      const self = this;
+      wx.setClipboardData({
+        data: url,
+        complete() {
+          self.openOfficialAccountBindUrl(url);
+        }
+      });
+    } catch (error) {
+      wx.showToast({ title: error.message || '获取公众号绑定链接失败', icon: 'none' });
+    } finally {
+      this.setData({ officialAccountLinkLoading: false });
+    }
+  },
+
+  openOfficialAccountBindUrl(url) {
+    wx.navigateTo({
+      url: `/pages/official-account-bind/index?url=${encodeURIComponent(url)}`,
+      fail() {
+        wx.showModal({
+          title: '链接已复制',
+          content: '自动打开失败，请在微信里粘贴并打开已复制的链接完成服务号授权。',
+          showCancel: false
+        });
+      }
+    });
+  },
+
+  copyOfficialAccountBindUrl() {
+    const url = this.data.officialAccountBindUrl;
+    if (!url) {
+      wx.showToast({ title: '请先生成公众号绑定链接', icon: 'none' });
+      return;
+    }
+    wx.setClipboardData({
+      data: url,
+      success() {
+        wx.showToast({ title: '链接已复制', icon: 'success' });
       }
     });
   }

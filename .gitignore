@@ -4,3 +4,5 @@
 **/.DS_Store
 src_dump*.txt
 **/.patch-backups/
+apps/wechat-miniprogram/env.js
+memories/

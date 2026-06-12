@@ -26,6 +26,7 @@ import { VitalMonitoringPlansService } from '../vital-monitoring-plans/vital-mon
 import { ChronicLeadsService } from '../chronic-leads/chronic-leads.service';
 import { HisIntegrationService } from '../his-integration/his-integration.service';
 import { ClinicalAccessScopeService } from '../security/clinical-access-scope.service';
+import { FormLinkService } from '../patient-engagement/form-link.service';
 import type { RequestUser } from '../security/request-user.type';
 import { CreateVitalRecordDto } from '../vital-records/dto/create-vital-record.dto';
 import { CreateMedicationCheckInDto } from '../medications/dto/create-medication-check-in.dto';
@@ -37,6 +38,7 @@ import { RejectPatientBindingDto } from './dto/reject-patient-binding.dto';
 import { IdentityLookupDto } from './dto/identity-lookup.dto';
 import { SubmitConsentDto } from './dto/submit-consent.dto';
 import type { PatientSessionRequestContext } from './patient-session.type';
+import type { MiniProgramContext } from './wechat-mini-program.service';
 
 const PATIENT_SESSION_DAYS = 30;
 
@@ -116,6 +118,7 @@ export class PatientAppService {
     private readonly chronicLeadsService: ChronicLeadsService,
     private readonly hisIntegrationService: HisIntegrationService,
     private readonly access: ClinicalAccessScopeService,
+    private readonly formLinkService: FormLinkService,
   ) {}
 
   private normalizeDemoOpenId(value?: string) {
@@ -126,7 +129,9 @@ export class PatientAppService {
 
   private async recordPatientAudit(params: {
     session?: PatientSessionRequestContext;
-    demoOpenId?: string;
+    demoOpenId?: string | null;
+    miniProgramAppId?: string | null;
+    miniProgramOpenId?: string | null;
     action: string;
     targetType: string;
     targetId?: string | null;
@@ -139,6 +144,8 @@ export class PatientAppService {
           ? `patient:${params.session.patientId}`
           : params.demoOpenId
             ? `patient-demo-openid:${params.demoOpenId}`
+            : params.miniProgramAppId && params.miniProgramOpenId
+              ? `patient-mini:${params.miniProgramAppId}:${this.maskOpenId(params.miniProgramOpenId)}`
             : undefined,
         action: params.action,
         targetType: params.targetType,
@@ -152,14 +159,32 @@ export class PatientAppService {
     });
   }
 
-  private async createSession(demoOpenId: string, patientId: string, ipAddress?: string) {
+  private maskOpenId(openId?: string | null) {
+    if (!openId) return null;
+    if (openId.length <= 8) return '****';
+    return `${openId.slice(0, 4)}****${openId.slice(-4)}`;
+  }
+
+  private demoOpenIdFromMiniContext(ctx: MiniProgramContext) {
+    return `mini:${ctx.miniProgramAppId}:${ctx.miniProgramOpenId}`;
+  }
+
+  private async createSession(params: {
+    patientId: string;
+    demoOpenId?: string | null;
+    miniCtx?: MiniProgramContext;
+    ipAddress?: string;
+  }) {
     const token = createPatientToken();
     const expiresAt = addDays(new Date(), PATIENT_SESSION_DAYS);
 
     const session = await this.prisma.patientSession.create({
       data: {
-        demoOpenId,
-        patientId,
+        demoOpenId: params.demoOpenId ?? undefined,
+        miniProgramAppId: params.miniCtx?.miniProgramAppId,
+        miniProgramOpenId: params.miniCtx?.miniProgramOpenId,
+        miniProgramUnionId: params.miniCtx?.miniProgramUnionId ?? undefined,
+        patientId: params.patientId,
         tokenHash: hashPatientToken(token),
         expiresAt,
         lastUsedAt: new Date(),
@@ -167,12 +192,14 @@ export class PatientAppService {
     });
 
     await this.recordPatientAudit({
-      demoOpenId,
+      demoOpenId: params.demoOpenId,
+      miniProgramAppId: params.miniCtx?.miniProgramAppId,
+      miniProgramOpenId: params.miniCtx?.miniProgramOpenId,
       action: 'PATIENT_LOGIN',
       targetType: 'PatientSession',
       targetId: session.id,
-      ipAddress,
-      afterData: { patientId, expiresAt: expiresAt.toISOString() },
+      ipAddress: params.ipAddress,
+      afterData: { patientId: params.patientId, expiresAt: expiresAt.toISOString() },
     });
 
     return { token, session };
@@ -216,7 +243,7 @@ export class PatientAppService {
       throw new NotFoundException('Approved binding patient no longer exists');
     }
 
-    const { token, session } = await this.createSession(demoOpenId, patient.id, ipAddress);
+    const { token, session } = await this.createSession({ demoOpenId, patientId: patient.id, ipAddress });
 
     return {
       demoOpenId,
@@ -232,6 +259,67 @@ export class PatientAppService {
     };
   }
 
+  async findApprovedBindingByMiniProgramOpenId(ctx: MiniProgramContext) {
+    return this.prisma.patientBindingRequest.findFirst({
+      where: {
+        miniProgramAppId: ctx.miniProgramAppId,
+        miniProgramOpenId: ctx.miniProgramOpenId,
+        status: PatientBindingStatus.APPROVED,
+      },
+      orderBy: { reviewedAt: 'desc' },
+    });
+  }
+
+  async loginWithMiniProgramOpenId(ctx: MiniProgramContext, ipAddress?: string) {
+    const approvedRequest = await this.findApprovedBindingByMiniProgramOpenId(ctx);
+    if (!approvedRequest) {
+      const latestRequest = await this.prisma.patientBindingRequest.findFirst({
+        where: {
+          miniProgramAppId: ctx.miniProgramAppId,
+          miniProgramOpenId: ctx.miniProgramOpenId,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return {
+        bindingStatus: latestRequest?.status ?? 'UNBOUND',
+        bindingRequest: latestRequest,
+        patientToken: null,
+        patient: null,
+        message:
+          latestRequest?.status === PatientBindingStatus.PENDING
+            ? '绑定申请审核中，请等待护士审核。'
+            : latestRequest?.status === PatientBindingStatus.REJECTED
+              ? '绑定申请未通过，请核对手机号、院内号或身份证后四位后重新提交。'
+              : '尚未绑定慢病档案，请先搜索院内信息并提交绑定申请。',
+      };
+    }
+
+    const patient = await this.prisma.patient.findUnique({
+      where: { id: approvedRequest.patientId },
+      include: { diseaseProfiles: true },
+    });
+
+    if (!patient) {
+      throw new NotFoundException('Approved binding patient no longer exists');
+    }
+
+    const { token, session } = await this.createSession({
+      miniCtx: ctx,
+      patientId: patient.id,
+      ipAddress,
+    });
+
+    return {
+      bindingStatus: PatientBindingStatus.APPROVED,
+      bindingRequest: approvedRequest,
+      patientToken: token,
+      patient,
+      session: { id: session.id, expiresAt: session.expiresAt },
+      message: '患者身份已确认，已签发患者端会话。',
+    };
+  }
+
   // ===========================================================================
   // patient-self-consent-bind —— 统一身份核验 / 知情同意 / 提交绑定申请
   // ===========================================================================
@@ -243,15 +331,15 @@ export class PatientAppService {
    *   3) HIS / 院内暂存患者信息（预留，真实 HIS 接入后启用）
    *   4) 都查不到 → NOT_FOUND，提示联系医院或人工核验
    */
-  async lookupIdentity(dto: IdentityLookupDto) {
-    const demoOpenId = this.normalizeDemoOpenId(dto.demoOpenId);
+  async lookupIdentity(dto: IdentityLookupDto, miniCtx?: MiniProgramContext) {
+    const demoOpenId = miniCtx ? undefined : this.normalizeDemoOpenId(dto.demoOpenId);
     const hospitalPatientId = safeString(dto.hospitalPatientId) || undefined;
     const phone = safeString(dto.phone) || undefined;
     const idCardLast4 = safeString(dto.idCardLast4) || undefined;
 
     const base = {
       consentVersion: PATIENT_CONSENT_VERSION,
-      existingBinding: await this.findLatestBindingSummary(demoOpenId),
+      existingBinding: await this.findLatestBindingSummary({ demoOpenId, miniCtx }),
     };
 
     if (!hospitalPatientId && !phone && !idCardLast4) {
@@ -348,12 +436,17 @@ export class PatientAppService {
    * 签署知情同意书，落一条独立 PatientConsent 记录。
    * 同一 demoOpenId 对同一识别对象的旧记录会被标记为 SUPERSEDED。
    */
-  async submitConsent(dto: SubmitConsentDto, ipAddress?: string, userAgent?: string) {
+  async submitConsent(
+    dto: SubmitConsentDto,
+    miniCtx?: MiniProgramContext,
+    ipAddress?: string,
+    userAgent?: string,
+  ) {
     if (dto.consentAccepted !== true) {
       throw new BadRequestException('必须勾选《知情同意与隐私授权协议》方可继续');
     }
 
-    const demoOpenId = this.normalizeDemoOpenId(dto.demoOpenId);
+    const demoOpenId = miniCtx ? undefined : this.normalizeDemoOpenId(dto.demoOpenId);
     const chronicLeadId = safeString(dto.chronicLeadId) || null;
     const patientId = safeString(dto.patientId) || null;
     const hospitalPatientId = safeString(dto.hospitalPatientId) || null;
@@ -365,7 +458,12 @@ export class PatientAppService {
     // 把同一 openId + 同一识别对象的旧有效同意书置为 SUPERSEDED。
     await this.prisma.patientConsent.updateMany({
       where: {
-        demoOpenId,
+        ...(miniCtx
+          ? {
+              miniProgramAppId: miniCtx.miniProgramAppId,
+              miniProgramOpenId: miniCtx.miniProgramOpenId,
+            }
+          : { demoOpenId }),
         status: PatientConsentStatus.SIGNED,
         OR: [
           ...(chronicLeadId ? [{ chronicLeadId }] : []),
@@ -378,7 +476,10 @@ export class PatientAppService {
 
     const consent = await this.prisma.patientConsent.create({
       data: {
-        demoOpenId,
+        demoOpenId: demoOpenId ?? undefined,
+        miniProgramAppId: miniCtx?.miniProgramAppId,
+        miniProgramOpenId: miniCtx?.miniProgramOpenId,
+        miniProgramUnionId: miniCtx?.miniProgramUnionId ?? undefined,
         hospitalPatientId: hospitalPatientId ?? undefined,
         chronicLeadId: chronicLeadId ?? undefined,
         patientId: patientId ?? undefined,
@@ -394,6 +495,8 @@ export class PatientAppService {
 
     await this.recordPatientAudit({
       demoOpenId,
+      miniProgramAppId: miniCtx?.miniProgramAppId,
+      miniProgramOpenId: miniCtx?.miniProgramOpenId,
       action: 'PATIENT_CONSENT_SIGNED',
       targetType: 'PatientConsent',
       targetId: consent.id,
@@ -425,8 +528,12 @@ export class PatientAppService {
    *
    * 所有路径都要求先签署知情同意书（consentId 必填且有效）。
    */
-  async createBindingRequest(dto: CreatePatientBindingRequestDto, ipAddress?: string) {
-    const demoOpenId = this.normalizeDemoOpenId(dto.demoOpenId);
+  async createBindingRequest(
+    dto: CreatePatientBindingRequestDto,
+    miniCtx?: MiniProgramContext,
+    ipAddress?: string,
+  ) {
+    const demoOpenId = miniCtx ? undefined : this.normalizeDemoOpenId(dto.demoOpenId);
     const phone = safeString(dto.phone);
     const hospitalPatientId = safeString(dto.hospitalPatientId);
     const idCardLast4 = safeString(dto.idCardLast4);
@@ -440,7 +547,7 @@ export class PatientAppService {
     }
 
     // 知情同意书是绑定申请的前置条件 —— 所有患者都必须先签过同意书。
-    const consent = await this.resolveSignedConsent(dto.consentId, demoOpenId);
+    const consent = await this.resolveSignedConsent(dto.consentId, { demoOpenId, miniCtx });
 
     if (matchType === 'HIS_PATIENT') {
       throw new BadRequestException(
@@ -451,6 +558,7 @@ export class PatientAppService {
     if (matchType === 'CHRONIC_LEAD') {
       return this.createBindingFromChronicLead({
         demoOpenId,
+        miniCtx,
         phone,
         hospitalPatientId,
         idCardLast4,
@@ -463,6 +571,7 @@ export class PatientAppService {
 
     return this.createBindingForExistingPatient({
       demoOpenId,
+      miniCtx,
       phone,
       hospitalPatientId,
       idCardLast4,
@@ -474,7 +583,8 @@ export class PatientAppService {
   // --- 绑定路径 A：命中邀约库 ChronicLead --------------------------------------
 
   private async createBindingFromChronicLead(params: {
-    demoOpenId: string;
+    demoOpenId?: string;
+    miniCtx?: MiniProgramContext;
     phone: string;
     hospitalPatientId: string;
     idCardLast4: string;
@@ -535,7 +645,8 @@ export class PatientAppService {
         'MINI_PROGRAM_BIND',
         `consentId=${params.consentId ?? '-'}`,
         `v${PATIENT_CONSENT_VERSION}`,
-        `openid=${params.demoOpenId}`,
+        `miniAppId=${params.miniCtx?.miniProgramAppId ?? '-'}`,
+        `miniOpenId=${this.maskOpenId(params.miniCtx?.miniProgramOpenId) ?? params.demoOpenId ?? '-'}`,
         `ip=${params.ipAddress ?? '-'}`,
         `signedAt=${new Date().toISOString()}`,
       ].join(' | ');
@@ -561,6 +672,7 @@ export class PatientAppService {
 
     const bindingRequest = await this.upsertBindingRequest({
       demoOpenId: params.demoOpenId,
+      miniCtx: params.miniCtx,
       patientId,
       hospitalPatientId: params.hospitalPatientId || patientHospitalId || undefined,
       phone: params.phone,
@@ -575,6 +687,8 @@ export class PatientAppService {
 
     await this.recordPatientAudit({
       demoOpenId: params.demoOpenId,
+      miniProgramAppId: params.miniCtx?.miniProgramAppId,
+      miniProgramOpenId: params.miniCtx?.miniProgramOpenId,
       action: 'PATIENT_BINDING_REQUEST_FROM_LEAD',
       targetType: 'PatientBindingRequest',
       targetId: bindingRequest.id,
@@ -606,7 +720,8 @@ export class PatientAppService {
   // --- 绑定路径 B：已有 Patient 档案 ------------------------------------------
 
   private async createBindingForExistingPatient(params: {
-    demoOpenId: string;
+    demoOpenId?: string;
+    miniCtx?: MiniProgramContext;
     phone: string;
     hospitalPatientId: string;
     idCardLast4: string;
@@ -635,6 +750,7 @@ export class PatientAppService {
 
     const bindingRequest = await this.upsertBindingRequest({
       demoOpenId: params.demoOpenId,
+      miniCtx: params.miniCtx,
       patientId: patient.id,
       hospitalPatientId: params.hospitalPatientId || patient.hospitalPatientId || undefined,
       phone: params.phone,
@@ -648,6 +764,8 @@ export class PatientAppService {
 
     await this.recordPatientAudit({
       demoOpenId: params.demoOpenId,
+      miniProgramAppId: params.miniCtx?.miniProgramAppId,
+      miniProgramOpenId: params.miniCtx?.miniProgramOpenId,
       action: 'PATIENT_BINDING_REQUEST',
       targetType: 'PatientBindingRequest',
       targetId: bindingRequest.id,
@@ -674,7 +792,8 @@ export class PatientAppService {
   // --- 绑定相关 helpers -------------------------------------------------------
 
   private async upsertBindingRequest(params: {
-    demoOpenId: string;
+    demoOpenId?: string;
+    miniCtx?: MiniProgramContext;
     patientId: string;
     hospitalPatientId?: string;
     phone: string;
@@ -682,7 +801,12 @@ export class PatientAppService {
   }) {
     const existingPending = await this.prisma.patientBindingRequest.findFirst({
       where: {
-        demoOpenId: params.demoOpenId,
+        ...(params.miniCtx
+          ? {
+              miniProgramAppId: params.miniCtx.miniProgramAppId,
+              miniProgramOpenId: params.miniCtx.miniProgramOpenId,
+            }
+          : { demoOpenId: params.demoOpenId }),
         patientId: params.patientId,
         status: PatientBindingStatus.PENDING,
       },
@@ -694,6 +818,9 @@ export class PatientAppService {
     return this.prisma.patientBindingRequest.create({
       data: {
         demoOpenId: params.demoOpenId,
+        miniProgramAppId: params.miniCtx?.miniProgramAppId,
+        miniProgramOpenId: params.miniCtx?.miniProgramOpenId,
+        miniProgramUnionId: params.miniCtx?.miniProgramUnionId ?? undefined,
         patientId: params.patientId,
         hospitalPatientId: params.hospitalPatientId,
         phone: params.phone,
@@ -702,7 +829,10 @@ export class PatientAppService {
     });
   }
 
-  private async resolveSignedConsent(consentId: string | undefined, demoOpenId: string) {
+  private async resolveSignedConsent(
+    consentId: string | undefined,
+    identity: { demoOpenId?: string; miniCtx?: MiniProgramContext },
+  ) {
     const id = safeString(consentId);
     if (!id) {
       throw new BadRequestException(
@@ -714,7 +844,11 @@ export class PatientAppService {
     if (!consent) {
       throw new BadRequestException('知情同意书记录不存在，请重新签署');
     }
-    if (consent.demoOpenId !== demoOpenId) {
+    const isSameIdentity = identity.miniCtx
+      ? consent.miniProgramAppId === identity.miniCtx.miniProgramAppId &&
+        consent.miniProgramOpenId === identity.miniCtx.miniProgramOpenId
+      : consent.demoOpenId === identity.demoOpenId;
+    if (!isSameIdentity) {
       throw new ForbiddenException('知情同意书与当前小程序身份不一致');
     }
     if (consent.status !== PatientConsentStatus.SIGNED) {
@@ -801,9 +935,17 @@ export class PatientAppService {
 
   // --- 身份查询 helpers -------------------------------------------------------
 
-  private async findLatestBindingSummary(demoOpenId: string) {
+  private async findLatestBindingSummary(identity: {
+    demoOpenId?: string;
+    miniCtx?: MiniProgramContext;
+  }) {
     const latest = await this.prisma.patientBindingRequest.findFirst({
-      where: { demoOpenId },
+      where: identity.miniCtx
+        ? {
+            miniProgramAppId: identity.miniCtx.miniProgramAppId,
+            miniProgramOpenId: identity.miniCtx.miniProgramOpenId,
+          }
+        : { demoOpenId: identity.demoOpenId },
       orderBy: { createdAt: 'desc' },
     });
     if (!latest) return null;
@@ -957,7 +1099,60 @@ export class PatientAppService {
     return {
       sessionId: session.id,
       demoOpenId: session.demoOpenId,
+      miniProgramAppId: session.miniProgramAppId,
+      miniProgramOpenId: session.miniProgramOpenId,
       patientId: session.patientId,
+    };
+  }
+
+  async requirePatientFromToken(token: string) {
+    const session = await this.verifyPatientToken(token);
+    const patient = await this.prisma.patient.findUnique({
+      where: { id: session.patientId },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        hospitalPatientId: true,
+        hospitalTenantId: true,
+      },
+    });
+    if (!patient) throw new UnauthorizedException('Patient session is invalid');
+    return { session, patient };
+  }
+
+  async createOfficialAccountBindUrl(patientId: string) {
+    const patient = await this.prisma.patient.findUnique({
+      where: { id: patientId },
+      select: { id: true, name: true, hospitalTenantId: true },
+    });
+    if (!patient) throw new NotFoundException('Patient not found');
+    if (!patient.hospitalTenantId) {
+      throw new BadRequestException('患者未绑定医院租户，无法绑定本院服务号');
+    }
+
+    const link = await this.formLinkService.create({
+      hospitalTenantId: patient.hospitalTenantId,
+      patientId: patient.id,
+      type: 'CONSENT_ONLY',
+      title: '绑定本院服务号',
+      description: '用于接收慢病随访、复测和用药提醒',
+      payload: { purpose: 'OFFICIAL_ACCOUNT_BINDING' },
+      expiresInHours: 0.5,
+      maxSubmit: 1,
+      requiresIdentityCheck: false,
+      createdBy: 'patient-app',
+    });
+
+    const apiBaseUrl = (
+      process.env.PATIENT_ENGAGEMENT_API_BASE_URL ||
+      process.env.API_BASE_URL ||
+      'http://127.0.0.1:3000'
+    ).replace(/\/+$/, '');
+
+    return {
+      oauthStartUrl: `${apiBaseUrl}/patient-engagement/wechat/oauth/start?token=${encodeURIComponent(link.token)}`,
+      expiresAt: link.formLink.expiresAt,
     };
   }
 

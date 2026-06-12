@@ -23,6 +23,35 @@
   padding: 18rpx;
 }
 
+.official-account-box {
+  margin-top: 18rpx;
+  border: 1rpx solid #d8e6f6;
+  background: #f8fbff;
+  border-radius: 18rpx;
+  padding: 18rpx;
+}
+
+.link-box {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  border: 1rpx dashed #b8c7d9;
+  border-radius: 14rpx;
+  background: #ffffff;
+}
+
+.link-text {
+  display: block;
+  margin: 10rpx 0 14rpx;
+  color: #4a5b70;
+  font-size: 22rpx;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.compact-btn {
+  margin-top: 8rpx;
+}
+
 .step-title {
   color: #0b63ce;
 }

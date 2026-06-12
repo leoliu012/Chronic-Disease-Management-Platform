@@ -1,6 +1,13 @@
+let env = require('../env.example');
+try {
+  env = require('../env');
+} catch (error) {
+  console.warn('Missing env.js, run: node apps/wechat-miniprogram/scripts/sync-env.js');
+}
+
 function getBaseUrl() {
   const app = getApp();
-  return app.globalData.apiBaseUrl || wx.getStorageSync('apiBaseUrl') || 'http://127.0.0.1:3000';
+  return app.globalData.apiBaseUrl || wx.getStorageSync('apiBaseUrl') || env.apiBaseUrl;
 }
 
 function getPatientToken() {
@@ -8,15 +15,9 @@ function getPatientToken() {
   return app.globalData.patientToken || wx.getStorageSync('patientToken') || '';
 }
 
-function getDemoOpenId() {
+function getMiniSessionToken() {
   const app = getApp();
-  let demoOpenId = app.globalData.demoOpenId || wx.getStorageSync('demoOpenId') || '';
-  if (!demoOpenId) {
-    demoOpenId = `demo-openid-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-    app.globalData.demoOpenId = demoOpenId;
-    wx.setStorageSync('demoOpenId', demoOpenId);
-  }
-  return demoOpenId;
+  return app.globalData.miniSessionToken || wx.getStorageSync('miniSessionToken') || '';
 }
 
 function clearPatientSession() {
@@ -31,35 +32,41 @@ function clearPatientSession() {
   wx.setStorageSync('bindingStatus', 'UNBOUND');
 }
 
-/**
- * 彻底重置本机患者身份。
- *
- * 与 clearPatientSession 的区别：clearPatientSession 只清会话 token（供 token 过期后
- * 用同一 demoOpenId 重新 demo-login 找回原绑定）；本函数在清会话之外，还会轮换
- * demoOpenId —— 即丢弃当前设备身份。
- *
- * 为什么必须轮换 demoOpenId：服务端的绑定申请按 demoOpenId 关联，只要 demoOpenId
- * 不变，bind 页自动调用的 demo-login 就会重新命中那条 APPROVED 绑定，把旧患者档案
- * 和 token 一起“复活”。用户点「清除本机会话 / 切换身份」期望的是换一个干净身份重新
- * 搜索绑定，因此这里轮换 demoOpenId，下次 getDemoOpenId() 会生成一个全新的。
- */
+function clearMiniSession() {
+  const app = getApp();
+  app.globalData.miniSessionToken = '';
+  app.globalData.miniSessionExpiresAt = '';
+  wx.removeStorageSync('miniSessionToken');
+  wx.removeStorageSync('miniSessionExpiresAt');
+}
+
 function resetPatientIdentity() {
   clearPatientSession();
+  clearMiniSession();
+}
+
+function persistMiniSession(payload) {
   const app = getApp();
-  app.globalData.demoOpenId = '';
-  wx.removeStorageSync('demoOpenId');
+  if (payload && payload.miniSessionToken) {
+    app.globalData.miniSessionToken = payload.miniSessionToken;
+    app.globalData.miniSessionExpiresAt = payload.expiresAt || '';
+    wx.setStorageSync('miniSessionToken', payload.miniSessionToken);
+    wx.setStorageSync('miniSessionExpiresAt', payload.expiresAt || '');
+  }
+  if (payload && payload.bound) {
+    app.globalData.bindingStatus = 'APPROVED';
+    wx.setStorageSync('bindingStatus', 'APPROVED');
+  }
+  return payload;
 }
 
 function persistPatientSession(payload) {
   const app = getApp();
   const patient = payload && payload.patient;
   const token = payload && payload.patientToken;
-  const demoOpenId = (payload && payload.demoOpenId) || getDemoOpenId();
   const bindingStatus = (payload && payload.bindingStatus) || 'UNBOUND';
 
-  app.globalData.demoOpenId = demoOpenId;
   app.globalData.bindingStatus = bindingStatus;
-  wx.setStorageSync('demoOpenId', demoOpenId);
   wx.setStorageSync('bindingStatus', bindingStatus);
 
   if (token && patient && patient.id) {
@@ -134,6 +141,68 @@ function request(options) {
   });
 }
 
+function wxLogin() {
+  return new Promise((resolve, reject) => {
+    wx.login({
+      success(loginRes) {
+        if (!loginRes.code) {
+          reject(new Error('wx.login 未返回 code'));
+          return;
+        }
+        resolve(loginRes.code);
+      },
+      fail: reject
+    });
+  });
+}
+
+async function createMiniSession() {
+  const code = await wxLogin();
+  const payload = await request({
+    url: '/patient-app/wechat-mini/session',
+    method: 'POST',
+    data: { code }
+  });
+  if (!payload || !payload.miniSessionToken) {
+    throw new Error('后端未返回 miniSessionToken');
+  }
+  return persistMiniSession(payload);
+}
+
+async function ensureMiniSession() {
+  const token = getMiniSessionToken();
+  const expiresAt = wx.getStorageSync('miniSessionExpiresAt');
+  if (token && expiresAt && new Date(expiresAt).getTime() > Date.now() + 60 * 1000) {
+    return token;
+  }
+  const session = await createMiniSession();
+  return session.miniSessionToken;
+}
+
+async function miniAuthRequest(options) {
+  const token = await ensureMiniSession();
+  return request({
+    ...options,
+    header: {
+      ...(options.header || {}),
+      'x-mini-session-token': token
+    }
+  }).catch(async (error) => {
+    if (/mini session|x-mini-session-token|401|Unauthorized|expired/i.test(error.message || '')) {
+      clearMiniSession();
+      const nextToken = await ensureMiniSession();
+      return request({
+        ...options,
+        header: {
+          ...(options.header || {}),
+          'x-mini-session-token': nextToken
+        }
+      });
+    }
+    throw error;
+  });
+}
+
 function patientRequest(options) {
   const token = getPatientToken();
   if (!token) {
@@ -198,18 +267,19 @@ function openMiniProgramPage(url, options) {
 
 module.exports = {
   request,
+  miniAuthRequest,
   patientRequest,
   getBaseUrl,
   getPatientToken,
-  getDemoOpenId,
+  getMiniSessionToken,
+  createMiniSession,
+  ensureMiniSession,
   clearPatientSession,
+  clearMiniSession,
   resetPatientIdentity,
+  persistMiniSession,
   persistPatientSession,
-  // openMiniProgramPage 此前已定义但漏在导出列表里，导致 home 页 require 后为
-  // undefined：点击「切换」(goBind) 抛 TypeError、按钮看似无反应。这里补上导出。
   openMiniProgramPage,
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WRITE_REQUEST_TIMEOUT_MS
 };
-
-

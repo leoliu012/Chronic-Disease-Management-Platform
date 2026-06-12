@@ -1227,66 +1227,38 @@ export class WechatOAuthController {
     return process.env.PATIENT_FORM_TOKEN_SECRET || 'dev_change_me';
   }
 
-  // v2.1: OAuth state uses a compact AES-GCM envelope (raw bytes concatenated,
-  // then base64url-encoded as ONE blob) — no dots, no segment separators.
-  // Result length is ~156 chars for our payload, fully in [A-Za-z0-9_-].
-  //
-  // (Why not reuse encryptSecret/decryptSecret from secret-crypto.util? Those
-  // produce a "v1.iv.ct.tag" dotted envelope optimized for storage and human
-  // inspection. WeChat's state parameter is alphanumeric-only per docs, so we
-  // need a separator-free encoding here.)
-  private packState(plain: string): string {
-    const key = crypto.createHash('sha256').update(
-      process.env.PATIENT_ENGAGEMENT_SECRET_KEY || 'dev_patient_engagement_secret_change_me',
-      'utf8',
-    ).digest();
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return Buffer.concat([iv, ct, tag]).toString('base64url');
+  private oauthScope(): 'snsapi_base' | 'snsapi_userinfo' {
+    return process.env.WECHAT_OFFICIAL_ACCOUNT_OAUTH_SCOPE === 'snsapi_userinfo'
+      ? 'snsapi_userinfo'
+      : 'snsapi_base';
   }
 
-  private unpackState(blob: string): string | null {
-    try {
-      const raw = Buffer.from(blob, 'base64url');
-      if (raw.length < 12 + 16 + 1) return null;
-      const iv = raw.subarray(0, 12);
-      const tag = raw.subarray(raw.length - 16);
-      const ct = raw.subarray(12, raw.length - 16);
-      const key = crypto.createHash('sha256').update(
-        process.env.PATIENT_ENGAGEMENT_SECRET_KEY || 'dev_patient_engagement_secret_change_me',
-        'utf8',
-      ).digest();
-      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-      decipher.setAuthTag(tag);
-      const out = Buffer.concat([decipher.update(ct), decipher.final()]);
-      return out.toString('utf8');
-    } catch { return null; }
+  // WeChat caps OAuth state at 128 bytes. Keep state short and signed; the
+  // callback looks up the form link by id instead of round-tripping the token.
+  private stateSignature(input: string): string {
+    return crypto
+      .createHmac('sha256', this.getSecret())
+      .update(input, 'utf8')
+      .digest('base64url')
+      .slice(0, 24);
   }
 
-  private signState(args: { tokenPlain: string; hospitalTenantId: string }): string {
-    // state contains the *plaintext* token (encrypted with the secret key).
-    // The token is already public to the patient — they're holding the URL in
-    // their hand. Encrypted state just round-trips it through WeChat so we can
-    // redirect them back to /wx/form/:token after OAuth.
-    //
-    // No nonce — AES-GCM's IV is itself a per-message random. exp prevents
-    // replay outside the 10-minute window.
+  private signState(args: { formLinkId: string; hospitalTenantId: string }): string {
     const exp = Math.floor(Date.now() / 1000) + 10 * 60;
-    const obj = { t: args.tokenPlain, h: args.hospitalTenantId, e: exp };
-    return this.packState(JSON.stringify(obj));
+    const payload = `${args.formLinkId}.${args.hospitalTenantId}.${exp}`;
+    const sig = this.stateSignature(payload);
+    return `${payload}.${sig}`;
   }
 
-  private verifyState(state: string): { tokenPlain: string; hospitalTenantId: string } | null {
-    const plain = this.unpackState(state);
-    if (!plain) return null;
-    try {
-      const obj = JSON.parse(plain);
-      if (!obj?.t || !obj?.h || !obj?.e) return null;
-      if (Number(obj.e) < Math.floor(Date.now() / 1000)) return null;
-      return { tokenPlain: String(obj.t), hospitalTenantId: String(obj.h) };
-    } catch { return null; }
+  private verifyState(state: string): { formLinkId: string; hospitalTenantId: string } | null {
+    const parts = String(state || '').split('.');
+    if (parts.length !== 4) return null;
+    const [formLinkId, hospitalTenantId, expRaw, sig] = parts;
+    if (!formLinkId || !hospitalTenantId || !expRaw || !sig) return null;
+    if (Number(expRaw) < Math.floor(Date.now() / 1000)) return null;
+    const payload = `${formLinkId}.${hospitalTenantId}.${expRaw}`;
+    if (this.stateSignature(payload) !== sig) return null;
+    return { formLinkId, hospitalTenantId };
   }
 
   @Get('start')
@@ -1311,13 +1283,14 @@ export class WechatOAuthController {
     ).replace(/\/+$/, '');
     const callback = `${apiBaseUrl}/patient-engagement/wechat/oauth/callback`;
     const state = this.signState({
-      tokenPlain: token,
+      formLinkId: formLink.id,
       hospitalTenantId: formLink.hospitalTenantId,
     });
     const url = await this.wechat.buildOAuthAuthorizeUrl({
       hospitalTenantId: formLink.hospitalTenantId,
       state,
       callbackUrl: callback,
+      scope: this.oauthScope(),
     });
     if (!url) { res.status(503).send('hospital service account not configured'); return; }
     res.redirect(url);
@@ -1333,9 +1306,8 @@ export class WechatOAuthController {
     }
 
     // Recover the form link to confirm tenant + find the patient.
-    const tokenHash = this.formLink.hashToken(parsed.tokenPlain);
     const link = await this.prisma.patientFormLink.findUnique({
-      where: { tokenHash },
+      where: { id: parsed.formLinkId },
       select: { id: true, patientId: true, hospitalTenantId: true },
     });
     if (!link || link.hospitalTenantId !== parsed.hospitalTenantId) {
@@ -1379,7 +1351,32 @@ export class WechatOAuthController {
       } catch { /* swallow — we still want to redirect to the H5 form */ }
     }
 
-    // v2.1: redirect back to the actual H5 form so the patient sees their task.
-    res.redirect(`${baseUrl}/wx/form/${encodeURIComponent(parsed.tokenPlain)}`);
+    res
+      .type('html')
+      .send(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>服务号绑定成功</title>
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f7fb;color:#102a43}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box}
+    .card{width:100%;max-width:420px;background:#fff;border-radius:16px;padding:28px 22px;box-shadow:0 12px 32px rgba(16,42,67,.12);text-align:center}
+    .ok{width:68px;height:68px;line-height:68px;margin:0 auto 18px;border-radius:50%;background:#0b63ce;color:#fff;font-size:38px}
+    h1{font-size:22px;margin:0 0 10px}
+    p{font-size:15px;line-height:1.7;color:#5f6f82;margin:0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="ok">✓</div>
+      <h1>服务号绑定成功</h1>
+      <p>您已完成本院服务号授权，后续可接收复测、随访和用药提醒消息。请返回小程序继续使用。</p>
+    </div>
+  </div>
+</body>
+</html>`);
   }
 }

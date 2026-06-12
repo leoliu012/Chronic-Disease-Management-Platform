@@ -7,7 +7,8 @@
     "pages/records/index",
     "pages/tasks/index",
     "pages/bind/index",
-    "pages/consent-sign/index"
+    "pages/consent-sign/index",
+    "pages/official-account-bind/index"
   ],
   "window": {
     "navigationBarTitleText": "慢病健康管理",

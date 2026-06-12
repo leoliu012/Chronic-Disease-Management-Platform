@@ -1,6 +1,8 @@
 export type PatientSessionRequestContext = {
   sessionId: string;
-  demoOpenId: string;
+  demoOpenId?: string | null;
+  miniProgramAppId?: string | null;
+  miniProgramOpenId?: string | null;
   patientId: string;
 };
 

@@ -12,6 +12,7 @@ import { OutboundMessageService } from './outbound-message.service';
 import { SmsService } from './sms.service';
 import { WechatOfficialAccountService } from './wechat-official-account.service';
 import { HospitalWechatOfficialAccountService } from './hospital-wechat-account.service';
+import { HospitalWechatEnvSyncService } from './hospital-wechat-env-sync.service';
 import { PatientEngagementTenantService } from './patient-engagement-tenant.service';
 
 /**
@@ -32,6 +33,7 @@ import { PatientEngagementTenantService } from './patient-engagement-tenant.serv
   ],
   providers: [
     HospitalWechatOfficialAccountService,
+    HospitalWechatEnvSyncService,
     PatientEngagementTenantService,
     WechatOfficialAccountService,
     SmsService,

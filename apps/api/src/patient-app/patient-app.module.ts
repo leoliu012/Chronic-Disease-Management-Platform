@@ -15,6 +15,8 @@ import { PatientIdentityController } from './patient-identity.controller';
 import { ChronicLeadsModule } from '../chronic-leads/chronic-leads.module';
 import { HisIntegrationModule } from '../his-integration/his-integration.module';
 import { ClinicalDispositionModule } from '../clinical-disposition/clinical-disposition.module';
+import { PatientEngagementModule } from '../patient-engagement/patient-engagement.module';
+import { WechatMiniProgramService } from './wechat-mini-program.service';
 
 @Module({
   imports: [
@@ -22,6 +24,7 @@ import { ClinicalDispositionModule } from '../clinical-disposition/clinical-disp
     ChronicLeadsModule,
     HisIntegrationModule,
     ClinicalDispositionModule,
+    PatientEngagementModule,
   ],
   controllers: [
     PatientAppController,
@@ -36,6 +39,7 @@ import { ClinicalDispositionModule } from '../clinical-disposition/clinical-disp
     QuestionnairesService,
     VitalMonitoringPlansService,
     ClinicalRulesService,
+    WechatMiniProgramService,
   ],
 })
 export class PatientAppModule {}

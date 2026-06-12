@@ -87,9 +87,25 @@ const authDemoUsers = [
 async function seedAuth() {
   for (const user of authDemoUsers) {
     const salt = `auth-demo-v1-${user.username}`;
-    await prisma.user.upsert({
+    const existingByUsername = await prisma.user.findUnique({
       where: { username: user.username },
+      select: { id: true },
+    });
+
+    if (existingByUsername && existingByUsername.id !== user.id) {
+      await prisma.user.update({
+        where: { id: existingByUsername.id },
+        data: {
+          username: `${user.username}-legacy-${existingByUsername.id}`,
+          isActive: false,
+        },
+      });
+    }
+
+    await prisma.user.upsert({
+      where: { id: user.id },
       update: {
+        username: user.username,
         displayName: user.displayName,
         role: user.role,
         passwordHash: hashPassword(user.password, salt),

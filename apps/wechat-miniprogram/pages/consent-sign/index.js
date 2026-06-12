@@ -14,7 +14,7 @@
  *   4) 展示绑定申请提交结果（等待护士审核）。
  */
 
-const { request, getDemoOpenId, persistPatientSession } = require('../../utils/request');
+const { miniAuthRequest, persistPatientSession } = require('../../utils/request');
 
 const BIND_REQUEST_TIMEOUT_MS = 180000;
 const BIND_RECOVERY_RETRY_COUNT = 6;
@@ -168,10 +168,10 @@ Page({
 
   async pollBindingStatus() {
     try {
-      const result = await request({
-        url: '/patient-app/demo-login',
+      const result = await miniAuthRequest({
+        url: '/patient-app/session',
         method: 'POST',
-        data: { demoOpenId: getDemoOpenId() }
+        data: {}
       });
       persistPatientSession(result);
 
@@ -198,7 +198,7 @@ Page({
   },
 
   buildLookupPayload() {
-    const payload = { demoOpenId: getDemoOpenId() };
+    const payload = {};
     if (this.data.phone) payload.phone = this.data.phone;
     if (this.data.hospitalPatientId) payload.hospitalPatientId = this.data.hospitalPatientId;
     if (this.data.idCardLast4) payload.idCardLast4 = this.data.idCardLast4;
@@ -231,7 +231,7 @@ Page({
         return;
       }
 
-      const res = await request({
+      const res = await miniAuthRequest({
         url: '/patient-app/identity/lookup',
         method: 'POST',
         data: payload
@@ -293,7 +293,6 @@ Page({
    */
   async submitBindingRequest(consentId) {
     const payload = {
-      demoOpenId: getDemoOpenId(),
       phone: this.data.phone,
       hospitalPatientId: this.data.hospitalPatientId || undefined,
       idCardLast4: this.data.idCardLast4 || undefined,
@@ -302,7 +301,7 @@ Page({
       consentId
     };
 
-    return request({
+    return miniAuthRequest({
       url: '/patient-app/binding-requests',
       method: 'POST',
       timeout: BIND_REQUEST_TIMEOUT_MS,
@@ -351,11 +350,10 @@ Page({
 
     try {
       // 第一步：签署知情同意书，落独立 PatientConsent 记录。
-      const consent = await request({
+      const consent = await miniAuthRequest({
         url: '/patient-app/consent/submit',
         method: 'POST',
         data: {
-          demoOpenId: getDemoOpenId(),
           consentAccepted: true,
           consentVersion: this.data.consentVersion || '',
           matchType: this.data.matchType,

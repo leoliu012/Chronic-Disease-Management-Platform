@@ -14,6 +14,19 @@
   gap: 20rpx;
 }
 
+.patient-row > view:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.hero-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+  width: 132rpx;
+  flex: 0 0 132rpx;
+}
+
 .hello {
   font-size: 40rpx;
   font-weight: 800;
@@ -34,11 +47,54 @@
   text-align: center;
 }
 
+.official-bind-chip {
+  width: 130rpx;
+  min-width: 130rpx;
+  height: 56rpx;
+  line-height: 56rpx;
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2rpx solid rgba(255, 255, 255, 0.7);
+  color: #ffffff;
+  font-size: 24rpx;
+  font-weight: 700;
+  text-align: center;
+}
+
 .bind-btn {
   margin-top: 28rpx;
   height: 88rpx;
   line-height: 88rpx;
   text-align: center;
+}
+
+.official-account-card {
+  border-left: 8rpx solid #0b63ce;
+}
+
+.official-account-card button {
+  margin-top: 18rpx;
+}
+
+.link-box {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  border: 1rpx dashed #b8c7d9;
+  border-radius: 14rpx;
+  background: #ffffff;
+}
+
+.link-text {
+  display: block;
+  margin: 10rpx 0 14rpx;
+  color: #4a5b70;
+  font-size: 22rpx;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.compact-btn {
+  margin-top: 8rpx;
 }
 
 .tap-btn {

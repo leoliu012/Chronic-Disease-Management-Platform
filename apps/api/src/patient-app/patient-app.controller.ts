@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { Public } from '../security/public.decorator';
 import { Roles } from '../security/roles.decorator';
@@ -11,11 +11,13 @@ import { MarkVitalMonitoringMissedDto } from '../vital-monitoring-plans/dto/mark
 import { CreatePatientBindingRequestDto } from './dto/create-patient-binding-request.dto';
 import { PatientDemoLoginDto } from './dto/patient-demo-login.dto';
 import { RejectPatientBindingDto } from './dto/reject-patient-binding.dto';
+import { WechatMiniSessionDto } from './dto/wechat-mini-session.dto';
 import { CurrentPatientSession } from './current-patient-session.decorator';
 import { PatientAppService } from './patient-app.service';
 import { PatientSessionGuard } from './patient-session.guard';
 import type { PatientSessionRequest, PatientSessionRequestContext } from './patient-session.type';
 import { resolveClientIp } from '../security/client-ip.util';
+import { WechatMiniProgramService } from './wechat-mini-program.service';
 
 type IpRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -29,16 +31,58 @@ function getIpAddress(req: IpRequest) {
 @Public()
 @Controller('patient-app')
 export class PatientAppController {
-  constructor(private readonly patientAppService: PatientAppService) {}
+  constructor(
+    private readonly patientAppService: PatientAppService,
+    private readonly miniProgram: WechatMiniProgramService,
+  ) {}
 
+  @Post('wechat-mini/session')
+  async createMiniProgramSession(@Body() dto: WechatMiniSessionDto) {
+    const ctx = await this.miniProgram.exchangeCodeForOpenId(dto.code);
+    const session = await this.miniProgram.createAuthSession(ctx);
+    const approvedBinding = await this.patientAppService.findApprovedBindingByMiniProgramOpenId(ctx);
+
+    return {
+      miniSessionToken: session.miniSessionToken,
+      expiresAt: session.expiresAt,
+      bound: Boolean(approvedBinding),
+      patient: approvedBinding
+        ? {
+            id: approvedBinding.patientId,
+          }
+        : null,
+    };
+  }
+
+  // @deprecated only for local smoke tests.
   @Post('demo-login')
   demoLogin(@Body() dto: PatientDemoLoginDto, @Req() req: IpRequest) {
     return this.patientAppService.loginWithDemoOpenId(dto, getIpAddress(req));
   }
 
   @Post('binding-requests')
-  createBindingRequest(@Body() dto: CreatePatientBindingRequestDto, @Req() req: IpRequest) {
-    return this.patientAppService.createBindingRequest(dto, getIpAddress(req));
+  async createBindingRequest(
+    @Headers('x-mini-session-token') miniSessionToken: string,
+    @Body() dto: CreatePatientBindingRequestDto,
+    @Req() req: IpRequest,
+  ) {
+    const miniCtx = await this.miniProgram.requireContextFromToken(miniSessionToken);
+    return this.patientAppService.createBindingRequest(dto, miniCtx, getIpAddress(req));
+  }
+
+  @Post('session')
+  async createPatientSession(
+    @Headers('x-mini-session-token') miniSessionToken: string,
+    @Req() req: IpRequest,
+  ) {
+    const miniCtx = await this.miniProgram.requireContextFromToken(miniSessionToken);
+    return this.patientAppService.loginWithMiniProgramOpenId(miniCtx, getIpAddress(req));
+  }
+
+  @Post('official-account/bind-url')
+  async createOfficialAccountBindUrl(@Headers('x-patient-token') patientToken: string) {
+    const { patient } = await this.patientAppService.requirePatientFromToken(patientToken);
+    return this.patientAppService.createOfficialAccountBindUrl(patient.id);
   }
 
   @UseGuards(PatientSessionGuard)

@@ -1,0 +1,7 @@
+<web-view wx:if="{{url}}" src="{{url}}" />
+<view wx:else class="container">
+  <view class="card">
+    <view class="item-title">无法打开公众号绑定链接</view>
+    <view class="item-desc">绑定链接为空，请返回后重新生成。</view>
+  </view>
+</view>

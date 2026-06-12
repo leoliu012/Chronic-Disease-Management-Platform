@@ -21,9 +21,11 @@ import type { IdentityMatchType } from './submit-consent.dto';
  * 等护士在 Web 端审核通过后签发患者端会话。
  */
 export class CreatePatientBindingRequestDto {
+  /** @deprecated New mini-program flow identifies the user via x-mini-session-token. */
+  @IsOptional()
   @IsString()
   @MaxLength(128)
-  demoOpenId!: string;
+  demoOpenId?: string;
 
   @IsString()
   @MaxLength(32)

@@ -3,11 +3,20 @@ function isIgnoredWeChatSdkError(error) {
   return /webapi_getwxaasyncsecinfo|appServiceSDKScriptError/i.test(text);
 }
 
+let env = require('./env.example');
+try {
+  env = require('./env');
+} catch (error) {
+  console.warn('Missing env.js, run: node apps/wechat-miniprogram/scripts/sync-env.js');
+}
+const DEFAULT_API_BASE_URL = env.apiBaseUrl;
+
 App({
   globalData: {
     // iOS 真机如果无法访问 127.0.0.1，需要改成电脑局域网 IP，例如 http://192.168.1.20:3000
-    apiBaseUrl: 'http://127.0.0.1:3000',
-    demoOpenId: '',
+    apiBaseUrl: DEFAULT_API_BASE_URL,
+    miniSessionToken: '',
+    miniSessionExpiresAt: '',
     patientToken: '',
     patientId: '',
     patient: null,
@@ -16,14 +25,21 @@ App({
 
   onLaunch() {
     const apiBaseUrl = wx.getStorageSync('apiBaseUrl');
-    const demoOpenId = wx.getStorageSync('demoOpenId');
+    const miniSessionToken = wx.getStorageSync('miniSessionToken');
+    const miniSessionExpiresAt = wx.getStorageSync('miniSessionExpiresAt');
     const patientToken = wx.getStorageSync('patientToken');
     const patientId = wx.getStorageSync('patientId');
     const patient = wx.getStorageSync('patient');
     const bindingStatus = wx.getStorageSync('bindingStatus');
 
-    if (apiBaseUrl) this.globalData.apiBaseUrl = apiBaseUrl;
-    if (demoOpenId) this.globalData.demoOpenId = demoOpenId;
+    if (apiBaseUrl && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(apiBaseUrl)) {
+      this.globalData.apiBaseUrl = apiBaseUrl;
+    } else {
+      this.globalData.apiBaseUrl = DEFAULT_API_BASE_URL;
+      wx.setStorageSync('apiBaseUrl', DEFAULT_API_BASE_URL);
+    }
+    if (miniSessionToken) this.globalData.miniSessionToken = miniSessionToken;
+    if (miniSessionExpiresAt) this.globalData.miniSessionExpiresAt = miniSessionExpiresAt;
     if (patientToken) this.globalData.patientToken = patientToken;
     if (patientId) this.globalData.patientId = patientId;
     if (patient) this.globalData.patient = patient;

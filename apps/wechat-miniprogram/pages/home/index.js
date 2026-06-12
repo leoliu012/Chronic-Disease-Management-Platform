@@ -28,6 +28,9 @@ Page({
     recentTasks: [],
     todayTodos: [],
     hospitalVisitReminders: [],
+    officialAccountBindUrl: '',
+    officialAccountBindExpiresAt: '',
+    officialAccountLinkLoading: false,
     loading: false
   },
 
@@ -243,6 +246,68 @@ Page({
           title: (err && err.errMsg) || '无法打开绑定页，请确认 app.json 包含 pages/bind/index',
           icon: 'none'
         });
+      }
+    });
+  },
+
+  async createOfficialAccountBindUrl() {
+    if (!this.data.patientId) {
+      wx.showToast({ title: '请先完成患者绑定', icon: 'none' });
+      return;
+    }
+
+    this.setData({ officialAccountLinkLoading: true });
+    try {
+      const result = await patientRequest({
+        url: '/official-account/bind-url',
+        method: 'POST',
+        data: {}
+      });
+      const url = result && result.oauthStartUrl;
+      if (!url) throw new Error('后端未返回公众号绑定链接');
+
+      this.setData({
+        officialAccountBindUrl: url,
+        officialAccountBindExpiresAt: result.expiresAt || ''
+      });
+
+      const self = this;
+      wx.setClipboardData({
+        data: url,
+        complete() {
+          self.openOfficialAccountBindUrl(url);
+        }
+      });
+    } catch (error) {
+      wx.showToast({ title: error.message || '获取公众号绑定链接失败', icon: 'none' });
+    } finally {
+      this.setData({ officialAccountLinkLoading: false });
+    }
+  },
+
+  openOfficialAccountBindUrl(url) {
+    wx.navigateTo({
+      url: `/pages/official-account-bind/index?url=${encodeURIComponent(url)}`,
+      fail() {
+        wx.showModal({
+          title: '链接已复制',
+          content: '自动打开失败，请在微信里粘贴并打开已复制的链接完成服务号授权。',
+          showCancel: false
+        });
+      }
+    });
+  },
+
+  copyOfficialAccountBindUrl() {
+    const url = this.data.officialAccountBindUrl;
+    if (!url) {
+      wx.showToast({ title: '请先生成公众号绑定链接', icon: 'none' });
+      return;
+    }
+    wx.setClipboardData({
+      data: url,
+      success() {
+        wx.showToast({ title: '链接已复制', icon: 'success' });
       }
     });
   },

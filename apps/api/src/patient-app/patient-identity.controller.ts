@@ -15,11 +15,12 @@ import { resolveClientIp } from '../security/client-ip.util';
  * 扫码直达同意书（旧 /patient-app/chronic-lead/*）入口已移除。
  */
 
-import { Body, Controller, Post, Req } from '@nestjs/common';
+import { Body, Controller, Headers, Post, Req } from '@nestjs/common';
 import { Public } from '../security/public.decorator';
 import { PatientAppService } from './patient-app.service';
 import { IdentityLookupDto } from './dto/identity-lookup.dto';
 import { SubmitConsentDto } from './dto/submit-consent.dto';
+import { WechatMiniProgramService } from './wechat-mini-program.service';
 
 type IdentityRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -38,15 +39,22 @@ function getUserAgent(req: IdentityRequest) {
 @Public()
 @Controller('patient-app')
 export class PatientIdentityController {
-  constructor(private readonly patientAppService: PatientAppService) {}
+  constructor(
+    private readonly patientAppService: PatientAppService,
+    private readonly miniProgram: WechatMiniProgramService,
+  ) {}
 
   /**
    * 搜索院内信息。返回 matchType:
    *   CHRONIC_LEAD | EXISTING_PATIENT | HIS_PATIENT | NOT_FOUND
    */
   @Post('identity/lookup')
-  lookup(@Body() dto: IdentityLookupDto) {
-    return this.patientAppService.lookupIdentity(dto);
+  async lookup(
+    @Headers('x-mini-session-token') miniSessionToken: string,
+    @Body() dto: IdentityLookupDto,
+  ) {
+    const miniCtx = await this.miniProgram.requireContextFromToken(miniSessionToken);
+    return this.patientAppService.lookupIdentity(dto, miniCtx);
   }
 
   /**
@@ -54,9 +62,15 @@ export class PatientIdentityController {
    * 返回 consentId，供随后的 /patient-app/binding-requests 引用。
    */
   @Post('consent/submit')
-  submitConsent(@Body() dto: SubmitConsentDto, @Req() req: IdentityRequest) {
+  async submitConsent(
+    @Headers('x-mini-session-token') miniSessionToken: string,
+    @Body() dto: SubmitConsentDto,
+    @Req() req: IdentityRequest,
+  ) {
+    const miniCtx = await this.miniProgram.requireContextFromToken(miniSessionToken);
     return this.patientAppService.submitConsent(
       dto,
+      miniCtx,
       getIpAddress(req),
       getUserAgent(req),
     );

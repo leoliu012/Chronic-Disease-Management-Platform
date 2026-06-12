@@ -1,7 +1,8 @@
 {
   "description": "智慧慢病管理平台患者端微信原生小程序 MVP",
   "packOptions": {
-    "ignore": []
+    "ignore": [],
+    "include": []
   },
   "setting": {
     "urlCheck": false,
@@ -9,11 +10,29 @@
     "enhance": true,
     "postcss": true,
     "minified": true,
-    "newFeature": true
+    "newFeature": true,
+    "compileWorklet": false,
+    "uglifyFileName": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "useCompilerPlugins": false,
+    "condition": false,
+    "swc": false,
+    "disableSWC": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
   },
   "compileType": "miniprogram",
-  "libVersion": "3.7.7",
-  "appid": "touristappid",
+  "libVersion": "3.16.0",
+  "appid": "wx3f082633e067e458",
   "projectname": "chronic-care-patient-miniprogram",
   "condition": {},
   "editorSetting": {
